@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.3.0';
+export const VERSION_APP = '1.4.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -729,6 +729,9 @@ export function parametresParDefaut(instant = Date.now()) {
     derniereSauvegardeUtc: null,
     prochaineSeance: '',
     dernierRapport: null,
+    reglagesModifiesLeUtc: null,
+    motifsSupprimes: [],
+    synchro: { actif: false, phrase: '', version: 0, derniereUtc: null, erreur: '' },
     derniereSauvegardeFichierUtc: null,
   };
 }
@@ -740,6 +743,7 @@ export function parametresParDefaut(instant = Date.now()) {
 export function sansSecrets(parametres) {
   const p = { ...parametres };
   if (p.ia) p.ia = { ...p.ia, cle: '' };
+  if (p.synchro) p.synchro = { ...p.synchro, phrase: '' };
   return p;
 }
 
@@ -1068,4 +1072,140 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
     '}',
   ];
   return lignes.join('\r\n') + '\r\n';
+}
+
+// ---------------------------------------------------------------------------
+// Synchronisation entre appareils
+// La fusion est déterministe : deux appareils qui fusionnent les mêmes données obtiennent
+// exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
+// écartée est placée dans les archives.
+
+export const PARAMETRES_PARTAGES = ['destinataire', 'contactConfiance', 'prochaineSeance', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
+
+function empreinteTexte(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function trierObjet(v) {
+  if (Array.isArray(v)) return v.map(trierObjet);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map((k) => [k, trierObjet(v[k])]));
+  return v;
+}
+const stable = (v) => JSON.stringify(trierObjet(v));
+
+/** Données échangées entre appareils (y compris la clé d'IA : le coffre est chiffré de bout en bout). */
+export function exporterSynchro({ parametres, motifs, evaluations, archives = [] }) {
+  const partages = {};
+  for (const k of PARAMETRES_PARTAGES) if (parametres[k] !== undefined) partages[k] = parametres[k];
+  return {
+    format: FORMAT_DONNEES,
+    versionFormat: VERSION_FORMAT,
+    type: 'synchronisation',
+    debutSuiviUtc: parametres.debutSuiviUtc || null,
+    reglagesModifiesLeUtc: parametres.reglagesModifiesLeUtc || null,
+    reglages: partages,
+    motifsSupprimes: [...(parametres.motifsSupprimes || [])].sort((a, b) => (a.id < b.id ? -1 : 1)),
+    motifs: [...motifs].sort((a, b) => (a.id < b.id ? -1 : 1)),
+    evaluations: [...evaluations].sort((a, b) => (a.id < b.id ? -1 : 1)),
+    archives: [...archives].sort((a, b) => (a.id < b.id ? -1 : 1)),
+  };
+}
+
+export function empreinteSynchro(donnees) {
+  return donnees ? empreinteTexte(stable({ ...donnees, exporteLeUtc: null })) : '';
+}
+
+const instantDe = (x) => Date.parse((x && (x.modifieLeUtc || x.creeLeUtc || x.valideLeUtc)) || 0) || 0;
+
+function gagnantMemeId(a, b) {
+  const va = a.version || 1, vb = b.version || 1;
+  if (va !== vb) return va > vb ? a : b;
+  const ta = instantDe(a), tb = instantDe(b);
+  if (ta !== tb) return ta > tb ? a : b;
+  return stable(a) >= stable(b) ? a : b;
+}
+
+function plusAncienne(a, b) {
+  const ta = Date.parse(a.creeLeUtc || a.valideLeUtc || 0) || 0;
+  const tb = Date.parse(b.creeLeUtc || b.valideLeUtc || 0) || 0;
+  if (ta !== tb) return ta < tb ? a : b;
+  return a.id <= b.id ? a : b;
+}
+
+/**
+ * Fusionne les données de cet appareil avec celles du coffre.
+ * local et distant : { parametres, motifs, evaluations, archives } (distant peut venir d'exporterSynchro).
+ */
+export function fusionnerSynchro(local, distant) {
+  const lp = local.parametres || {};
+  const d = distant || {};
+  const dp = { ...(d.reglages || {}), debutSuiviUtc: d.debutSuiviUtc, reglagesModifiesLeUtc: d.reglagesModifiesLeUtc, motifsSupprimes: d.motifsSupprimes };
+  const archives = new Map();
+  const ajouterArchive = (a) => {
+    const ex = archives.get(a.id);
+    if (!ex || (Date.parse(a.restaureeLeUtc || 0) || 0) > (Date.parse(ex.restaureeLeUtc || 0) || 0)) archives.set(a.id, a);
+  };
+  for (const a of [...(local.archives || []), ...(d.archives || [])]) ajouterArchive(a);
+
+  // 1. Même identifiant : la version la plus récente l'emporte (versions concurrentes archivées)
+  const parId = new Map();
+  for (const e of [...(local.evaluations || []), ...(d.evaluations || [])]) {
+    const ex = parId.get(e.id);
+    if (!ex) { parId.set(e.id, e); continue; }
+    if (stable(ex) === stable(e)) continue;
+    const g = gagnantMemeId(ex, e);
+    const p = g === ex ? e : ex;
+    if ((p.version || 1) === (g.version || 1)) {
+      ajouterArchive({ id: `synchro-${p.id}-v${p.version || 1}-${empreinteTexte(stable(p))}`, archiveLeUtc: g.modifieLeUtc || g.creeLeUtc || null, raison: 'Version modifiée en même temps sur un autre appareil (synchronisation) ; la plus récente est conservée.', evaluation: p });
+    }
+    parId.set(e.id, g);
+  }
+  // 2. Évaluations retirées par l'utilisateur (sauf si modifiées ou restaurées depuis)
+  for (const a of archives.values()) {
+    if (!a.retrait || a.restaureeLeUtc) continue;
+    const e = parId.get(a.evaluation.id);
+    if (e && (e.version || 1) <= (a.evaluation.version || 1)) parId.delete(a.evaluation.id);
+  }
+  // 3. Un seul enregistrement par créneau : le plus ancien est conservé
+  const parCreneau = new Map();
+  for (const e of [...parId.values()].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    const ex = parCreneau.get(e.creneauId);
+    if (!ex) { parCreneau.set(e.creneauId, e); continue; }
+    const g = plusAncienne(ex, e);
+    const p = g === ex ? e : ex;
+    ajouterArchive({ id: `synchro-creneau-${p.id}`, archiveLeUtc: p.creeLeUtc || null, raison: 'Créneau renseigné sur deux appareils (synchronisation) ; la saisie la plus ancienne est conservée.', evaluation: p });
+    parCreneau.set(e.creneauId, g);
+  }
+  // 4. Motifs : modification la plus récente ; suppressions propagées
+  const supprimes = new Map();
+  for (const s of [...(lp.motifsSupprimes || []), ...(dp.motifsSupprimes || [])]) if (!supprimes.has(s.id)) supprimes.set(s.id, s);
+  const motifs = new Map();
+  for (const m of [...(local.motifs || []), ...(d.motifs || [])]) {
+    if (supprimes.has(m.id)) continue;
+    const ex = motifs.get(m.id);
+    if (!ex) { motifs.set(m.id, m); continue; }
+    const tm = instantDe(m), te = instantDe(ex);
+    motifs.set(m.id, tm > te || (tm === te && stable(m) > stable(ex)) ? m : ex);
+  }
+  // 5. Réglages partagés : les plus récents ; début du suivi : le plus ancien
+  const tl = Date.parse(lp.reglagesModifiesLeUtc || 0) || 0;
+  const td = Date.parse(dp.reglagesModifiesLeUtc || 0) || 0;
+  const choix = (x) => stable(Object.fromEntries(PARAMETRES_PARTAGES.map((k) => [k, x[k] ?? null])));
+  const source = td > tl ? dp : td < tl ? lp : (choix(dp) > choix(lp) ? dp : lp);
+  const parametres = { ...lp };
+  for (const k of PARAMETRES_PARTAGES) if (source[k] !== undefined) parametres[k] = source[k];
+  parametres.reglagesModifiesLeUtc = td > tl ? dp.reglagesModifiesLeUtc : (lp.reglagesModifiesLeUtc || dp.reglagesModifiesLeUtc || null);
+  const debuts = [lp.debutSuiviUtc, dp.debutSuiviUtc].filter(Boolean).sort();
+  if (debuts.length) parametres.debutSuiviUtc = debuts[0];
+  parametres.motifsSupprimes = [...supprimes.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+  // La clé d'IA locale n'est jamais effacée par une version distante vide
+  if (lp.ia && lp.ia.cle && parametres.ia && !parametres.ia.cle) parametres.ia = { ...parametres.ia, cle: lp.ia.cle };
+  return {
+    parametres,
+    evaluations: [...parCreneau.values()],
+    motifs: [...motifs.values()],
+    archives: [...archives.values()],
+  };
 }

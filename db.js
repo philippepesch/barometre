@@ -91,10 +91,11 @@ export async function archiverEvaluation(archive) {
   });
 }
 
-export async function restaurerArchive(archive) {
+/** Remet l'évaluation en place ; l'archive est conservée et marquée comme restaurée (utile à la synchronisation). */
+export async function restaurerArchive(archive, evaluation) {
   return transaction(['evaluations', 'archives'], 'readwrite', (tx) => {
-    tx.objectStore('evaluations').put(archive.evaluation);
-    tx.objectStore('archives').delete(archive.id);
+    tx.objectStore('evaluations').put(evaluation || archive.evaluation);
+    tx.objectStore('archives').put(archive);
   });
 }
 

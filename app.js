@@ -2,6 +2,7 @@
 import * as C from './core.js';
 import * as DB from './db.js';
 import { FOURNISSEURS } from './ia.js';
+import * as S from './sync.js';
 
 const etat = { evaluations: [], motifs: [], parametres: null, archives: [] };
 const ui = { periode: null, alerteDossier: false, majDisponible: null, majDemandee: false };
@@ -31,8 +32,11 @@ const motifsActifs = () => etat.motifs.filter((m) => m.actif && !m.regroupeDans)
   .sort((a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr'));
 
 async function enregistrerParametres(modifs) {
+  const partage = Object.keys(modifs).some((k) => C.PARAMETRES_PARTAGES.includes(k));
+  if (partage) modifs = { ...modifs, reglagesModifiesLeUtc: new Date(maintenant()).toISOString() };
   etat.parametres = { ...etat.parametres, ...modifs };
   await DB.ecrireParametres(modifs);
+  if (partage) planifierSynchro();
 }
 
 async function enregistrerEvaluation(ev) {
@@ -41,12 +45,14 @@ async function enregistrerEvaluation(ev) {
   if (i >= 0) etat.evaluations[i] = ev; else etat.evaluations.push(ev);
   majBadge();
   sauvegardeAutomatique();
+  planifierSynchro();
 }
 
 async function enregistrerMotif(m) {
   await DB.mettre('motifs', m);
   const i = etat.motifs.findIndex((x) => x.id === m.id);
   if (i >= 0) etat.motifs[i] = m; else etat.motifs.push(m);
+  planifierSynchro();
 }
 
 function exportComplet() {
@@ -265,9 +271,10 @@ function vueBienvenue() {
       <h2>Démarrer</h2>
       <p>Si tu as reçu le fichier <strong>donnees-initiales.json</strong> (tes motifs personnels et ta première évaluation), importe-le maintenant. Si tu as une sauvegarde, tu peux aussi la restaurer ici.</p>
       <div class="rangee">
-        <label class="bouton" for="fichier-depart">Importer un fichier</label>
+        <button type="button" class="bouton" data-action="demarrer-synchro">Récupérer mes données depuis mon autre appareil</button>
+        <label class="bouton-secondaire" for="fichier-depart">Importer un fichier</label>
         <input type="file" id="fichier-depart" accept=".json,.csv,application/json,text/csv" class="visuellement-cache">
-        <button type="button" class="bouton-secondaire" data-action="demarrer-vide">Commencer sans fichier</button>
+        <button type="button" class="bouton-discret" data-action="demarrer-vide">Commencer sans fichier</button>
       </div>
       <p class="doux" style="margin-top:12px">Le suivi commencera maintenant : les créneaux antérieurs seront marqués « non renseigné », jamais remplis automatiquement.</p>
     </div>
@@ -276,7 +283,6 @@ function vueBienvenue() {
   document.getElementById('fichier-depart').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     if (!f) return;
-    await initialiser();
     await importerFichier(f, { premierDemarrage: true });
   });
 }
@@ -355,12 +361,14 @@ function blocMiseEnRoute() {
   if (p.miseEnRouteMasquee) return '';
   const rappels = !!(p.serveurRappels && p.serveurRappels.actif);
   const ia = iaPrete();
-  if (rappels && ia) return '';
+  const sync = synchroActive();
+  if (rappels && ia && sync) return '';
   const ligne = (fait, texte, lien) => `<li><span>${fait ? ICONES_STATUT.repondu : ICONES_STATUT.a_venir} ${texte}</span>${fait ? '<span class="doux">fait</span>' : `<a class="bouton-discret" href="${lien}">Configurer</a>`}</li>`;
   return `<section class="bloc" aria-label="Mise en route"><div class="rangee-espacee"><h2 style="margin:0">Mise en route</h2><button type="button" class="bouton-discret" data-action="masquer-mise-en-route">Masquer</button></div>
     <ul class="liste-simple liste-etapes">
       ${ligne(rappels, 'Notifications à 06:00 et 18:00 sur cet appareil', '#/reglages/rappels')}
       ${ligne(ia, 'Version professionnelle automatique pour le thérapeute', '#/reglages/ia')}
+      ${ligne(sync, 'Synchronisation avec ton autre appareil', '#/reglages/synchro')}
     </ul></section>`;
 }
 
@@ -881,11 +889,12 @@ async function retirerEvaluation(id) {
     <div class="champ"><label for="raison-retrait">Raison <small class="doux">(facultatif)</small></label><input type="text" id="raison-retrait" name="raison" maxlength="300" autofocus></div>
     <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Retirer</button></div>`);
   if (r.valeur !== 'oui') return;
-  const archive = { id: C.nouvelId(), archiveLeUtc: new Date(maintenant()).toISOString(), raison: `Retirée par l'utilisateur${r.donnees.get('raison') ? ` : ${r.donnees.get('raison')}` : ''}.`, evaluation: ev };
+  const archive = { id: C.nouvelId(), archiveLeUtc: new Date(maintenant()).toISOString(), retrait: true, raison: `Retirée par l'utilisateur${r.donnees.get('raison') ? ` : ${r.donnees.get('raison')}` : ''}.`, evaluation: ev };
   await prendreInstantane('Avant retrait d\'une évaluation');
   await DB.archiverEvaluation(archive);
   etat.evaluations = etat.evaluations.filter((e) => e.id !== id);
   etat.archives.push(archive);
+  planifierSynchro();
   annoncer('Évaluation retirée et archivée.');
   aller('#/calendrier');
 }
@@ -1034,6 +1043,8 @@ async function actionMotif(action, id) {
     await prendreInstantane('Avant suppression d\'un motif');
     for (const enfant of etat.motifs.filter((x) => x.regroupeDans === m.id)) await enregistrerMotif({ ...enfant, regroupeDans: null, actif: true, modifieLeUtc: le });
     await DB.supprimer('motifs', m.id);
+    await enregistrerParametres({ motifsSupprimes: [...(etat.parametres.motifsSupprimes || []), { id: m.id, le }] });
+    planifierSynchro();
     etat.motifs = etat.motifs.filter((x) => x.id !== m.id);
   }
   vueMotifs();
@@ -1302,6 +1313,136 @@ async function rattrapageVersions() {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Synchronisation automatique entre appareils (coffre chiffré de bout en bout)
+
+const synchroActive = () => !!(etat.parametres && etat.parametres.synchro && etat.parametres.synchro.actif && etat.parametres.synchro.phrase
+  && etat.parametres.serveurRappels && etat.parametres.serveurRappels.url && etat.parametres.serveurRappels.jeton);
+
+let minuterieSynchro = null;
+function planifierSynchro(delai = 1500) {
+  if (!synchroActive()) return;
+  clearTimeout(minuterieSynchro);
+  minuterieSynchro = setTimeout(() => { lancerSynchro().catch((e) => console.warn(e)); }, delai);
+}
+
+function majEtatSynchro() {
+  const el = document.getElementById('etat-synchro');
+  if (!el) return;
+  const sy = etat.parametres && etat.parametres.synchro;
+  if (!synchroActive()) { el.textContent = ''; return; }
+  el.textContent = sy.erreur ? `Synchronisation en attente : ${sy.erreur}` : sy.derniereUtc ? `Synchronisé avec ton autre appareil à ${C.formatHeure(sy.derniereUtc)}${C.dateLocale(Date.parse(sy.derniereUtc)) !== aujourdhui() ? ` le ${C.formatDateCourte(C.dateLocale(Date.parse(sy.derniereUtc)))}` : ''}.` : 'Synchronisation en cours…';
+}
+
+/** Fusionne cet appareil avec le coffre, puis renvoie le résultat. Retourne true si tout s'est bien passé. */
+async function lancerSynchro({ interactif = false } = {}) {
+  if (!synchroActive()) { if (interactif) annoncer('Synchronisation non activée.'); return false; }
+  if (ui.synchroEnCours) { ui.synchroARefaire = true; return false; }
+  if (!navigator.onLine) { if (interactif) annoncer('Hors connexion : la synchronisation reprendra automatiquement.'); return false; }
+  ui.synchroEnCours = true;
+  const service = { url: etat.parametres.serveurRappels.url, jeton: etat.parametres.serveurRappels.jeton };
+  const phrase = etat.parametres.synchro.phrase;
+  let changeLocal = false;
+  try {
+    if (!etat.parametres.synchro.derniereUtc) await prendreInstantane('Avant la première synchronisation');
+    for (let essai = 0; essai < 4; essai++) {
+      const { version, coffre } = await S.lireCoffre(service);
+      const distant = coffre ? await S.dechiffrer(coffre, phrase) : null;
+      const local = { parametres: etat.parametres, motifs: etat.motifs, evaluations: etat.evaluations, archives: etat.archives };
+      const fusion = distant ? C.fusionnerSynchro(local, distant) : local;
+      const exportFusion = C.exporterSynchro(fusion);
+      if (C.empreinteSynchro(exportFusion) !== C.empreinteSynchro(C.exporterSynchro(local))) {
+        await DB.remplacerTout({ evaluations: fusion.evaluations, motifs: fusion.motifs, parametres: fusion.parametres, archives: fusion.archives });
+        await chargerEtat();
+        changeLocal = true;
+      }
+      let versionFinale = version;
+      if (!distant || C.empreinteSynchro(exportFusion) !== C.empreinteSynchro(distant)) {
+        const r = await S.ecrireCoffre(service, version, await S.chiffrer(exportFusion, phrase, coffre && coffre.sel));
+        if (r.conflit) continue;
+        versionFinale = r.version;
+      }
+      await DB.ecrireParametres({ synchro: { ...etat.parametres.synchro, version: versionFinale, derniereUtc: new Date(maintenant()).toISOString(), erreur: '' } });
+      etat.parametres.synchro = { ...etat.parametres.synchro, version: versionFinale, derniereUtc: new Date(maintenant()).toISOString(), erreur: '' };
+      if (changeLocal) {
+        majBoutonPdf(); appliquerTheme(etat.parametres.theme); majBadge();
+        const h = location.hash;
+        if (h === '' || h === '#/' || h === '#' || h.startsWith('#/calendrier')) router();
+        if (interactif) annoncer('Données mises à jour depuis ton autre appareil.');
+      } else if (interactif) annoncer('Synchronisé.');
+      majEtatSynchro();
+      return true;
+    }
+    throw new Error('Trop de modifications simultanées ; nouvel essai bientôt.');
+  } catch (e) {
+    const message = /failed to fetch|load failed|networkerror/i.test(e.message) ? 'service injoignable' : e.message;
+    etat.parametres.synchro = { ...etat.parametres.synchro, erreur: message };
+    await DB.ecrireParametres({ synchro: etat.parametres.synchro });
+    majEtatSynchro();
+    if (interactif) annoncer(`Synchronisation impossible : ${message}`);
+    return false;
+  } finally {
+    ui.synchroEnCours = false;
+    if (ui.synchroARefaire) { ui.synchroARefaire = false; planifierSynchro(); }
+  }
+}
+
+function lireServiceDepuisFormulaire() {
+  const url = (document.getElementById('serveur-url').value || '').trim().replace(/\/+$/, '');
+  const jeton = (document.getElementById('serveur-jeton').value || '').trim();
+  if (!/^https:\/\//.test(url)) throw new Error('Saisis d\'abord l\'adresse du service (elle commence par https://).');
+  if (!jeton) throw new Error('Saisis d\'abord le mot de passe du service.');
+  return { url, jeton };
+}
+
+async function activerSynchro() {
+  try {
+    const { url, jeton } = lireServiceDepuisFormulaire();
+    const phrase = document.getElementById('synchro-phrase').value;
+    if (phrase.trim().length < 12) throw new Error('Choisis une phrase de synchronisation d\'au moins 12 caractères (par exemple quatre mots).');
+    await enregistrerParametres({ serveurRappels: { ...(etat.parametres.serveurRappels || {}), url, jeton }, synchro: { ...etat.parametres.synchro, actif: true, phrase, erreur: '' } });
+    const ok = await lancerSynchro({ interactif: true });
+    if (ok) annoncer('Synchronisation activée : tes appareils restent à jour automatiquement.');
+    vueReglages(['synchro']);
+  } catch (e) { annoncer(e.message); }
+}
+
+async function copierCodeConnexion() {
+  const sr = etat.parametres.serveurRappels || {};
+  if (!sr.url || !sr.jeton) { annoncer('Configure d\'abord l\'adresse et le mot de passe du service.'); return; }
+  const code = S.codeConnexion(sr.url, sr.jeton);
+  const champ = document.getElementById('synchro-code');
+  if (champ) { champ.value = code; champ.hidden = false; champ.select(); }
+  try { await navigator.clipboard.writeText(code); annoncer('Code copié : envoie-le sur ton iPhone (par exemple dans une note ou un message à toi-même).'); } catch { annoncer('Sélectionne le code affiché et copie-le.'); }
+}
+
+async function demarrerParSynchro() {
+  const r = await dialogue(`<h2 id="dialogue-titre">Récupérer mes données</h2>
+    <p>Sur ton autre appareil, dans Réglages &gt; Rappels et synchronisation, touche « Copier le code de connexion » et envoie-toi ce code. Colle-le ici, puis saisis ta phrase de synchronisation.</p>
+    <div class="champ"><label for="code-connexion">Code de connexion</label><textarea id="code-connexion" name="code" rows="3" required autocapitalize="off" spellcheck="false" placeholder="BAROMETRE-…" autofocus></textarea></div>
+    <div class="champ"><label for="phrase-connexion">Phrase de synchronisation</label><input type="password" id="phrase-connexion" name="phrase" required autocapitalize="off" spellcheck="false"></div>
+    <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Récupérer</button></div>`);
+  if (r.valeur !== 'oui') return;
+  try {
+    const { url, jeton } = S.lireCodeConnexion(r.donnees.get('code'));
+    const phrase = String(r.donnees.get('phrase') || '');
+    annoncer('Récupération en cours…');
+    const { coffre } = await S.lireCoffre({ url, jeton });
+    if (!coffre) throw new Error('Aucune donnée à récupérer : active d\'abord la synchronisation sur ton autre appareil.');
+    await S.dechiffrer(coffre, phrase);
+    await initialiser();
+    await enregistrerParametres({ serveurRappels: { url, jeton, actif: false }, synchro: { ...C.parametresParDefaut().synchro, actif: true, phrase } });
+    const ok = await lancerSynchro({ interactif: false });
+    if (!ok) throw new Error(etat.parametres.synchro.erreur || 'échec de la synchronisation');
+    majBoutonPdf();
+    annoncer(`Données récupérées : ${C.pluriel(etat.evaluations.length, 'évaluation')}. Active maintenant les rappels sur cet appareil.`);
+    aller('#/reglages/rappels');
+  } catch (e) {
+    annoncer(/failed to fetch|load failed|networkerror/i.test(e.message) ? 'Service injoignable : vérifie le code et ta connexion Internet.' : e.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Rapport PDF
 
@@ -1436,10 +1577,11 @@ async function importerFichier(fichier, { premierDemarrage = false } = {}) {
       lu = { evaluations: r.evaluations, motifs: r.motifs, parametres: null, archives: [], csv: r.type };
     } else lu = C.lireJSON(texte);
   } catch (e) {
-    annoncer(`Import impossible : ${e.message}`);
+    annoncer(`Import impossible : ${e.message} Choisis bien le fichier donnees-initiales.json ou une sauvegarde .json.`);
     router();
     return;
   }
+  if (premierDemarrage && !etat.parametres) await initialiser();
   const estSauvegardeComplete = !!(lu.parametres && lu.parametres.debutSuiviUtc);
   let mode = 'fusion';
   if (estSauvegardeComplete || !premierDemarrage) {
@@ -1477,6 +1619,7 @@ async function importerFichier(fichier, { premierDemarrage = false } = {}) {
     majBoutonPdf();
     appliquerTheme(etat.parametres.theme);
     majBadge();
+    planifierSynchro();
     aller('#/');
   } catch (e) {
     annoncer(`Import interrompu : ${e.message}. Tes données précédentes sont intactes.`);
@@ -1650,18 +1793,28 @@ async function vueReglages([section] = []) {
       <button class="bouton" type="submit">Enregistrer</button>
     </form>
 
-    <div class="bloc" id="rappels"><h2>Rappels de 06:00 et 18:00</h2>
-      <p class="encre-2">Notifications : <strong>${{ granted: 'autorisées', denied: 'refusées', default: 'pas encore demandées', indisponible: 'non prises en charge ici' }[permNotif]}</strong>. Rappels de l'application sur cet appareil : <strong>${serv.actif ? 'activés' : 'non activés'}</strong>.</p>
-      <h3>Notifications de l'application (iPhone et Windows)</h3>
-      <p>Chaque jour à 06:00 et 18:00, heure de Luxembourg, une notification « Évaluation du matin » ou « du soir » s'affiche, même application fermée. La toucher ouvre directement l'évaluation. Elles sont envoyées par ton service de rappels gratuit (voir le guide, rubrique « Rappels » : installation unique d'environ 10 minutes). Ce service ne reçoit jamais tes évaluations.</p>
-      ${estIOS && !estInstallee() ? '<div class="bandeau"><strong>Sur iPhone</strong>Ouvre d\'abord l\'application depuis son icône sur l\'écran d\'accueil : les notifications ne fonctionnent que là.</div>' : ''}
-      <div class="champ"><label for="serveur-url">Adresse du service de rappels</label><input type="url" id="serveur-url" value="${esc(serv.url)}" placeholder="https://barometre-rappels.ton-nom.workers.dev" inputmode="url" autocapitalize="off" spellcheck="false"></div>
+    <div class="bloc" id="rappels"><h2>Rappels et synchronisation</h2>
+      <p>Ton service en ligne gratuit (voir le guide : installation unique d'environ 10 minutes) envoie les rappels de 06:00 et 18:00 et garde une copie <strong>chiffrée</strong> de tes données pour synchroniser tes appareils. Il ne peut pas lire tes évaluations.</p>
+      <div class="champ"><label for="serveur-url">Adresse du service</label><input type="url" id="serveur-url" value="${esc(serv.url)}" placeholder="https://barometre-rappels.ton-nom.workers.dev" inputmode="url" autocapitalize="off" spellcheck="false"></div>
       <div class="champ"><label for="serveur-jeton">Mot de passe du service (variable JETON)</label><input type="text" id="serveur-jeton" value="${esc(serv.jeton)}" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+      <h3 style="margin-top:18px">Notifications de 06:00 et 18:00 sur cet appareil</h3>
+      <p class="encre-2">Notifications : <strong>${{ granted: 'autorisées', denied: 'refusées', default: 'pas encore demandées', indisponible: 'non prises en charge ici' }[permNotif]}</strong>. Rappels sur cet appareil : <strong>${serv.actif ? 'activés' : 'non activés'}</strong>. La notification ouvre directement l'évaluation, même application fermée.</p>
+      ${estIOS && !estInstallee() ? '<div class="bandeau"><strong>Sur iPhone</strong>Ouvre d\'abord l\'application depuis son icône sur l\'écran d\'accueil : les notifications ne fonctionnent que là.</div>' : ''}
       <div class="rangee">
         <button type="button" class="bouton" data-action="serveur-activer">${serv.actif ? 'Réactiver sur cet appareil' : 'Activer les rappels sur cet appareil'}</button>
         ${serv.actif ? '<button type="button" class="bouton-secondaire" data-action="serveur-tester">Envoyer une notification de test</button><button type="button" class="bouton-discret" data-action="serveur-desactiver">Désactiver</button>' : ''}
       </div>
       <label class="interrupteur" style="margin-top:14px"><input type="checkbox" id="rappel-discret" ${p.titreRappelDiscret ? 'checked' : ''}> <span>Texte de notification discret <span class="doux">(« Rappel du matin » au lieu de « Évaluation du matin »)</span></span></label>
+      <div id="synchro">
+        <h3 style="margin-top:22px">Synchronisation entre appareils</h3>
+        ${synchroActive() ? `<p class="encre-2">État : <strong>activée</strong>. ${p.synchro.erreur ? `Dernière tentative : ${esc(p.synchro.erreur)}.` : p.synchro.derniereUtc ? `Dernière synchronisation : ${C.formatDateHeure(p.synchro.derniereUtc)}.` : ''}</p>
+          <p>Chaque évaluation, modification ou réglage est envoyé automatiquement à ton autre appareil, chiffré avec ta phrase de synchronisation.</p>
+          <div class="rangee"><button type="button" class="bouton-secondaire" data-action="synchro-maintenant">Synchroniser maintenant</button><button type="button" class="bouton-secondaire" data-action="synchro-code">Copier le code de connexion pour l'autre appareil</button><button type="button" class="bouton-discret" data-action="synchro-desactiver">Désactiver</button></div>
+          <textarea id="synchro-code" rows="2" readonly hidden style="margin-top:10px"></textarea>`
+    : `<p>Tes évaluations, motifs et réglages restent identiques sur l'iPhone et le PC, automatiquement. Les données sont chiffrées sur l'appareil avec une <strong>phrase de synchronisation</strong> que toi seul connais ; elle doit être la même sur tous tes appareils et n'est jamais envoyée.</p>
+          <div class="champ"><label for="synchro-phrase">Phrase de synchronisation <small class="doux">(au moins 12 caractères, par exemple quatre mots ; note-la en lieu sûr)</small></label><input type="password" id="synchro-phrase" autocomplete="new-password" autocapitalize="off" spellcheck="false"></div>
+          <button type="button" class="bouton" data-action="synchro-activer">Activer la synchronisation</button>`}
+      </div>
       <details class="repli" style="margin-top:14px"><summary>Solutions de secours, sans service de rappels</summary>
         <label class="interrupteur" style="margin:8px 0"><input type="checkbox" id="rappels-internes" ${p.rappelsDansApplication && permNotif === 'granted' ? 'checked' : ''} ${permNotif === 'indisponible' ? 'disabled' : ''}> <span>Rappels quand l'application est ouverte <span class="doux">(fenêtre ouverte ou réduite)</span></span></label>
         <p><strong>Windows</strong> : ce programme crée deux tâches planifiées (06:00 et 18:00) qui affichent une notification ; un clic ouvre l'évaluation dans Edge. Après le téléchargement, double-clique sur le fichier ; si Windows affiche « Windows a protégé votre ordinateur », choisis « Informations complémentaires » puis « Exécuter quand même », puis tape 1.</p>
@@ -1691,8 +1844,8 @@ async function vueReglages([section] = []) {
       <h3 style="margin-top:18px">Instantanés internes</h3>
       <p class="doux">Copies conservées automatiquement sur cet appareil (une par jour et avant chaque import, retrait ou restauration ; les 30 dernières). Elles protègent contre une fausse manœuvre, pas contre la perte de l'appareil.</p>
       ${instantanes.length ? `<ul class="liste-simple">${instantanes.slice(0, 10).map((s) => `<li><span>${C.formatDateHeure(s.creeLeUtc)} <span class="doux">– ${esc(s.raison)}, ${C.pluriel(s.nombre, 'évaluation')}</span></span><span><button type="button" class="bouton-discret" data-action="instantane-telecharger" data-id="${esc(s.id)}">Télécharger</button><button type="button" class="bouton-discret" data-action="instantane-restaurer" data-id="${esc(s.id)}">Restaurer</button></span></li>`).join('')}</ul>` : '<p class="doux">Aucun instantané.</p>'}
-      ${etat.archives.length ? `<h3 style="margin-top:18px">Archives</h3><p class="doux">Évaluations retirées ou écartées lors d'un import. Elles ne sont jamais supprimées automatiquement.</p>
-        <ul class="liste-simple">${etat.archives.sort((a, b) => (a.archiveLeUtc < b.archiveLeUtc ? 1 : -1)).map((a) => `<li><span>${esc(C.formatDateCourte(a.evaluation.date))} ${a.evaluation.creneau}, ${esc(C.libelleNote(a.evaluation.note))}<br><span class="doux">${esc(a.raison)} (${C.formatDateHeure(a.archiveLeUtc)})</span></span><button type="button" class="bouton-discret" data-action="archive-restaurer" data-id="${esc(a.id)}">Restaurer</button></li>`).join('')}</ul>` : ''}
+      ${etat.archives.some((a) => !a.restaureeLeUtc) ? `<h3 style="margin-top:18px">Archives</h3><p class="doux">Évaluations retirées ou écartées lors d'un import. Elles ne sont jamais supprimées automatiquement.</p>
+        <ul class="liste-simple">${etat.archives.filter((a) => !a.restaureeLeUtc).sort((a, b) => (a.archiveLeUtc < b.archiveLeUtc ? 1 : -1)).map((a) => `<li><span>${esc(C.formatDateCourte(a.evaluation.date))} ${a.evaluation.creneau}, ${esc(C.libelleNote(a.evaluation.note))}<br><span class="doux">${esc(a.raison)} (${C.formatDateHeure(a.archiveLeUtc)})</span></span><button type="button" class="bouton-discret" data-action="archive-restaurer" data-id="${esc(a.id)}">Restaurer</button></li>`).join('')}</ul>` : ''}
     </div>
 
     <div class="bloc"><h2>Confidentialité et stockage</h2>
@@ -1878,8 +2031,12 @@ async function actionReglage(action, id) {
         const a = etat.archives.find((x) => x.id === id);
         if (!a) return;
         if (parCreneau().has(a.evaluation.creneauId)) { annoncer('Ce créneau a déjà une évaluation : retire-la d\'abord pour restaurer celle-ci.'); return; }
-        await DB.restaurerArchive(a);
+        const le = new Date(maintenant()).toISOString();
+        const v = (a.evaluation.version || 1) + 1;
+        const ev = { ...a.evaluation, version: v, modifieLeUtc: le, historique: [...(a.evaluation.historique || []), { le, version: v, raison: 'Restaurée depuis les archives', changements: [] }] };
+        await DB.restaurerArchive({ ...a, restaureeLeUtc: le }, ev);
         await chargerEtat();
+        planifierSynchro();
         annoncer('Évaluation restaurée.');
         vueReglages();
         break;
@@ -1914,6 +2071,11 @@ document.addEventListener('click', (e) => {
   if (action === 'ouvrir-pdf') { e.preventDefault(); ouvrirPdf(); return; }
   if (action === 'aide') { e.preventDefault(); ouvrirAide(); return; }
   if (action === 'masquer-mise-en-route') { enregistrerParametres({ miseEnRouteMasquee: true }).then(() => router()); return; }
+  if (action === 'demarrer-synchro') { demarrerParSynchro(); return; }
+  if (action === 'synchro-activer') { activerSynchro(); return; }
+  if (action === 'synchro-maintenant') { lancerSynchro({ interactif: true }); return; }
+  if (action === 'synchro-desactiver') { enregistrerParametres({ synchro: { ...etat.parametres.synchro, actif: false } }).then(() => { annoncer('Synchronisation désactivée sur cet appareil.'); vueReglages(['synchro']); }); return; }
+  if (action === 'synchro-code') { copierCodeConnexion(); return; }
   if (action === 'demarrer-vide') { initialiser().then(() => { annoncer('Suivi démarré.'); aller('#/'); }); return; }
   if (action === 'retirer') { retirerEvaluation(id); return; }
   if (action === 'mettre-a-jour') { if (ui.majDisponible) { ui.majDemandee = true; ui.majDisponible.postMessage({ type: 'activer' }); } return; }
@@ -1926,6 +2088,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && etat.parametres) {
+    planifierSynchro(0);
     majBadge();
     planifierRappelsInternes();
     const h = location.hash;
@@ -1970,11 +2133,14 @@ async function demarrer() {
   traiterParametresURL();
   window.addEventListener('hashchange', router);
   router();
+  majEtatSynchro();
   enregistrerServiceWorker();
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));
-    window.addEventListener('online', () => rattrapageVersions().catch((e) => console.warn(e)));
+    window.addEventListener('online', () => { rattrapageVersions().catch((e) => console.warn(e)); planifierSynchro(0); });
+    planifierSynchro(0);
+    setInterval(() => planifierSynchro(0), 5 * 60 * 1000);
     planifierRappelsInternes();
     majBadge();
   }

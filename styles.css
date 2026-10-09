@@ -378,3 +378,5 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .liste-etapes svg { width: 16px; height: 16px; color: var(--laiton); flex: none; }
 .periodes { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
 .periodes span { white-space: nowrap; }
+.etat-synchro { margin: 6px 0 0; font-size: .8rem; color: var(--doux); }
+.etat-synchro:empty { display: none; }
