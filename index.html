@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Baromètre de l'humeur</title>
+  <meta name="description" content="Suivi personnel de l'humeur. Les données restent sur cet appareil.">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="theme-color" content="#EEF1F3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10161B" media="(prefers-color-scheme: dark)">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Baromètre">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icone-32.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="saut" href="#contenu">Aller au contenu</a>
+  <header class="entete">
+    <div class="entete-interieur">
+      <a class="marque" href="#/" aria-label="Baromètre de l'humeur, accueil">
+        <svg class="marque-icone" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16 L23 9" stroke="var(--laiton)" stroke-width="2.6" stroke-linecap="round"/><circle cx="16" cy="16" r="2.6" fill="var(--laiton)"/></svg>
+        <span>Baromètre de l'humeur</span>
+      </a>
+      <button type="button" id="btn-pdf" class="btn-pdf" data-action="ouvrir-pdf">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6.5L15 6v11.5H5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M11.5 2.5V6H15M7.5 10.5h5M7.5 13.5h5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span id="btn-pdf-libelle">Générer PDF – Rapport</span>
+      </button>
+    </div>
+  </header>
+  <nav class="navigation" aria-label="Navigation principale">
+    <a href="#/" data-onglet="accueil"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 13l4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Aujourd'hui</span></a>
+    <a href="#/evaluer" data-onglet="evaluer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16M12 4v16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Évaluer</span></a>
+    <a href="#/calendrier" data-onglet="calendrier"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.5 10h17M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Calendrier</span></a>
+    <a href="#/motifs" data-onglet="motifs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Motifs</span></a>
+    <a href="#/reglages" data-onglet="reglages"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>Réglages</span></a>
+  </nav>
+  <main id="contenu" tabindex="-1">
+    <p class="chargement">Chargement…</p>
+  </main>
+  <footer class="pied">
+    <button type="button" class="lien-aide" data-action="aide">Besoin d'aide maintenant ?</button>
+    <p>Données conservées uniquement sur cet appareil. Cette application ne pose aucun diagnostic et ne remplace pas ton thérapeute.</p>
+  </footer>
+  <div id="annonces" class="annonces" role="status" aria-live="polite"></div>
+  <dialog id="dialogue" aria-labelledby="dialogue-titre"></dialog>
+  <noscript><p class="chargement">Cette application a besoin de JavaScript pour fonctionner.</p></noscript>
+</body>
+</html>
