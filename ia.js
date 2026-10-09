@@ -15,7 +15,8 @@ async function lireErreur(rep) {
 
 function messageErreur(statut, detail, fournisseur) {
   if (statut === 401 || statut === 403) return fournisseur === 'serveur' ? 'Jeton du serveur refusé.' : 'Clé d\'accès refusée : vérifie-la dans les Réglages.';
-  if (statut === 404 || (statut === 400 && /model/i.test(detail))) return `Modèle introuvable${detail ? ` (${detail})` : ''} : vérifie le nom du modèle dans les Réglages.`;
+  if (statut === 404 || (statut === 400 && /not[ _]found|does not exist|unknown model|invalid model/i.test(detail))) return `Modèle introuvable${detail ? ` (${detail})` : ''} : vérifie le nom du modèle dans les Réglages.`;
+  if (statut === 400) return `Demande refusée par le service${detail ? ` (${detail})` : ''}.`;
   if (statut === 402 || /credit|balance|billing/i.test(detail)) return 'Crédit épuisé chez le fournisseur.';
   if (statut === 429) return 'Trop de demandes : nouvel essai plus tard.';
   if (statut >= 500) return `Service momentanément indisponible${detail ? ` (${detail})` : ''} : nouvel essai plus tard.`;
@@ -34,7 +35,6 @@ async function appelerAnthropic(cfg, systeme, entrees, f) {
     body: JSON.stringify({
       model: cfg.modele || 'claude-sonnet-5-5',
       max_tokens: 8000,
-      temperature: 0.2,
       system: systeme,
       messages: [{ role: 'user', content: `Entrées :\n${JSON.stringify(entrees, null, 2)}` }],
     }),

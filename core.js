@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.5.0';
+export const VERSION_APP = '1.5.1';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1123,6 +1123,8 @@ const stable = (v) => JSON.stringify(trierObjet(v));
 export function exporterSynchro({ parametres, motifs, evaluations, archives = [] }) {
   const partages = {};
   for (const k of PARAMETRES_PARTAGES) if (parametres[k] !== undefined) partages[k] = parametres[k];
+  // Réglages ajoutés par une version plus récente de l'application : conservés tels quels
+  for (const [k, v] of Object.entries(parametres.reglagesAutres || {})) if (!(k in partages) && !PARAMETRES_PARTAGES.includes(k)) partages[k] = v;
   return {
     format: FORMAT_DONNEES,
     versionFormat: VERSION_FORMAT,
@@ -1216,10 +1218,25 @@ export function fusionnerSynchro(local, distant) {
   // 5. Réglages partagés : les plus récents ; début du suivi : le plus ancien
   const tl = Date.parse(lp.reglagesModifiesLeUtc || 0) || 0;
   const td = Date.parse(dp.reglagesModifiesLeUtc || 0) || 0;
-  const choix = (x) => stable(Object.fromEntries(PARAMETRES_PARTAGES.map((k) => [k, x[k] ?? null])));
-  const source = td > tl ? dp : td < tl ? lp : (choix(dp) > choix(lp) ? dp : lp);
+  const autresL = { ...(lp.reglagesAutres || {}) };
+  const autresD = Object.fromEntries(Object.entries(d.reglages || {}).filter(([k]) => !PARAMETRES_PARTAGES.includes(k)));
+  const valL = (k) => (lp[k] !== undefined ? lp[k] : autresL[k]);
   const parametres = { ...lp };
-  for (const k of PARAMETRES_PARTAGES) if (source[k] !== undefined) parametres[k] = source[k];
+  if (td !== tl) {
+    const recent = td > tl;
+    for (const k of PARAMETRES_PARTAGES) { const v = recent ? dp[k] : valL(k); if (v !== undefined) parametres[k] = v; }
+    parametres.reglagesAutres = recent ? autresD : autresL;
+  } else {
+    // Même instant : une version plus ancienne de l'application a pu renvoyer les réglages sans ceux
+    // qu'elle ne connaît pas. On garde donc, réglage par réglage, la valeur renseignée (choix symétrique).
+    const vide = (v) => v === undefined || v === null || v === '';
+    const choisir = (a, b) => (vide(a) ? (vide(b) ? (a !== undefined ? a : b) : b) : vide(b) ? a : (stable(b) > stable(a) ? b : a));
+    for (const k of PARAMETRES_PARTAGES) { const v = choisir(valL(k), dp[k]); if (v !== undefined) parametres[k] = v; }
+    const autres = {};
+    for (const k of new Set([...Object.keys(autresL), ...Object.keys(autresD)])) { const v = choisir(autresL[k], autresD[k]); if (v !== undefined) autres[k] = v; }
+    parametres.reglagesAutres = autres;
+  }
+  if (!Object.keys(parametres.reglagesAutres || {}).length) delete parametres.reglagesAutres;
   parametres.reglagesModifiesLeUtc = td > tl ? dp.reglagesModifiesLeUtc : (lp.reglagesModifiesLeUtc || dp.reglagesModifiesLeUtc || null);
   const debuts = [lp.debutSuiviUtc, dp.debutSuiviUtc].filter(Boolean).sort();
   if (debuts.length) parametres.debutSuiviUtc = debuts[0];
