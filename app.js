@@ -217,7 +217,11 @@ const VUES = {
   calendrier: vueCalendrier, motifs: vueMotifs, reglages: vueReglages, textes: vueTextes,
 };
 
+/** Incrémenté à chaque changement d'écran : une vue lente (asynchrone) ne doit pas recouvrir l'écran demandé ensuite. */
+let numeroVue = 0;
+
 function router() {
+  numeroVue += 1;
   const morceaux = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
   const [route, ...args] = morceaux;
   document.body.classList.toggle('sans-navigation', !etat.parametres);
@@ -266,7 +270,7 @@ function vueBienvenue() {
   contenu.innerHTML = `<section class="bienvenue">
     <h1>Bienvenue dans ton baromètre de l'humeur</h1>
     ${echelleHTML(6)}
-    <p>Deux fois par jour, à 06:00 et à 18:00, tu notes ton humeur de 0 à 10, ce qui l'explique, et ce que tu prévois pour la suite. Les données restent enregistrées sur cet appareil uniquement : aucun compte, aucun serveur, aucune publicité.</p>
+    <p>Deux fois par jour, à 06:00 et à 18:00, tu notes ton humeur de 0 à 10, ce qui l'explique, et ce que tu prévois pour la suite. Les données sont enregistrées sur cet appareil : aucun compte, aucune publicité. La synchronisation avec ton autre appareil est facultative et chiffrée.</p>
     <div class="bloc">
       <h2>Démarrer</h2>
       <p>Si tu as reçu le fichier <strong>donnees-initiales.json</strong> (tes motifs personnels et ta première évaluation), importe-le maintenant. Si tu as une sauvegarde, tu peux aussi la restaurer ici.</p>
@@ -1327,7 +1331,24 @@ function planifierSynchro(delai = 1500) {
   minuterieSynchro = setTimeout(() => { lancerSynchro().catch((e) => console.warn(e)); }, delai);
 }
 
+function texteConfidentialite() {
+  const p = etat.parametres || {};
+  const sy = synchroActive();
+  const push = !!(p.serveurRappels && p.serveurRappels.actif);
+  const ia = !!(p.ia && p.ia.actif && p.ia.consentementUtc);
+  const nomIa = ia ? (p.ia.fournisseur === 'mistral' ? 'Mistral AI' : 'Claude (Anthropic)') : '';
+  const points = [
+    sy ? '<li><strong>Synchronisation active</strong> : une copie de tes données, chiffrée sur cet appareil avec ta phrase de synchronisation, est conservée par ton service en ligne pour ton autre appareil. Le service ne peut pas la lire.</li>' : '',
+    push ? '<li><strong>Rappels actifs</strong> : le service connaît seulement l\'adresse technique de notification de cet appareil, sans aucune donnée de santé.</li>' : '',
+    ia ? `<li><strong>Version professionnelle automatique</strong> : le texte de tes commentaires (sans nom, notes ni dates) est envoyé à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementUtc)}.</li>` : '',
+    '<li><strong>Envoi du rapport</strong> : seulement quand tu le demandes, depuis ta propre messagerie ou par la feuille de partage (WhatsApp, Mail…). Un e-mail ordinaire n\'est pas chiffré.</li>',
+  ].filter(Boolean);
+  return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
+}
+
 function majEtatSynchro() {
+  const pied = document.getElementById('pied-stockage');
+  if (pied) pied.textContent = `${synchroActive() ? 'Données conservées sur tes appareils, avec une copie de synchronisation chiffrée.' : 'Données conservées uniquement sur cet appareil.'} Cette application ne pose aucun diagnostic et ne remplace pas ton thérapeute.`;
   const el = document.getElementById('etat-synchro');
   if (!el) return;
   const sy = etat.parametres && etat.parametres.synchro;
@@ -1461,6 +1482,43 @@ function chargerPdfLib() {
   return pdfLibPromesse;
 }
 
+const estMobile = estIOS || /Android/i.test(navigator.userAgent);
+
+/**
+ * Envoi du rapport depuis la messagerie de l'utilisateur : rien ne passe par un service tiers.
+ * Mobile : feuille de partage (Mail, Gmail, WhatsApp…) avec le PDF joint et l'adresse copiée.
+ * Ordinateur : le PDF est téléchargé et un e-mail pré-rempli s'ouvre ; il reste à joindre le fichier.
+ * Doit être appelé directement depuis un clic (exigence du navigateur pour le partage).
+ */
+function envoyerRapport(blob, nom, debut, fin) {
+  const p = etat.parametres;
+  const email = C.estEmailValide(p.emailTherapeute) ? p.emailTherapeute.trim() : '';
+  const { objet, corps } = C.messageEnvoiRapport({ destinataire: p.destinataire, debut, fin, prochaineSeance: p.prochaineSeance, aujourdhui: aujourdhui() });
+  const aide = document.getElementById('pdf-envoi-aide');
+  const dire = (html) => { if (aide) { aide.hidden = false; aide.innerHTML = html; } };
+  const copie = email && navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(email).then(() => true, () => false) : Promise.resolve(false);
+  const adresse = email ? `<strong>${esc(email)}</strong>` : 'l\'adresse de ton thérapeute';
+  let fichier = null;
+  try { fichier = new File([blob], nom, { type: 'application/pdf' }); } catch { fichier = null; }
+  if (estMobile && fichier && navigator.canShare && navigator.canShare({ files: [fichier] })) {
+    dire(`Choisis <strong>Mail</strong> (ou ta messagerie). ${email ? `L'adresse ${adresse} est copiée : touche le champ « À », puis <strong>Coller</strong>.` : 'Saisis l\'adresse de ton thérapeute dans le champ « À ».'} Le rapport est déjà joint.`);
+    navigator.share({ files: [fichier], title: objet, text: corps }).then(
+      () => dire('Envoi préparé. Vérifie dans ta messagerie que le message est bien parti.'),
+      (e) => { if (!e || e.name !== 'AbortError') dire(`Le partage n'a pas pu s'ouvrir. Touche <strong>Télécharger</strong>, puis joins le fichier à un e-mail pour ${adresse}.`); },
+    );
+    return;
+  }
+  // Ordinateur : téléchargement + e-mail pré-rempli
+  telecharger(blob, nom);
+  const a = document.createElement('a');
+  a.href = C.lienMailto(email, objet, corps);
+  a.rel = 'noopener';
+  document.body.append(a); a.click(); a.remove();
+  const texte = (ok) => `Un e-mail pré-rempli${email ? ` pour ${adresse}` : ''} s'ouvre dans ta messagerie. Joins-y le fichier <strong>${esc(nom)}</strong>, qui vient d'être enregistré dans <strong>Téléchargements</strong>, puis envoie.${ok ? ' L\'adresse est aussi copiée, si tu utilises ta messagerie dans le navigateur (Yahoo, Gmail…).' : ''} <span class="doux">Si aucune messagerie ne s'ouvre, écris un nouvel e-mail à ${adresse} et joins le fichier.</span>`;
+  dire(texte(false));
+  copie.then((ok) => { if (ok) dire(texte(true)); });
+}
+
 async function ouvrirPdf() {
   if (!etat.parametres) { annoncer('Commence par configurer l\'application.'); return; }
   const fin = aujourdhui();
@@ -1531,7 +1589,9 @@ async function ouvrirPdf() {
       res.hidden = false;
       await enregistrerParametres({ dernierRapport: { debut, fin: finChoisie, type, genereLeUtc: new Date(maintenant()).toISOString() } });
       const seance = etat.parametres.prochaineSeance || '';
-      res.innerHTML = `<div class="bandeau bandeau-laiton"><strong>Rapport prêt</strong>${esc(nom)}${nbPages ? `, ${nbPages} page${nbPages > 1 ? 's' : ''}` : ''}.<div class="rangee" style="margin-top:10px"><button type="button" class="bouton" id="pdf-telecharger">Télécharger</button>${navigator.canShare ? '<button type="button" class="bouton-secondaire" id="pdf-partager">Partager ou enregistrer</button>' : ''}<button type="button" class="bouton-discret" id="pdf-ouvrir">Ouvrir</button></div></div>
+      const email = C.estEmailValide(etat.parametres.emailTherapeute) ? etat.parametres.emailTherapeute.trim() : '';
+      const boutonsEnvoi = email ? `<button type="button" class="bouton" data-envoi="email">${dest ? `Envoyer à ${esc(dest)}` : 'Envoyer par e-mail'}</button>` : '';
+      res.innerHTML = `<div class="bandeau bandeau-laiton"><strong>Rapport prêt</strong>${esc(nom)}${nbPages ? `, ${nbPages} page${nbPages > 1 ? 's' : ''}` : ''}.<div class="rangee" style="margin-top:10px">${boutonsEnvoi}<button type="button" class="${email ? 'bouton-secondaire' : 'bouton'}" id="pdf-telecharger">Télécharger</button>${navigator.canShare ? '<button type="button" class="bouton-secondaire" id="pdf-partager">Partager ou enregistrer</button>' : ''}<button type="button" class="bouton-discret" id="pdf-ouvrir">Ouvrir</button></div><div id="pdf-envoi-aide" class="encre-2 aide-envoi" style="margin-top:10px" hidden></div></div>
         <div class="champ" style="margin-top:12px"><label for="pdf-seance">Date de ta prochaine séance <small class="doux">(facultatif : un rappel s'affichera la veille et le jour même)</small></label>
           <div class="rangee"><input type="date" id="pdf-seance" value="${seance > fin ? seance : ''}" min="${C.ajouterJours(fin, 1)}" style="flex:1;min-width:150px"><button type="button" class="bouton-secondaire" id="pdf-seance-ok">Enregistrer</button></div></div>`;
       document.getElementById('pdf-seance-ok').addEventListener('click', async () => {
@@ -1540,6 +1600,7 @@ async function ouvrirPdf() {
         annoncer(C.estDateValide(v) ? `Prochaine séance notée : ${C.formatDateLongue(v)}.` : 'Date de séance effacée.');
       });
       document.getElementById('pdf-telecharger').addEventListener('click', () => telecharger(blob, nom));
+      res.querySelectorAll('[data-envoi]').forEach((b) => b.addEventListener('click', () => envoyerRapport(blob, nom, debut, finChoisie)));
       document.getElementById('pdf-ouvrir').addEventListener('click', () => { const u = URL.createObjectURL(blob); window.open(u, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(u), 120000); });
       const bp = document.getElementById('pdf-partager');
       if (bp) bp.addEventListener('click', async () => { if (!(await partager(blob, nom))) telecharger(blob, nom); });
@@ -1768,6 +1829,7 @@ async function erreurService(r) {
 // Réglages
 
 async function vueReglages([section] = []) {
+  const vueDemandee = numeroVue;
   const p = etat.parametres;
   const instantanes = (await DB.tout('instantanes')).sort((a, b) => (a.id < b.id ? 1 : -1));
   const dossier = dossierPossible() ? await DB.lire('poignees', 'dossier') : null;
@@ -1777,6 +1839,7 @@ async function vueReglages([section] = []) {
   const debutLocal = (() => { const ms = Date.parse(p.debutSuiviUtc); const q = C.partiesLocales(ms); return `${q.date}T${String(q.heure).padStart(2, '0')}:${String(q.minute).padStart(2, '0')}`; })();
   const adresse = location.href.split('#')[0].split('?')[0];
   const serv = p.serveurRappels || {};
+  if (vueDemandee !== numeroVue) return; // l'utilisateur a déjà changé d'écran
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Réglages</h1>
 
@@ -1786,6 +1849,7 @@ async function vueReglages([section] = []) {
 
     <form class="bloc" id="form-general"><h2>Rapport et suivi</h2>
       <div class="champ"><label for="destinataire">Destinataire du rapport PDF</label><input type="text" id="destinataire" value="${esc(p.destinataire)}" maxlength="80" placeholder="Nom de ton thérapeute"><small class="doux">Apparaît sur le bouton et en titre du rapport.</small></div>
+      <div class="champ"><label for="email-therapeute">Adresse e-mail de ton thérapeute <small class="doux">(facultatif : pour envoyer le rapport en un geste)</small></label><input type="email" id="email-therapeute" value="${esc(p.emailTherapeute || '')}" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="email" placeholder="adresse@exemple.lu"></div>
       <div class="champ"><label for="prochaine-seance">Prochaine séance <small class="doux">(facultatif : rappel la veille et le jour même pour générer le rapport)</small></label><input type="date" id="prochaine-seance" value="${esc(p.prochaineSeance || '')}"></div>
       <div class="champ"><label for="debut-suivi">Début du suivi dans l'application</label><input type="datetime-local" id="debut-suivi" value="${debutLocal}"><small class="doux">Heure de Luxembourg. Les créneaux terminés avant cette date sont « non renseignés » et ne comptent pas comme omis.</small></div>
       <div class="champ"><label for="contact-nom">Personne de confiance ou thérapeute <small class="doux">(proposée dans l'écran d'aide)</small></label>
@@ -1849,7 +1913,7 @@ async function vueReglages([section] = []) {
     </div>
 
     <div class="bloc"><h2>Confidentialité et stockage</h2>
-      <p>Tes données sont enregistrées uniquement dans la base locale de ce navigateur sur cet appareil. Aucune donnée n'est envoyée sur Internet : le rapport PDF est calculé ici, sans service externe. Le seul échange réseau facultatif est l'abonnement aux notifications push, qui ne contient aucune donnée de santé.</p>
+      ${texteConfidentialite()}
       <p class="encre-2">Protection contre l'effacement automatique par le navigateur : <strong>${persiste === null ? 'inconnue' : persiste ? 'active' : 'non accordée'}</strong>${estimation && estimation.usage ? `, espace utilisé : ${C.nombreFr(estimation.usage / 1024, 0)} Ko` : ''}.</p>
       ${persiste === false ? '<p><button type="button" class="bouton-secondaire" data-action="persister">Demander la protection du stockage</button></p>' : ''}
       <p class="doux">Adresse de l'application : ${esc(adresse)}</p>
@@ -1868,9 +1932,11 @@ async function vueReglages([section] = []) {
     const debutVal = document.getElementById('debut-suivi').value;
     const modifs = {
       destinataire: document.getElementById('destinataire').value.trim(),
+      emailTherapeute: document.getElementById('email-therapeute').value.trim(),
       contactConfiance: { nom: document.getElementById('contact-nom').value.trim(), telephone: document.getElementById('contact-tel').value.trim() },
       prochaineSeance: C.estDateValide(document.getElementById('prochaine-seance').value) ? document.getElementById('prochaine-seance').value : '',
     };
+    if (modifs.emailTherapeute && !C.estEmailValide(modifs.emailTherapeute)) { annoncer('Adresse e-mail incomplète : vérifie-la (forme nom@domaine.lu).'); document.getElementById('email-therapeute').focus(); return; }
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(debutVal)) modifs.debutSuiviUtc = new Date(C.localVersUtc(debutVal.slice(0, 10), debutVal.slice(11))).toISOString();
     await enregistrerParametres(modifs);
     majBoutonPdf();
@@ -2074,7 +2140,7 @@ document.addEventListener('click', (e) => {
   if (action === 'demarrer-synchro') { demarrerParSynchro(); return; }
   if (action === 'synchro-activer') { activerSynchro(); return; }
   if (action === 'synchro-maintenant') { lancerSynchro({ interactif: true }); return; }
-  if (action === 'synchro-desactiver') { enregistrerParametres({ synchro: { ...etat.parametres.synchro, actif: false } }).then(() => { annoncer('Synchronisation désactivée sur cet appareil.'); vueReglages(['synchro']); }); return; }
+  if (action === 'synchro-desactiver') { enregistrerParametres({ synchro: { ...etat.parametres.synchro, actif: false } }).then(() => { annoncer('Synchronisation désactivée sur cet appareil.'); majEtatSynchro(); vueReglages(['synchro']); }); return; }
   if (action === 'synchro-code') { copierCodeConnexion(); return; }
   if (action === 'demarrer-vide') { initialiser().then(() => { annoncer('Suivi démarré.'); aller('#/'); }); return; }
   if (action === 'retirer') { retirerEvaluation(id); return; }

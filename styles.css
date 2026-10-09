@@ -157,7 +157,7 @@ main:focus, main:focus-visible { outline: none; }
 label { font-weight: 600; }
 .champ { display: grid; gap: 6px; margin-bottom: 14px; }
 .champ small { font-weight: 400; }
-input[type="text"], input[type="password"], input[type="tel"], input[type="url"], input[type="date"], input[type="datetime-local"], input[type="search"], select, textarea {
+input[type="text"], input[type="password"], input[type="email"], input[type="tel"], input[type="url"], input[type="date"], input[type="datetime-local"], input[type="search"], select, textarea {
   width: 100%; font: inherit; color: var(--encre); background: var(--surface); border: 1px solid var(--filet-fort);
   border-radius: var(--rayon-petit); padding: 10px 12px; min-height: 44px;
 }
@@ -234,6 +234,7 @@ details.repli[open] > summary { margin-bottom: 8px; }
 
 .bandeau { border-radius: var(--rayon-petit); padding: 12px 14px; margin: 0 0 16px; border: 1px solid var(--filet); background: var(--surface-2); font-size: .94rem; }
 .bandeau strong { display: block; margin-bottom: 2px; }
+.bandeau .aide-envoi strong { display: inline; margin: 0; }
 .bandeau-laiton { border-color: color-mix(in oklab, var(--laiton) 55%, var(--surface)); background: var(--laiton-fond); }
 .securite { border-radius: var(--rayon-petit); padding: 14px 16px; margin: 14px 0 0; border-left: 4px solid var(--alerte-bord); background: var(--alerte-fond); }
 .securite p:last-child { margin-bottom: 0; }
@@ -380,3 +381,6 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .periodes span { white-space: nowrap; }
 .etat-synchro { margin: 6px 0 0; font-size: .8rem; color: var(--doux); }
 .etat-synchro:empty { display: none; }
+
+.liste-puces { margin: 4px 0 10px; padding-left: 1.2em; }
+.liste-puces li { margin: 6px 0; }

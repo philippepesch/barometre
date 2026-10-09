@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.4.0';
+export const VERSION_APP = '1.5.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -720,6 +720,7 @@ export function parametresParDefaut(instant = Date.now()) {
   return {
     theme: 'auto',
     destinataire: '',
+    emailTherapeute: '',
     debutSuiviUtc: new Date(instant).toISOString(),
     contactConfiance: { nom: '', telephone: '' },
     rappelsDansApplication: false,
@@ -734,6 +735,29 @@ export function parametresParDefaut(instant = Date.now()) {
     synchro: { actif: false, phrase: '', version: 0, derniereUtc: null, erreur: '' },
     derniereSauvegardeFichierUtc: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Envoi du rapport par e-mail (depuis la messagerie de l'utilisateur)
+
+export function estEmailValide(texte) {
+  return /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]{2,}$/.test(String(texte || '').trim());
+}
+
+/** Objet et texte du message qui accompagne le rapport. N'inclut aucune donnée de santé. */
+export function messageEnvoiRapport({ destinataire = '', debut, fin, prochaineSeance = '', aujourdhui = '' }) {
+  const d = String(destinataire || '').trim();
+  const periode = debut === fin ? `du ${formatDateCourte(debut)}` : `du ${formatDateCourte(debut)} au ${formatDateCourte(fin)}`;
+  const seance = estDateValide(prochaineSeance) && (!aujourdhui || prochaineSeance >= aujourdhui) ? `, en vue de notre séance du ${formatDateLongue(prochaineSeance)}` : '';
+  return {
+    objet: `Baromètre de l'humeur – rapport ${periode}`,
+    corps: `${d ? `Bonjour ${d},` : 'Bonjour,'}\n\nVeuillez trouver ci-joint mon rapport du baromètre de l'humeur pour la période ${periode}${seance}.\n\nCordialement`,
+  };
+}
+
+export function lienMailto(email, objet, corps) {
+  const enc = (t) => encodeURIComponent(t);
+  return `mailto:${estEmailValide(email) ? encodeURIComponent(String(email).trim()).replace(/%40/g, '@') : ''}?subject=${enc(objet)}&body=${enc(corps.replace(/\n/g, '\r\n'))}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,7 +1104,7 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'contactConfiance', 'prochaineSeance', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'contactConfiance', 'prochaineSeance', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
 
 function empreinteTexte(s) {
   let h = 5381;
