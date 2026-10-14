@@ -13,6 +13,10 @@ const LARGEUR = A4[0] - 2 * MARGE;
 const HAUT_CONTENU = 64;
 const BAS_CONTENU = A4[1] - 60;
 
+// Couleurs catégorielles (lieux, situations) : palette validée pour la vision des couleurs
+export const COULEURS_CATEGORIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
+const COULEUR_AUTRE = '#9AA5AD';
+
 const ENCRE = '#1E2A33';
 const DOUX = '#5E6B74';
 const FILET = '#CDD4D9';
@@ -179,11 +183,13 @@ class Redacteur {
     this.y += 10;
   }
 
-  graphique(grille, previsions) {
+  graphique(grille, previsions, contexte = null) {
     const dense = grille.length > 60;
     const hauteur = dense ? 230 : 190;
     const legende = 22;
-    this.place(hauteur + legende + 40);
+    const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
+    const hBandes = avecBandes ? 52 : 0;
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0));
     const gauche = MARGE + 22, droite = MARGE + LARGEUR - 6;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
     const n = grille.length;
@@ -234,6 +240,30 @@ class Redacteur {
       }
     });
     this.y = bas + 26;
+    // Bandes « Lieu » et « Situation » : un segment par suite de créneaux identiques
+    if (avecBandes) {
+      const demi = n > 1 ? (xDe(1) - xDe(0)) / 2 : 6;
+      const bande = (titre, y0, extraire, cle, couleur) => {
+        this.texte(titre, gauche, y0 - 2, { taille: 7.5, police: 'gras', couleur: DOUX });
+        const cleDe = (s) => (s.evaluation ? (extraire(s.evaluation) ? cle(extraire(s.evaluation)) : '-') : null);
+        for (let i = 0; i < n;) {
+          const k = cleDe(grille[i]);
+          if (k === null) { i++; continue; }
+          let j = i;
+          while (j + 1 < n && cleDe(grille[j + 1]) === k) j++;
+          const x0 = Math.max(gauche, i === 0 ? xDe(0) - demi : (xDe(i - 1) + xDe(i)) / 2);
+          const x1 = Math.min(droite, j === n - 1 ? xDe(n - 1) + demi : (xDe(j) + xDe(j + 1)) / 2);
+          const v = extraire(grille[i].evaluation);
+          const w = Math.max(1, x1 - x0 - 1.4);
+          if (v) this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur(couleur(v)) });
+          else this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
+          i = j + 1;
+        }
+      };
+      bande('Lieu', this.y + 6, (e) => e.lieu, C.cleLieu, contexte.couleurLieu);
+      bande('Situation professionnelle', this.y + 30, (e) => e.situation, C.cleSituation, contexte.couleurSituation);
+      this.y += hBandes - 6;
+    }
     // Légende
     let x = MARGE + 22;
     const yl = this.y + 6;
@@ -243,6 +273,25 @@ class Redacteur {
     item((cx, cy) => this.page.drawSvgPath(`M ${cx} ${cy - 4} L ${cx + 4} ${cy} L ${cx} ${cy + 4} L ${cx - 4} ${cy} Z`, { x: 0, y: A4[1], borderColor: this.couleur(LAITON), borderWidth: 1.1 }), 'Note prévue');
     item((cx, cy) => { const g = this.couleur('#9AA5AD'); this.page.drawLine({ start: P(cx - 2.6, cy - 2.6), end: P(cx + 2.6, cy + 2.6), thickness: 0.9, color: g }); this.page.drawLine({ start: P(cx - 2.6, cy + 2.6), end: P(cx + 2.6, cy - 2.6), thickness: 0.9, color: g }); }, 'Créneau omis');
     this.y += legende;
+    if (avecBandes) {
+      for (const [titre, items] of [['Lieu', contexte.legendeLieux], ['Situation', contexte.legendeSituations]]) {
+        if (!items.length) continue;
+        let xl = MARGE + 22;
+        const yl2 = () => this.y + 6;
+        this.texte(`${titre} :`, xl, yl2() + 3, { taille: 8.5, police: 'gras', couleur: ENCRE });
+        xl += this.largeur(`${titre} :`, 8.5, 'gras') + 8;
+        for (const it of items) {
+          const lw = 14 + this.largeur(it.libelle, 8.5) + 10;
+          if (xl + lw > MARGE + LARGEUR) { this.y += 14; xl = MARGE + 22 + 50; }
+          const yy = yl2();
+          if (it.couleur) this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(it.couleur) });
+          else this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
+          this.texte(it.libelle, xl + 12, yy + 3, { taille: 8.5, couleur: DOUX });
+          xl += lw;
+        }
+        this.y += 16;
+      }
+    }
   }
 
   paginer(pied) {
@@ -280,7 +329,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   const evals = C.trierChrono(C.dansPeriode(toutes, debut, fin));
   const textes = new Map(evals.map((e) => [e.id, C.textesPourRapport(e, modeTextes)]));
   const nbReformules = [...textes.values()].filter((t) => t.reformule).length;
-  const modifsReelles = (e) => (e.historique || []).filter((h) => h.changements.some((c) => c.champ !== 'reformulation'));
+  const modifsReelles = (e) => (e.historique || []).filter((h) => h.changements.some((c) => c.champ !== 'reformulation') && !estCompletion(h));
   const parametres = donnees.parametres || {};
   const destinataire = (parametres.destinataire || '').trim();
   const grille = C.grilleCreneaux(debut, fin, toutes, instant, parametres.debutSuiviUtc);
@@ -289,6 +338,17 @@ export async function genererRapport(PDFLib, donnees, options) {
   const freq = C.frequenceMotifs(evals, donnees.motifs || []);
   const prev = C.comparaisonsPrevisions(evals, toutes);
   const statutParId = new Map(C.grilleCreneaux(debut, C.ajouterJours(fin, 1), toutes, instant, parametres.debutSuiviUtc).map((s) => [s.id, s.statut]));
+  // Lieu et situation : couleurs stables (ordre de fréquence sur tout le suivi), comme dans l'application
+  const ordreLieux = C.ordreLieux(toutes);
+  const couleurLieu = (l) => { const i = ordreLieux.indexOf(C.cleLieu(l)); return i >= 0 && i < COULEURS_CATEGORIES.length ? COULEURS_CATEGORIES[i] : COULEUR_AUTRE; };
+  const couleurSituation = (x) => COULEURS_CATEGORIES[C.ORDRE_SITUATIONS.indexOf(x.statut)] || COULEUR_AUTRE;
+  const parLieu = C.humeurParLieu(evals);
+  const parSituation = C.humeurParSituation(evals);
+  const legendeLieux = [...parLieu.lignes].sort((a, b) => (ordreLieux.indexOf(a.cle) + 1 || 999) - (ordreLieux.indexOf(b.cle) + 1 || 999)).map((l) => ({ libelle: C.libelleLieu(l.valeur), couleur: couleurLieu(l.valeur) }));
+  const legendeSituations = C.ORDRE_SITUATIONS.filter((st) => parSituation.lignes.some((l) => l.valeur.statut === st)).map((st) => ({ libelle: C.SITUATIONS[st], couleur: couleurSituation({ statut: st }) }));
+  if (parLieu.sansValeur && parLieu.lignes.length) legendeLieux.push({ libelle: 'non indiqué', couleur: null });
+  if (parSituation.sansValeur && parSituation.lignes.length) legendeSituations.push({ libelle: 'non indiquée', couleur: null });
+  const estCompletion = (h) => h.changements.every((c) => (c.champ === 'lieu' || c.champ === 'situation') && !c.avant);
 
   const doc = await PDFLib.PDFDocument.create();
   const titreDoc = destinataire ? `Rapport pour ${destinataire}` : 'Rapport de suivi de l\'humeur';
@@ -375,8 +435,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (grille.length > 2 * 400) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
-    R.graphique(grille, prev);
-    R.paragraphe('Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s\'interrompt lorsqu\'un créneau n\'a pas de réponse.', { taille: 8.5, couleur: DOUX });
+    R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations });
+    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau.' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
   // 6. Tendances
@@ -402,8 +462,26 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (freq.some((f) => f.polarite === 'mixte')) { R.sousTitre('Facteurs mixtes'); tableFacteurs('mixte'); }
   R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
 
-  // 9. Prévisions et réalité
-  R.section(9, 'Comparaison entre prévisions et réalité');
+  // 9. Lieu de séjour et situation professionnelle
+  R.section(9, 'Lieu de séjour et situation professionnelle');
+  if (!parLieu.lignes.length && !parSituation.lignes.length) R.paragraphe('Aucun lieu ni aucune situation professionnelle n\'ont été indiqués sur la période.');
+  else {
+    const tableCat = (titre, r) => {
+      if (!r.lignes.length) { R.paragraphe(`${titre} : non indiqué sur la période.`, { taille: 9.5, couleur: DOUX }); return; }
+      R.tableau(
+        [{ titre, part: 3.6 }, { titre: 'Évaluations', part: 1.1 }, { titre: 'Moyenne', part: 1 }, { titre: 'Min – max', part: 1.1 }],
+        r.lignes.map((l) => [l.libelle, String(l.nombre), `${C.nombreFr(l.moyenne)}/10`, `${l.min} – ${l.max}`]),
+      );
+      if (r.sansValeur) R.paragraphe(`${C.pluriel(r.sansValeur, 'évaluation')} sans cette information.`, { taille: 8.5, couleur: DOUX });
+    };
+    tableCat('Lieu', parLieu);
+    tableCat('Situation professionnelle', parSituation);
+    const peu = [...parLieu.lignes, ...parSituation.lignes].some((l) => l.nombre < 4);
+    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet.${peu ? ' Une moyenne calculée sur moins de 4 évaluations est peu représentative.' : ''}`, { taille: 8.5, couleur: DOUX });
+  }
+
+  // 10. Prévisions et réalité
+  R.section(10, 'Comparaison entre prévisions et réalité');
   if (!prev.lignes.length) R.paragraphe('Aucune prévision n\'a été formulée sur la période.');
   else {
     const etatCible = (l) => {
@@ -433,7 +511,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 10. Évaluations manquantes
-  R.section(10, 'Évaluations manquantes');
+  R.section(11, 'Évaluations manquantes');
   const omis = grille.filter((s) => s.statut === 'omis');
   const attente = grille.filter((s) => s.statut === 'en_attente');
   const nonRens = grille.filter((s) => s.statut === 'non_renseigne');
@@ -443,12 +521,12 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (nonRens.length) R.paragraphe(`Non renseigné (antérieur au début du suivi dans l'application, données inconnues) : ${nonRens.map(libCreneau).join(', ')}.`, { taille: 9.5, couleur: DOUX });
 
   // 11. Synthèse neutre
-  R.section(11, 'Sujets susceptibles d\'être abordés en séance');
+  R.section(12, 'Sujets susceptibles d\'être abordés en séance');
   R.paragraphe('Relevé factuel établi automatiquement à partir des saisies, sans interprétation ; libre au patient et au thérapeute de s\'en saisir ou non.', { taille: 9, couleur: DOUX });
   R.puces(C.sujetsDeDiscussion(evals, freq, prev, comptes));
 
   // 12. Annexe
-  R.section(12, 'Annexe chronologique des évaluations', 120);
+  R.section(13, 'Annexe chronologique des évaluations', 120);
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
   if (type === 'synthetique' && evals.length) {
@@ -456,7 +534,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.tableau(
       [{ titre: 'Créneau', part: 1.3 }, { titre: 'Note', part: 1.3 }, { titre: 'Saisie', part: 1.3 }, { titre: 'Motifs et commentaire', part: 4.2 }],
       evals.map((e) => [
-        libCreneau(e), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
+        [libCreneau(e), e.lieu ? C.libelleLieu(e.lieu) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
         [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' '))].filter(Boolean).join(' — ') || '—',
       ]),
       { taille: 8.5 },
@@ -476,6 +554,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       const meta = [`Rappel prévu : ${C.formatHeure(e.rappelPrevuUtc)}`, `Validation : ${heureValidation(e)}`];
       if (e.saisieRetrospective) meta.push('saisie rétrospective, après la fin du créneau');
       R.paragraphe(meta.join('   |   '), { taille: 8.5, couleur: DOUX, apres: 3 });
+      if (e.lieu || e.situation) R.paragraphe([e.lieu ? `Lieu : ${C.libelleLieu(e.lieu, { complet: true })}` : '', e.situation ? `Situation : ${C.libelleSituation(e.situation)}` : ''].filter(Boolean).join('   |   '), { taille: 9.5, apres: 3 });
       if (e.noteOrigine) R.paragraphe(e.noteOrigine, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
       const libMotifs = (l) => l.map((m) => `${m.libelle} (${C.LIBELLE_POLARITE[m.polarite].toLowerCase()})`).join(', ');
       R.paragraphe(`Motifs cochés : ${e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun'}`, { taille: 9.5, apres: 3 });
@@ -499,6 +578,8 @@ export async function genererRapport(PDFLib, donnees, options) {
         }
       }
       if (e.securite && e.securite.declenchee) R.paragraphe(`Une vérification de sécurité a été proposée (${e.securite.raisons.join(', ')}).`, { taille: 9, police: 'italique', apres: 3 });
+      const completions = (e.historique || []).filter(estCompletion);
+      if (completions.length) R.paragraphe(`Lieu ou situation indiqués a posteriori le ${C.formatDateHeure(completions[completions.length - 1].le)}.`, { taille: 8.5, couleur: DOUX, apres: 2 });
       if (modifsReelles(e).length) {
         for (const h of modifsReelles(e)) {
           const champs = h.changements.filter((c) => c.champ !== 'reformulation').map((c) => (c.champ === 'note' ? `note ${c.avant} → ${c.apres}` : (C.LIBELLE_CHAMP[c.champ] || c.champ).toLowerCase())).join(', ');

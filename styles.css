@@ -25,6 +25,7 @@
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --fav: #3D7DB8; --def: #9B4F84; --mix: #9A7420;
+  --cat1: #2a78d6; --cat2: #eb6834; --cat3: #1baf7a; --cat4: #eda100; --cat5: #e87ba4; --cat-autre: #9AA5AD;
   --rayon: 14px;
   --rayon-petit: 8px;
   --nav-h: 0px;
@@ -40,6 +41,7 @@
     --n0: #7680A3; --n1: #7D88A8; --n2: #8691AB; --n3: #919AAB; --n4: #9AA1A6; --n5: #A8AAA2;
     --n6: #9DB7C4; --n7: #87B3D1; --n8: #74A9D8; --n9: #D7B467; --n10: #E2AC4A;
     --fav: #4F93D6; --def: #C2649F; --mix: #B88A2E;
+    --cat1: #3987e5; --cat2: #d95926; --cat3: #199e70; --cat4: #c98500; --cat5: #d55181; --cat-autre: #6B7882;
   }
 }
 :root[data-theme="dark"] {
@@ -51,6 +53,7 @@
   --n0: #7680A3; --n1: #7D88A8; --n2: #8691AB; --n3: #919AAB; --n4: #9AA1A6; --n5: #A8AAA2;
   --n6: #9DB7C4; --n7: #87B3D1; --n8: #74A9D8; --n9: #D7B467; --n10: #E2AC4A;
   --fav: #4F93D6; --def: #C2649F; --mix: #B88A2E;
+  --cat1: #3987e5; --cat2: #d95926; --cat3: #199e70; --cat4: #c98500; --cat5: #d55181; --cat-autre: #6B7882;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -384,3 +387,30 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 
 .liste-puces { margin: 4px 0 10px; padding-left: 1.2em; }
 .liste-puces li { margin: 6px 0; }
+
+/* Lieu : champ avec liste de propositions */
+.combo { position: relative; }
+.combo input { padding-right: 44px; }
+.combo-effacer { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; border: 0; border-radius: 50%; background: none; color: var(--doux); font-size: 1.4rem; line-height: 1; cursor: pointer; }
+.combo-effacer:hover { background: var(--surface-2); color: var(--encre); }
+.combo-liste { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 6px 0; list-style: none; max-height: min(340px, 55vh); overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--filet-fort); border-radius: var(--rayon-petit); box-shadow: 0 8px 28px rgba(0, 0, 0, .18); }
+.combo-liste [role="option"] { padding: 10px 14px; cursor: pointer; line-height: 1.35; }
+.combo-liste [role="option"][aria-selected="true"], .combo-liste [role="option"]:hover { background: var(--laiton-fond); }
+.combo-nom { font-weight: 600; }
+.combo-groupe { padding: 8px 14px 4px; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--doux); }
+.combo-message { padding: 8px 14px; font-size: .9rem; }
+.combo-etat { margin: 6px 0 0; font-size: .88rem; min-height: 0; }
+.champ-situation { border: 0; padding: 0; margin: 18px 0 0; min-width: 0; }
+.champ-situation legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
+
+/* Bandes de contexte sous la courbe */
+.bande-titre { font-size: 11px; fill: var(--encre-2); font-weight: 600; }
+.legende-contexte { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 0; font-size: .86rem; color: var(--encre-2); }
+.legende-contexte .titre { font-weight: 600; color: var(--encre); margin-right: 2px; }
+.legende-contexte span { display: inline-flex; align-items: center; gap: 6px; }
+.pastille-cat { width: 12px; height: 12px; border-radius: 3px; flex: none; display: inline-block; }
+.pastille-cat.vide { background: repeating-linear-gradient(135deg, var(--filet-fort) 0 2px, transparent 2px 5px); border: 1px solid var(--filet-fort); }
+.moyenne-barre { display: inline-block; vertical-align: middle; height: 8px; border-radius: 4px; background: var(--filet); width: 90px; position: relative; overflow: hidden; margin-left: 8px; }
+.moyenne-barre i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+.bandeau.en-ligne strong { display: inline; margin: 0; }

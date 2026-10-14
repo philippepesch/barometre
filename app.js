@@ -3,6 +3,7 @@ import * as C from './core.js';
 import * as DB from './db.js';
 import { FOURNISSEURS } from './ia.js';
 import * as S from './sync.js';
+import * as L from './lieux.js';
 
 const etat = { evaluations: [], motifs: [], parametres: null, archives: [] };
 const ui = { periode: null, alerteDossier: false, majDisponible: null, majDemandee: false };
@@ -214,7 +215,7 @@ async function verificationSecurite(ev) {
 
 const VUES = {
   '': vueAccueil, accueil: vueAccueil, evaluer: vueEvaluer, modifier: vueModifier, evaluation: vueFiche,
-  calendrier: vueCalendrier, motifs: vueMotifs, reglages: vueReglages, textes: vueTextes,
+  calendrier: vueCalendrier, motifs: vueMotifs, reglages: vueReglages, textes: vueTextes, contexte: vueContexte,
 };
 
 /** Incrémenté à chaque changement d'écran : une vue lente (asynchrone) ne doit pas recouvrir l'écran demandé ensuite. */
@@ -227,7 +228,7 @@ function router() {
   document.body.classList.toggle('sans-navigation', !etat.parametres);
   if (!etat.parametres) { vueBienvenue(); marquerOnglet(''); return; }
   const vue = VUES[route] || vueAccueil;
-  marquerOnglet(route === 'modifier' || route === 'evaluation' || route === 'textes' ? '' : route);
+  marquerOnglet(['modifier', 'evaluation', 'textes', 'contexte'].includes(route) ? '' : route);
   try { vue(args); } catch (e) { console.error(e); contenu.innerHTML = `<div class="erreurs"><p>Une erreur est survenue : ${esc(e.message)}</p><p><a href="#/">Retour à l'accueil</a></p></div>`; }
   contenu.focus({ preventScroll: true });
   window.scrollTo(0, 0);
@@ -343,6 +344,7 @@ function vueAccueil() {
     ${ui.alerteDossier ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>La sauvegarde automatique dans ton dossier attend ton autorisation.</span><button class="bouton-secondaire" data-action="autoriser-dossier">Autoriser</button></div>' : ''}
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
+    ${bandeauContexte()}
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
@@ -374,6 +376,14 @@ function blocMiseEnRoute() {
       ${ligne(ia, 'Version professionnelle automatique pour le thérapeute', '#/reglages/ia')}
       ${ligne(sync, 'Synchronisation avec ton autre appareil', '#/reglages/synchro')}
     </ul></section>`;
+}
+
+function bandeauContexte() {
+  if (etat.parametres.contexteBandeauMasque) return '';
+  const n = etat.evaluations.filter((e) => !e.lieu && !e.situation).length;
+  if (!n) return '';
+  return `<div class="bandeau bandeau-laiton rangee-espacee"><span><strong>Nouveau : lieu et situation professionnelle</strong>${n > 1 ? `${n} évaluations passées n'ont` : 'Une évaluation passée n\'a'} pas encore ces informations. Tu peux les compléter en quelques gestes, période par période.</span>
+    <span class="rangee"><a class="bouton-secondaire" href="#/contexte">Compléter</a><button type="button" class="bouton-discret" data-action="masquer-contexte">Plus tard</button></span></div>`;
 }
 
 function bandeauSeance() {
@@ -453,6 +463,7 @@ function tableauDeBord() {
     <h2 id="titre-courbe">Courbe des notes</h2>
     ${graphiqueHTML(grille, prev)}
   </section>
+  ${blocContexte(evals)}
   <div class="grille-2">
     <section class="bloc" aria-labelledby="titre-evolution">
       <h2 id="titre-evolution">Évolution</h2>
@@ -479,8 +490,64 @@ function tableauDeBord() {
 
 let donneesGraphique = null;
 
+/** Humeur moyenne par lieu et par situation sur la période (descriptif, sans conclusion). */
+function blocContexte(evals) {
+  const manquants = etat.evaluations.filter((e) => !e.lieu || !e.situation).length;
+  const lienCompleter = manquants ? `<p style="margin:12px 0 0"><a class="bouton-secondaire" href="#/contexte">Compléter les évaluations passées</a> <span class="doux">${C.pluriel(manquants, 'évaluation')} sans lieu ou sans situation</span></p>` : '';
+  if (!evals.some((e) => e.lieu || e.situation)) {
+    return `<section class="bloc" aria-labelledby="titre-contexte"><h2 id="titre-contexte">Humeur selon le lieu et la situation</h2>
+      <p class="doux">Aucun lieu ni aucune situation professionnelle indiqués sur la période. Ces informations se renseignent en bas de chaque évaluation.</p>${lienCompleter}</section>`;
+  }
+  const coul = couleursContexte();
+  const table = (titre, r, couleur) => {
+    if (!r.lignes.length) return `<div><h3>${titre}</h3><p class="doux">Rien d'indiqué sur la période.</p></div>`;
+    return `<div><h3>${titre}</h3><div class="defile"><table class="donnees"><thead><tr><th>${titre}</th><th class="nombre">Évaluations</th><th class="nombre">Moyenne</th><th class="nombre">Min – max</th></tr></thead><tbody>
+      ${r.lignes.map((l) => `<tr><td><i class="pastille-cat" style="background:${couleur(l.valeur)};margin-right:8px"></i>${esc(l.libelle)}</td><td class="nombre">${l.nombre}</td>
+        <td class="nombre" style="white-space:nowrap">${C.nombreFr(l.moyenne)}<span class="moyenne-barre" aria-hidden="true"><i style="width:${l.moyenne * 10}%;background:var(--n${Math.round(l.moyenne)})"></i></span></td><td class="nombre">${l.min} – ${l.max}</td></tr>`).join('')}
+      </tbody></table></div>
+      ${r.sansValeur ? `<p class="doux" style="margin-top:6px">${C.pluriel(r.sansValeur, 'évaluation')} sans cette information.</p>` : ''}</div>`;
+  };
+  const pl = C.humeurParLieu(evals);
+  const ps = C.humeurParSituation(evals);
+  const peu = [...pl.lignes, ...ps.lignes].some((l) => l.nombre < 4);
+  return `<section class="bloc" aria-labelledby="titre-contexte"><h2 id="titre-contexte">Humeur selon le lieu et la situation</h2>
+    <p class="doux">Moyenne de tes notes pour chaque lieu et chaque situation de la période. Ce sont des constats, pas des causes : d'autres facteurs peuvent jouer.${peu ? ' Avec moins de 4 évaluations, une moyenne est peu représentative.' : ''}</p>
+    <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu)}${table('Situation', ps, coul.situation)}</div>
+    ${lienCompleter}</section>`;
+}
+
+// Couleurs des lieux : ordre stable (fréquence sur tout le suivi), 5 couleurs puis « autres lieux » en gris.
+const NB_COULEURS_LIEUX = 5;
+function couleursContexte() {
+  const ordre = C.ordreLieux(etat.evaluations);
+  return {
+    ordre,
+    lieu: (l) => { const i = ordre.indexOf(C.cleLieu(l)); return i >= 0 && i < NB_COULEURS_LIEUX ? `var(--cat${i + 1})` : 'var(--cat-autre)'; },
+    situation: (x) => `var(--cat${C.ORDRE_SITUATIONS.indexOf(x.statut) + 1})`,
+  };
+}
+
+/** Légende d'une bande : les catégories présentes sur la période, dans l'ordre des couleurs. */
+function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre) {
+  const vus = new Map();
+  let vide = false;
+  for (const e of evals) {
+    const v = extraire(e);
+    if (!v) { vide = true; continue; }
+    if (!vus.has(cle(v))) vus.set(cle(v), v);
+  }
+  if (!vus.size) return '';
+  const items = [...vus.values()].sort((a, b) => ordre(a) - ordre(b));
+  const autres = items.filter((v) => couleur(v) === 'var(--cat-autre)');
+  const nommes = items.filter((v) => couleur(v) !== 'var(--cat-autre)');
+  return `<div class="legende-contexte"><span class="titre">${titre} :</span>${nommes.map((v) => `<span><i class="pastille-cat" style="background:${couleur(v)}"></i>${esc(libelle(v))}</span>`).join('')}
+    ${autres.length ? `<span><i class="pastille-cat" style="background:var(--cat-autre)"></i>${autres.length === 1 ? esc(libelle(autres[0])) : `Autres lieux (${autres.map((v) => esc(libelle(v))).join(', ')})`}</span>` : ''}
+    ${vide ? '<span><i class="pastille-cat vide"></i>Non indiqué</span>' : ''}</div>`;
+}
+
 function graphiqueHTML(grille, prev) {
-  const W = Math.round(Math.max(320, Math.min(760, (contenu.clientWidth || 760) - 40))), H = W < 500 ? 220 : 250, g = 30, d = 10, h = 14, b = 44;
+  const avecContexte = grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
+  const W = Math.round(Math.max(320, Math.min(760, (contenu.clientWidth || 760) - 40))), H0 = W < 500 ? 220 : 250, H = H0 + (avecContexte ? 62 : 0), g = 30, d = 10, h = 14, b = 44 + (avecContexte ? 62 : 0);
   const n = grille.length;
   const x = (i) => (n <= 1 ? (g + W - d) / 2 : g + 8 + (i * (W - d - g - 16)) / (n - 1));
   const y = (v) => h + (1 - v / 10) * (H - h - b);
@@ -520,10 +587,39 @@ function graphiqueHTML(grille, prev) {
       svg += `<path class="omis" d="M${x(i) - r} ${cy - r}L${x(i) + r} ${cy + r}M${x(i) + r} ${cy - r}L${x(i) - r} ${cy + r}"/>`;
     }
   });
+  // Bandes « Lieu » et « Situation » sous les dates : un segment par suite de créneaux identiques
+  const coul = couleursContexte();
+  if (avecContexte) {
+    const demi = n > 1 ? (x(1) - x(0)) / 2 : 8;
+    const bande = (titre, y0, extraire, cle, couleur) => {
+      svg += `<text class="bande-titre" x="${g}" y="${y0}">${titre}</text>`;
+      const yb = y0 + 5, hb = 11;
+      const cleDe = (s) => (s.evaluation ? (extraire(s.evaluation) ? cle(extraire(s.evaluation)) : '-') : null);
+      for (let i = 0; i < n;) {
+        const k = cleDe(grille[i]);
+        if (k === null) { i++; continue; }
+        let j = i;
+        while (j + 1 < n && cleDe(grille[j + 1]) === k) j++;
+        const x0 = Math.max(g, i === 0 ? x(0) - demi : (x(i - 1) + x(i)) / 2);
+        const x1 = Math.min(W - d, j === n - 1 ? x(n - 1) + demi : (x(j) + x(j + 1)) / 2);
+        const v = extraire(grille[i].evaluation);
+        svg += `<rect class="segment" x="${(x0 + 1).toFixed(1)}" y="${yb}" width="${Math.max(1.5, x1 - x0 - 2).toFixed(1)}" height="${hb}" rx="2.5" fill="${v ? couleur(v) : 'url(#hachures)'}"/>`;
+        i = j + 1;
+      }
+    };
+    const yb0 = H0 - 44 + 30 + 22;
+    svg = `<defs><pattern id="hachures" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--filet-fort)" stroke-width="1.6"/></pattern></defs>${svg}`;
+    bande('Lieu', yb0, (e) => e.lieu, C.cleLieu, coul.lieu);
+    bande('Situation', yb0 + 30, (e) => e.situation, C.cleSituation, coul.situation);
+  }
   svg += '<line class="curseur-vertical" x1="0" x2="0" y1="0" y2="0" visibility="hidden"/>';
-  donneesGraphique = { grille, x, W, H, prevParCible, haut: h, bas: H - b };
+  donneesGraphique = { grille, x, W, H, prevParCible, haut: h, bas: H0 - 44 };
   const nbRep = grille.filter((s) => s.evaluation).length;
-  const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td></tr>`).join('');
+  const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td>${avecContexte ? `<td>${s.evaluation && s.evaluation.lieu ? esc(C.libelleLieu(s.evaluation.lieu)) : '—'}</td><td>${s.evaluation && s.evaluation.situation ? esc(C.libelleSituation(s.evaluation.situation)) : '—'}</td>` : ''}</tr>`).join('');
+  const evalsGrille = grille.filter((s) => s.evaluation).map((s) => s.evaluation);
+  const ordreLieu = (l) => { const i = coul.ordre.indexOf(C.cleLieu(l)); return i < 0 ? 999 : i; };
+  const legendes = avecContexte ? `${legendeContexte('Lieu', evalsGrille, (e) => e.lieu, C.cleLieu, (l) => C.libelleLieu(l), coul.lieu, ordreLieu)}
+    ${legendeContexte('Situation', evalsGrille, (e) => e.situation, (x) => x.statut, (x) => C.SITUATIONS[x.statut], coul.situation, (x) => C.ORDRE_SITUATIONS.indexOf(x.statut))}` : '';
   return `<div class="graphique" id="graphique">
       <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe de ${nbRep} notes sur la période">${svg}</svg>
     </div>
@@ -533,7 +629,8 @@ function graphiqueHTML(grille, prev) {
       <span><svg viewBox="0 0 14 14"><path d="M7 1.5L12.5 7L7 12.5L1.5 7Z" fill="none" stroke="var(--laiton)" stroke-width="1.6"/></svg>Note prévue</span>
       <span><svg viewBox="0 0 14 14"><path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="var(--doux)" stroke-width="1.6"/></svg>Créneau omis</span>
     </div>
-    ${tableau ? `<details class="repli" style="margin-top:8px"><summary>Afficher les données en tableau</summary><div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Créneau</th><th>Note</th></tr></thead><tbody>${tableau}</tbody></table></div></details>` : '<p class="doux">Aucune donnée sur la période.</p>'}`;
+    ${legendes}
+    ${tableau ? `<details class="repli" style="margin-top:8px"><summary>Afficher les données en tableau</summary><div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Créneau</th><th>Note</th>${avecContexte ? '<th>Lieu</th><th>Situation</th>' : ''}</tr></thead><tbody>${tableau}</tbody></table></div></details>` : '<p class="doux">Aucune donnée sur la période.</p>'}`;
 }
 
 function attacherGraphique() {
@@ -552,8 +649,11 @@ function attacherGraphique() {
     const s = grille[meilleur];
     const l = prevParCible.get(meilleur);
     const lignes = [`<strong>${esc(C.formatDateMoyenne(s.date))}, ${s.creneau}</strong>`];
-    if (s.evaluation) lignes.push(esc(C.libelleNote(s.evaluation.note)));
-    else lignes.push(esc(C.STATUTS[s.statut]));
+    if (s.evaluation) {
+      lignes.push(esc(C.libelleNote(s.evaluation.note)));
+      if (s.evaluation.lieu) lignes.push(esc(C.libelleLieu(s.evaluation.lieu)));
+      if (s.evaluation.situation) lignes.push(esc(C.libelleSituation(s.evaluation.situation)));
+    } else lignes.push(esc(C.STATUTS[s.statut]));
     if (l) lignes.push(`Prévu : ${l.prevue}/10`);
     if (!bulle) { bulle = document.createElement('div'); bulle.className = 'infobulle'; zone.append(bulle); }
     bulle.innerHTML = lignes.join('<br>');
@@ -643,6 +743,11 @@ function formulaire(cible, ev) {
   const selection = new Set(ev ? ev.motifs.map((m) => m.id) : []);
   const selectionPrev = new Set(ev && ev.prevision ? ev.prevision.motifs.map((m) => m.id) : []);
   const titre = `Évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'}`;
+  // Contexte : valeurs de l'évaluation modifiée, sinon proposition d'après les évaluations précédentes
+  const proposition = ev ? null : C.suggestionContexte(etat.evaluations, cible);
+  const lieuInitial = ev ? (ev.lieu || null) : proposition.lieu;
+  const situationInitiale = ev ? (ev.situation || null) : proposition.situation;
+  const repris = !ev && (lieuInitial || situationInitiale);
 
   contenu.innerHTML = `<form class="colonne-centree" id="form-eval" novalidate>
     <p class="doux" style="margin:0">${esc(C.majuscule(C.formatDateLongue(cible.date)))}</p>
@@ -701,6 +806,14 @@ function formulaire(cible, ev) {
       <details class="repli" ${selectionPrev.size ? 'open' : ''}><summary>Associer des motifs à cette prévision</summary>${pucesMotifs('motif-prev', selectionPrev, extraPrev)}</details>
     </section>
 
+    <section class="question" aria-labelledby="q4">
+      <p class="question-numero">Contexte</p>
+      <h2 id="q4">Où es-tu, et quelle est ta situation ?</h2>
+      <p class="doux">${repris ? 'Repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif. Cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
+      ${L.champLieuHTML('lieu', lieuInitial)}
+      ${L.champSituationHTML('situation', situationInitiale)}
+    </section>
+
     ${ev ? `<div class="champ"><label for="raison">Raison de la modification <small class="doux">(facultatif, conservée dans l'historique)</small></label><input type="text" id="raison" maxlength="300"></div>` : ''}
     <div class="rangee" style="margin-top:8px">
       <button type="submit" class="bouton" id="btn-enregistrer">${ev ? 'Enregistrer la modification' : 'Enregistrer l\'évaluation'}</button>
@@ -709,6 +822,8 @@ function formulaire(cible, ev) {
   </form>`;
 
   const form = document.getElementById('form-eval');
+  const champLieu = L.brancherChampLieu('lieu', { initial: lieuInitial, connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
+  const champSituation = L.brancherChampSituation(form, 'situation');
   const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix) => {
     const c = document.getElementById(idCurseur);
     const maj = () => {
@@ -815,6 +930,8 @@ function formulaire(cible, ev) {
           motif: document.getElementById('prevision-motif').value,
           motifs: resoudre(new Set([...form.querySelectorAll('[name="motif-prev"]:checked')].map((c) => c.value)), extraPrev),
         },
+        lieu: champLieu.valeur(),
+        situation: champSituation.valeur(),
       };
       let resultat;
       if (ev) {
@@ -854,6 +971,8 @@ function vueFiche([id]) {
     if (c === 'note') return esc(C.libelleNote(v));
     if (c === 'motifs' || c === 'autresMotifs') return v.length ? esc(v.map((m) => m.libelle).join(', ')) : '<em>aucun</em>';
     if (c === 'reformulation') return `${esc(C.STATUTS_REFORMULATION[v.statut] || v.statut)}${v.source === 'assistant' ? ' (proposée par un assistant)' : ''}`;
+    if (c === 'lieu') return esc(C.libelleLieu(v, { complet: true }));
+    if (c === 'situation') return esc(C.libelleSituation(v));
     if (c === 'prevision') return Number.isInteger(v.note) ? esc(`${C.libelleNote(v.note)}${v.motif ? ` – ${v.motif}` : ''}`) : esc(v.motif || 'aucune note');
     return `<span class="texte-libre">${esc(v)}</span>`;
   };
@@ -867,6 +986,8 @@ function vueFiche([id]) {
       <dt>Validation</dt><dd>${ev.validationConnue ? C.formatDateHeure(ev.valideLeUtc) : 'Heure réelle inconnue (donnée historique)'}${ev.saisieRetrospective ? ' — saisie rétrospective, après la fin du créneau' : ''}</dd>
       ${ev.modifieLeUtc ? `<dt>Dernière modification</dt><dd>${C.formatDateHeure(ev.modifieLeUtc)}</dd>` : ''}
       ${ev.noteOrigine ? `<dt>Origine</dt><dd>${esc(ev.noteOrigine)}</dd>` : ''}
+      <dt>Lieu</dt><dd>${ev.lieu ? `${esc(C.libelleLieu(ev.lieu, { complet: true }))}${ev.lieu.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}` : '<span class="doux">non indiqué</span>'}</dd>
+      <dt>Situation</dt><dd>${ev.situation ? esc(C.libelleSituation(ev.situation)) : '<span class="doux">non indiquée</span>'}</dd>
       <dt>Motifs</dt><dd><div class="puces">${libM([...ev.motifs, ...ev.autresMotifs])}</div></dd>
       ${ev.explication ? `<dt>Explication</dt><dd class="texte-libre">${esc(ev.explication)}</dd>` : ''}
       ${ev.complement ? `<dt>Complément</dt><dd class="texte-libre">${esc(ev.complement)}</dd>` : ''}
@@ -901,6 +1022,95 @@ async function retirerEvaluation(id) {
   planifierSynchro();
   annoncer('Évaluation retirée et archivée.');
   aller('#/calendrier');
+}
+
+// ---------------------------------------------------------------------------
+// Lieu et situation : complétion des évaluations passées
+
+function vueContexte() {
+  const toutes = C.trierChrono(etat.evaluations);
+  const sansLieu = toutes.filter((e) => !e.lieu).length;
+  const sansSit = toutes.filter((e) => !e.situation).length;
+  const incompletes = toutes.filter((e) => !e.lieu || !e.situation);
+  const debutDefaut = (incompletes[0] || toutes[0] || { date: aujourdhui() }).date;
+  const finDefaut = (incompletes[incompletes.length - 1] || toutes[toutes.length - 1] || { date: aujourdhui() }).date;
+  const tuile = (v, l) => `<div class="tuile"><div class="tuile-valeur">${v}</div><div class="tuile-libelle">${l}</div></div>`;
+  const lignes = [...toutes].reverse().map((e) => `<tr><td>${esc(C.formatDateCourte(e.date))}</td><td>${e.creneau}</td><td class="nombre">${e.note}</td>
+    <td>${e.lieu ? esc(C.libelleLieu(e.lieu)) : '<span class="doux">—</span>'}</td><td>${e.situation ? esc(C.libelleSituation(e.situation)) : '<span class="doux">—</span>'}</td>
+    <td><a class="bouton-discret" href="#/modifier/${esc(e.id)}">Modifier</a></td></tr>`).join('');
+  contenu.innerHTML = `<section class="colonne-centree">
+    <h1>Lieu et situation des évaluations passées</h1>
+    <p>Indique où tu étais et quelle était ta situation pendant une période : l'application l'ajoute à toutes les évaluations de ces jours-là. Chaque ajout est noté dans l'historique de l'évaluation ; rien n'est appliqué sans ta confirmation.</p>
+    <div class="tuiles" style="margin-bottom:18px">${tuile(toutes.length, 'évaluations')}${tuile(sansLieu, 'sans lieu')}${tuile(sansSit, 'sans situation')}</div>
+    <form class="bloc" id="form-contexte" novalidate>
+      <h2>Compléter une période</h2>
+      <div class="rangee" style="align-items:flex-start">
+        <div class="champ" style="flex:1;min-width:130px"><label for="ctx-debut">Du</label><input type="date" id="ctx-debut" value="${debutDefaut}"></div>
+        <div class="champ" style="flex:1;min-width:130px"><label for="ctx-fin">Au</label><input type="date" id="ctx-fin" value="${finDefaut}"></div>
+      </div>
+      <fieldset class="champ" style="border:0;padding:0;margin:0 0 14px"><legend style="font-weight:600;margin-bottom:6px;padding:0">Créneaux</legend>
+        <div class="segmente"><label><input type="radio" name="ctx-creneaux" value="tous" checked><span>Matin et soir</span></label><label><input type="radio" name="ctx-creneaux" value="matin"><span>Matin</span></label><label><input type="radio" name="ctx-creneaux" value="soir"><span>Soir</span></label></div>
+      </fieldset>
+      ${L.champLieuHTML('ctx-lieu', null)}
+      ${L.champSituationHTML('ctx-situation', null)}
+      <label class="interrupteur" style="margin-top:16px"><input type="checkbox" id="ctx-remplacer"> <span>Remplacer aussi les valeurs déjà indiquées <span class="doux">(sinon, seules les évaluations où l'information manque sont complétées)</span></span></label>
+      <div id="ctx-apercu" class="bandeau en-ligne" style="margin-top:16px" aria-live="polite"></div>
+      <button type="submit" class="bouton" id="ctx-appliquer" disabled>Appliquer</button>
+    </form>
+    <div class="bloc"><h2>Tes évaluations</h2>
+      ${lignes ? `<div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Créneau</th><th class="nombre">Note</th><th>Lieu</th><th>Situation</th><th></th></tr></thead><tbody>${lignes}</tbody></table></div>` : '<p class="doux">Aucune évaluation.</p>'}
+    </div>
+  </section>`;
+  const form = document.getElementById('form-contexte');
+  const apercu = document.getElementById('ctx-apercu');
+  const bouton = document.getElementById('ctx-appliquer');
+  const options = () => {
+    const lieu = champLieu.valeur();
+    const situation = champSituation.valeur();
+    const cr = form.querySelector('[name="ctx-creneaux"]:checked').value;
+    return {
+      debut: document.getElementById('ctx-debut').value, fin: document.getElementById('ctx-fin').value,
+      creneaux: cr === 'tous' ? C.CRENEAUX : [cr],
+      lieu: lieu || undefined, situation: situation || undefined,
+      remplacer: document.getElementById('ctx-remplacer').checked,
+    };
+  };
+  const majApercu = () => {
+    const o = options();
+    let texte = '', n = 0;
+    if (!C.estDateValide(o.debut) || !C.estDateValide(o.fin) || o.debut > o.fin) texte = 'Choisis une date de début antérieure ou égale à la date de fin.';
+    else if (!o.lieu && !o.situation) texte = 'Choisis un lieu, une situation, ou les deux.';
+    else {
+      const cibles = C.cibleCompletion(etat.evaluations, o);
+      n = cibles.length;
+      const quoi = [o.lieu ? `lieu : <strong>${esc(C.libelleLieu(o.lieu, { complet: true }))}</strong>` : '', o.situation ? `situation : <strong>${esc(C.libelleSituation(o.situation))}</strong>` : ''].filter(Boolean).join(' ; ');
+      texte = n ? `${quoi}.<br>Sera ajouté à <strong>${C.pluriel(n, 'évaluation')}</strong>, du ${C.formatDateCourte(cibles[0].date)} au ${C.formatDateCourte(cibles[n - 1].date)}.`
+        : `${quoi}.<br>Aucune évaluation à compléter dans cette période${o.remplacer ? '' : ' (les valeurs déjà indiquées sont conservées)'}.`;
+    }
+    apercu.innerHTML = texte;
+    bouton.disabled = !n;
+    bouton.textContent = n ? `Appliquer à ${C.pluriel(n, 'évaluation')}` : 'Appliquer';
+  };
+  const champLieu = L.brancherChampLieu('ctx-lieu', { connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false, surChangement: () => setTimeout(majApercu, 0) });
+  const champSituation = L.brancherChampSituation(form, 'ctx-situation', { surChangement: majApercu });
+  form.addEventListener('input', majApercu);
+  form.addEventListener('change', majApercu);
+  document.getElementById('ctx-lieu').addEventListener('blur', () => setTimeout(majApercu, 200));
+  majApercu();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const o = options();
+    const cibles = C.cibleCompletion(etat.evaluations, o);
+    if (!cibles.length) return;
+    const ok = await confirmer('Compléter ces évaluations ?', `${C.pluriel(cibles.length, 'évaluation')} du ${C.formatDateCourte(cibles[0].date)} au ${C.formatDateCourte(cibles[cibles.length - 1].date)} ${cibles.length > 1 ? 'seront complétées' : 'sera complétée'}. L'ajout est noté dans l'historique de chaque évaluation ; une copie de sécurité est faite avant.`, 'Appliquer');
+    if (!ok) return;
+    bouton.disabled = true;
+    await prendreInstantane('Avant complétion du lieu et de la situation');
+    const modifiees = C.appliquerCompletion(etat.evaluations, o, maintenant());
+    for (const m of modifiees) await enregistrerEvaluation(m);
+    annoncer(`${C.pluriel(modifiees.length, 'évaluation complétée', 'évaluations complétées')}.`);
+    vueContexte();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1337,13 +1547,15 @@ function texteConfidentialite() {
   const push = !!(p.serveurRappels && p.serveurRappels.actif);
   const ia = !!(p.ia && p.ia.actif && p.ia.consentementUtc);
   const nomIa = ia ? (p.ia.fournisseur === 'mistral' ? 'Mistral AI' : 'Claude (Anthropic)') : '';
+  const lieux = p.rechercheLieux !== false;
   const points = [
     sy ? '<li><strong>Synchronisation active</strong> : une copie de tes données, chiffrée sur cet appareil avec ta phrase de synchronisation, est conservée par ton service en ligne pour ton autre appareil. Le service ne peut pas la lire.</li>' : '',
     push ? '<li><strong>Rappels actifs</strong> : le service connaît seulement l\'adresse technique de notification de cet appareil, sans aucune donnée de santé.</li>' : '',
+    lieux ? '<li><strong>Recherche des lieux</strong> : pendant que tu tapes un lieu, les lettres tapées sont envoyées au service Photon (OpenStreetMap, komoot, Allemagne) pour te proposer des localités, sans aucune autre donnée. Le lieu choisi reste dans tes données.</li>' : '',
     ia ? `<li><strong>Version professionnelle automatique</strong> : le texte de tes commentaires (sans nom, notes ni dates) est envoyé à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementUtc)}.</li>` : '',
     '<li><strong>Envoi du rapport</strong> : seulement quand tu le demandes, depuis ta propre messagerie ou par la feuille de partage (WhatsApp, Mail…). Un e-mail ordinaire n\'est pas chiffré.</li>',
   ].filter(Boolean);
-  return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
+  return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia || lieux ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
 }
 
 function majEtatSynchro() {
@@ -1857,6 +2069,12 @@ async function vueReglages([section] = []) {
       <button class="bouton" type="submit">Enregistrer</button>
     </form>
 
+    <div class="bloc" id="lieux"><h2>Lieu et situation</h2>
+      <p>Chaque évaluation peut indiquer le lieu où tu te trouves et ta situation professionnelle. Le tableau de bord et le rapport PDF montrent ensuite ton humeur selon ces deux informations.</p>
+      <label class="interrupteur"><input type="checkbox" id="recherche-lieux" ${p.rechercheLieux !== false ? 'checked' : ''}> <span>Recherche mondiale des lieux pendant la saisie <span class="doux">(service Photon d'OpenStreetMap, exploité par komoot en Allemagne : seules les lettres tapées sont envoyées, sans ton nom, tes notes ni aucune autre donnée ; désactivée, seuls tes lieux habituels sont proposés)</span></span></label>
+      <p style="margin:14px 0 0"><a class="bouton-secondaire" href="#/contexte">Compléter les évaluations passées</a></p>
+    </div>
+
     <div class="bloc" id="rappels"><h2>Rappels et synchronisation</h2>
       <p>Ton service en ligne gratuit (voir le guide : installation unique d'environ 10 minutes) envoie les rappels de 06:00 et 18:00 et garde une copie <strong>chiffrée</strong> de tes données pour synchroniser tes appareils. Il ne peut pas lire tes évaluations.</p>
       <div class="champ"><label for="serveur-url">Adresse du service</label><input type="url" id="serveur-url" value="${esc(serv.url)}" placeholder="https://barometre-rappels.ton-nom.workers.dev" inputmode="url" autocapitalize="off" spellcheck="false"></div>
@@ -1941,6 +2159,10 @@ async function vueReglages([section] = []) {
     await enregistrerParametres(modifs);
     majBoutonPdf();
     annoncer('Réglages enregistrés.');
+  });
+  document.getElementById('recherche-lieux').addEventListener('change', async (e) => {
+    await enregistrerParametres({ rechercheLieux: e.target.checked });
+    annoncer(e.target.checked ? 'Recherche mondiale des lieux activée.' : 'Recherche mondiale désactivée : seuls tes lieux habituels seront proposés.');
   });
   document.getElementById('rappels-internes').addEventListener('change', async (e) => {
     if (e.target.checked) {
@@ -2136,6 +2358,7 @@ document.addEventListener('click', (e) => {
   const { action, id } = cible.dataset;
   if (action === 'ouvrir-pdf') { e.preventDefault(); ouvrirPdf(); return; }
   if (action === 'aide') { e.preventDefault(); ouvrirAide(); return; }
+  if (action === 'masquer-contexte') { enregistrerParametres({ contexteBandeauMasque: true }).then(() => router()); return; }
   if (action === 'masquer-mise-en-route') { enregistrerParametres({ miseEnRouteMasquee: true }).then(() => router()); return; }
   if (action === 'demarrer-synchro') { demarrerParSynchro(); return; }
   if (action === 'synchro-activer') { activerSynchro(); return; }
