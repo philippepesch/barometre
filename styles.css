@@ -414,3 +414,12 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .moyenne-barre { display: inline-block; vertical-align: middle; height: 8px; border-radius: 4px; background: var(--filet); width: 90px; position: relative; overflow: hidden; margin-left: 8px; }
 .moyenne-barre i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
 .bandeau.en-ligne strong { display: inline; margin: 0; }
+
+/* Pictogrammes météo des niveaux */
+.icone-meteo { flex: none; display: inline-block; vertical-align: middle; }
+.lecture-icone { align-self: center; display: inline-flex; min-width: 0; }
+.lecture-icone:empty { display: none; }
+.humeur-actuelle .lecture-icone { margin-right: 2px; }
+.ligne-meteo { display: inline-flex; align-items: center; gap: 6px; }
+.cal-icone { display: inline-flex; }
+@media (max-width: 560px) { .cal-icone { display: none; } }

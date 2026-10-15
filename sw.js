@@ -1,8 +1,8 @@
 // Service worker : fonctionnement hors ligne et notifications.
 // Changer VERSION à chaque mise à jour des fichiers de l'application.
-const VERSION = 'barometre-humeur-1.7.1';
+const VERSION = 'barometre-humeur-1.8.0';
 const FICHIERS = [
-  './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'pdf-lib.min.js',
+  './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'meteo.js', 'pdf-lib.min.js',
   'manifest.webmanifest', 'icone-32.png', 'icone-192.png', 'icone-512.png', 'icone-maskable-512.png',
   'apple-touch-icon.png', 'icone-badge.png',
 ];

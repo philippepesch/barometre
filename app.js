@@ -4,6 +4,7 @@ import * as DB from './db.js';
 import { FOURNISSEURS } from './ia.js';
 import * as S from './sync.js';
 import * as L from './lieux.js';
+import { iconeMeteo } from './meteo.js';
 
 const etat = { evaluations: [], motifs: [], parametres: null, archives: [] };
 const ui = { periode: null, alerteDossier: false, majDisponible: null, majDemandee: false };
@@ -366,7 +367,7 @@ function vueAccueil() {
   let blocHumeur = '<p class="doux">Aucune évaluation pour l\'instant.</p>';
   if (derniere) {
     const p = derniere.prevision;
-    blocHumeur = `<div class="humeur-actuelle"><span class="lecture-note">${derniere.note}</span><span class="lecture-sur">/10</span><span class="lecture-nom">${esc(derniere.niveau)}</span></div>
+    blocHumeur = `<div class="humeur-actuelle"><span class="lecture-icone">${iconeMeteo(derniere.note, { taille: 56, titre: derniere.niveau })}</span><span class="lecture-note">${derniere.note}</span><span class="lecture-sur">/10</span><span class="lecture-nom">${esc(derniere.niveau)}</span></div>
       ${echelleHTML(derniere.note, p && Number.isInteger(p.note) ? p.note : null)}
       <p class="encre-2">Dernière évaluation : <a href="#/evaluation/${esc(derniere.id)}">${esc(C.majuscule(C.formatDateLongue(derniere.date)))}, ${derniere.creneau}</a>${derniere.validationConnue ? `, validée le ${C.formatDateHeure(derniere.valideLeUtc)}` : ', heure de saisie inconnue (donnée historique)'}.</p>
       ${p && Number.isInteger(p.note) ? `<p class="encre-2">Prévision pour ${esc(creneauRelatif(p.cible))} : <strong>${esc(C.libelleNote(p.note))}</strong> (losange sur l'échelle).</p>` : ''}`;
@@ -698,7 +699,7 @@ function attacherGraphique() {
     const l = prevParCible.get(meilleur);
     const lignes = [`<strong>${esc(C.formatDateMoyenne(s.date))}, ${s.creneau}</strong>`];
     if (s.evaluation) {
-      lignes.push(esc(C.libelleNote(s.evaluation.note)));
+      lignes.push(`<span class="ligne-meteo">${iconeMeteo(s.evaluation.note, { taille: 22 })}${esc(C.libelleNote(s.evaluation.note))}</span>`);
       if (s.evaluation.lieu) lignes.push(esc(C.libelleLieu(s.evaluation.lieu)));
       if (s.evaluation.situation) lignes.push(esc(C.libelleSituation(s.evaluation.situation)));
     } else lignes.push(esc(C.STATUTS[s.statut]));
@@ -809,7 +810,7 @@ function formulaire(cible, ev) {
       <p class="question-numero">Question 1</p>
       <h2 id="q1">Comment te sens-tu actuellement, de 0 à 10 ?</h2>
       <div class="ciel ${s.note === null ? 'vierge' : ''}" id="ciel" style="--ciel: var(--n${s.note ?? 5})">
-        <div class="lecture" aria-live="polite"><span class="lecture-note" id="lecture-note">${s.note ?? '–'}</span><span class="lecture-sur">/10</span><span class="lecture-nom" id="lecture-nom">${s.note === null ? 'à choisir' : esc(C.nomNiveau(s.note))}</span></div>
+        <div class="lecture" aria-live="polite"><span class="lecture-icone" id="icone-note">${s.note === null ? '' : iconeMeteo(s.note, { taille: 64 })}</span><span class="lecture-note" id="lecture-note">${s.note ?? '–'}</span><span class="lecture-sur">/10</span><span class="lecture-nom" id="lecture-nom">${s.note === null ? 'à choisir' : esc(C.nomNiveau(s.note))}</span></div>
         ${curseurHTML('note', s.note, 'Note actuelle de 0 à 10')}
         <p class="consigne" id="consigne-note" ${s.note !== null ? 'hidden' : ''}>Fais glisser ou touche le curseur pour choisir ta note.</p>
         <div class="securite" id="securite-zero" ${s.note === 0 ? '' : 'hidden'}>
@@ -853,7 +854,7 @@ function formulaire(cible, ev) {
       <p class="question-numero">Question 3</p>
       <h2 id="q3">Quelle note prévois-tu pour ${esc(prevLib)}, et pourquoi ?</h2>
       <div class="ciel ${s.prevNote === null ? 'vierge' : ''}" id="ciel-prev" style="--ciel: var(--n${s.prevNote ?? 5})">
-        <div class="lecture" aria-live="polite"><span class="lecture-note" id="lecture-prev">${s.prevNote ?? '–'}</span><span class="lecture-sur">/10</span><span class="lecture-nom" id="lecture-prev-nom">${s.prevNote === null ? 'facultatif' : esc(C.nomNiveau(s.prevNote))}</span></div>
+        <div class="lecture" aria-live="polite"><span class="lecture-icone" id="icone-prev">${s.prevNote === null ? '' : iconeMeteo(s.prevNote, { taille: 64 })}</span><span class="lecture-note" id="lecture-prev">${s.prevNote ?? '–'}</span><span class="lecture-sur">/10</span><span class="lecture-nom" id="lecture-prev-nom">${s.prevNote === null ? 'facultatif' : esc(C.nomNiveau(s.prevNote))}</span></div>
         ${curseurHTML('prevision', s.prevNote, `Note prévue pour ${prevLib}`)}
         <p class="consigne">Facultatif. <button type="button" class="bouton-discret" id="btn-prev-effacer" ${s.prevNote === null ? 'hidden' : ''}>Ne pas faire de prévision</button></p>
       </div>
@@ -872,7 +873,7 @@ function formulaire(cible, ev) {
   const form = document.getElementById('form-eval');
   const champLieu = L.brancherChampLieu('lieu', { initial: lieuInitial, connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
   const champSituation = L.brancherChampSituation(form, 'situation');
-  const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix) => {
+  const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix, idIcone) => {
     const c = document.getElementById(idCurseur);
     const maj = () => {
       const v = Number(c.value);
@@ -881,6 +882,7 @@ function formulaire(cible, ev) {
       document.getElementById(idCiel).style.setProperty('--ciel', `var(--n${v})`);
       document.getElementById(idNote).textContent = v;
       document.getElementById(idNom).textContent = C.nomNiveau(v);
+      if (idIcone) document.getElementById(idIcone).innerHTML = iconeMeteo(v, { taille: 64 });
       c.setAttribute('aria-valuetext', `${v} sur 10, ${C.nomNiveau(v)}`);
       surChoix(v);
     };
@@ -892,11 +894,11 @@ function formulaire(cible, ev) {
     s.note = v;
     document.getElementById('consigne-note').hidden = true;
     document.getElementById('securite-zero').hidden = v !== 0;
-  });
+  }, 'icone-note');
   const curseurPrev = brancherCurseur('prevision', 'ciel-prev', 'lecture-prev', 'lecture-prev-nom', (v) => {
     s.prevNote = v;
     document.getElementById('btn-prev-effacer').hidden = false;
-  });
+  }, 'icone-prev');
   document.getElementById('btn-prev-effacer').addEventListener('click', () => {
     s.prevNote = null;
     curseurPrev.value = 5; curseurPrev.classList.add('vierge');
@@ -904,6 +906,7 @@ function formulaire(cible, ev) {
     document.getElementById('ciel-prev').classList.add('vierge');
     document.getElementById('lecture-prev').textContent = '–';
     document.getElementById('lecture-prev-nom').textContent = 'facultatif';
+    document.getElementById('icone-prev').innerHTML = '';
     document.getElementById('btn-prev-effacer').hidden = true;
   });
 
@@ -1027,7 +1030,7 @@ function vueFiche([id]) {
   contenu.innerHTML = `<section class="colonne-centree fiche">
     <p class="doux" style="margin:0">${esc(C.majuscule(C.formatDateLongue(ev.date)))}</p>
     <h1>Évaluation ${ev.creneau === 'matin' ? 'du matin' : 'du soir'}</h1>
-    <div class="ciel" style="--ciel: var(--n${ev.note})"><div class="lecture"><span class="lecture-note">${ev.note}</span><span class="lecture-sur">/10</span><span class="lecture-nom">${esc(ev.niveau)}</span></div>${echelleHTML(ev.note, null)}</div>
+    <div class="ciel" style="--ciel: var(--n${ev.note})"><div class="lecture"><span class="lecture-icone">${iconeMeteo(ev.note, { taille: 64, titre: ev.niveau })}</span><span class="lecture-note">${ev.note}</span><span class="lecture-sur">/10</span><span class="lecture-nom">${esc(ev.niveau)}</span></div>${echelleHTML(ev.note, null)}</div>
     <div class="bloc"><dl>
       <dt>Statut</dt><dd>${badgeStatut(statut, ev.validationConnue ? '' : '(heure inconnue)')}</dd>
       <dt>Rappel prévu</dt><dd>${C.formatDateHeure(ev.rappelPrevuUtc)}</dd>
@@ -1179,7 +1182,7 @@ function vueCalendrier([mois]) {
   const caseCreneau = (s) => {
     const lettre = s.creneau === 'matin' ? 'M' : 'S';
     const lib = `${C.formatDateLongue(s.date)}, ${s.creneau} : ${s.evaluation ? C.libelleNote(s.evaluation.note) : C.STATUTS[s.statut]}`;
-    const inner = `<span class="lettre">${lettre}</span><span class="val">${s.evaluation ? s.evaluation.note : s.statut === 'omis' ? '×' : s.statut === 'en_attente' ? '•' : ''}</span>`;
+    const inner = `<span class="lettre">${lettre}</span>${s.evaluation ? `<span class="cal-icone">${iconeMeteo(s.evaluation.note, { taille: 18 })}</span>` : ''}<span class="val">${s.evaluation ? s.evaluation.note : s.statut === 'omis' ? '×' : s.statut === 'en_attente' ? '•' : ''}</span>`;
     const classe = `cal-creneau st-${s.statut}${s.evaluation ? ' a-note' : ''}`;
     const style = s.evaluation ? ` style="--ciel: var(--n${s.evaluation.note})"` : '';
     if (s.evaluation) return `<a class="${classe}"${style} href="#/evaluation/${esc(s.evaluation.id)}" aria-label="${esc(lib)}" title="${esc(lib)}">${inner}</a>`;
@@ -1375,7 +1378,7 @@ function vueTextes([idCible]) {
     const r = ev.reformulation;
     const champs = Object.keys(LIBELLES_TEXTES).filter((k) => t[k]);
     return `<article class="bloc carte-texte" id="t-${esc(ev.id)}" data-id="${esc(ev.id)}">
-      <div class="rangee-espacee"><h3 style="margin:0">${esc(C.majuscule(C.formatDateLongue(ev.date)))}, ${ev.creneau} <span class="doux">– ${esc(C.libelleNote(ev.note))}</span></h3>${badgeReformulation(r)}</div>
+      <div class="rangee-espacee"><h3 style="margin:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${iconeMeteo(ev.note, { taille: 26 })}${esc(C.majuscule(C.formatDateLongue(ev.date)))}, ${ev.creneau} <span class="doux">– ${esc(C.libelleNote(ev.note))}</span></h3>${badgeReformulation(r)}</div>
       ${champs.map((k) => `<div class="champ" style="margin-top:14px">
         <label for="t-${esc(ev.id)}-${k}">${LIBELLES_TEXTES[k]} – version pour ${esc(dest)}</label>
         <textarea id="t-${esc(ev.id)}-${k}" data-champ="${k}" rows="${Math.min(10, Math.max(3, Math.ceil((r && r[k] ? r[k] : t[k]).length / 70)))}" maxlength="10000" spellcheck="true" lang="fr" autocapitalize="sentences" placeholder="Pas encore de version corrigée">${esc(r ? r[k] : '')}</textarea>

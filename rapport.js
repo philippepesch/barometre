@@ -1,6 +1,7 @@
 // Génération du rapport PDF (A4) à partir des données réelles de la base locale.
 // Utilise pdf-lib (licence MIT), embarqué localement : aucune donnée ne quitte l'appareil.
 import * as C from './core.js';
+import { formesMeteo } from './meteo.js';
 
 export const COULEURS_NIVEAUX = [
   '#3E4660', '#4A5470', '#57627C', '#687384', '#828A90', '#9A9C94',
@@ -60,6 +61,18 @@ class Redacteur {
   }
 
   couleur(hex) { return hexRgb(this.PDFLib, hex); }
+
+  /** Pictogramme météo d'un niveau, coin haut-gauche (x, yHaut), côté « taille » en points. */
+  meteo(note, x, yHaut, taille) {
+    const k = taille / 48;
+    for (const f of formesMeteo(note)) {
+      this.page.drawSvgPath(f.d, {
+        x, y: A4[1] - yHaut, scale: k,
+        ...(f.fond ? { color: this.couleur(f.fond) } : {}),
+        ...(f.trait ? { borderColor: this.couleur(f.trait), borderWidth: (f.epaisseur || 1) * k, borderLineCap: this.PDFLib.LineCapStyle.Round } : {}),
+      });
+    }
+  }
 
   nouvellePage() {
     this.page = this.doc.addPage(A4);
@@ -189,7 +202,7 @@ class Redacteur {
     const legende = 22;
     const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
     const hBandes = avecBandes ? 52 : 0;
-    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0));
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + 70);
     const gauche = MARGE + 22, droite = MARGE + LARGEUR - 6;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
     const n = grille.length;
@@ -291,6 +304,21 @@ class Redacteur {
         }
         this.y += 16;
       }
+    }
+    // Échelle des niveaux, avec leurs pictogrammes
+    {
+      const pas = (LARGEUR - 22) / 11;
+      const yE = this.y + 18;
+      this.texte('Échelle :', MARGE + 22, this.y + 12, { taille: 8.5, police: 'gras', couleur: ENCRE });
+      grille.length && C.NIVEAUX.forEach((nom, i) => {
+        const xc = MARGE + 22 + i * pas;
+        this.meteo(i, xc + pas / 2 - 8, yE + 4, 16);
+        const lib = `${i}`;
+        this.texte(lib, xc + pas / 2 - this.largeur(lib, 7.5, 'gras') / 2, yE + 29, { taille: 7.5, police: 'gras', couleur: ENCRE });
+        const mots = this.couper(nom, 6.8, 'normal', pas - 2);
+        mots.forEach((m, k) => this.texte(m, xc + pas / 2 - this.largeur(m, 6.8) / 2, yE + 38 + k * 8, { taille: 6.8, couleur: DOUX }));
+      });
+      this.y += 70;
     }
   }
 
@@ -579,7 +607,9 @@ export async function genererRapport(PDFLib, donnees, options) {
       const tete = `${C.majuscule(C.formatDateLongue(e.date))} – ${C.LIBELLE_CRENEAU[e.creneau]}`;
       R.texte(tete, MARGE + 12, R.y + 15, { taille: 10, police: 'gras' });
       const note = C.libelleNote(e.note);
-      R.texte(note, MARGE + LARGEUR - 10 - R.largeur(note, 10, 'gras'), R.y + 15, { taille: 10, police: 'gras' });
+      const xNote = MARGE + LARGEUR - 10 - R.largeur(note, 10, 'gras');
+      R.texte(note, xNote, R.y + 15, { taille: 10, police: 'gras' });
+      R.meteo(e.note, xNote - 21, R.y + 2, 18);
       R.y += 30;
       const meta = [`Rappel prévu : ${C.formatHeure(e.rappelPrevuUtc)}`, `Validation : ${heureValidation(e)}`];
       if (e.saisieRetrospective) meta.push('saisie rétrospective, après la fin du créneau');
