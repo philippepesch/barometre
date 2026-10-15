@@ -69,7 +69,7 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
   if (!cfg.actif || !cfg.consentementUtc || cfg.consentementFournisseur !== cfg.fournisseur) throw new Error('La préparation automatique n\'est pas activée (Réglages).');
   if (cfg.fournisseur === 'anthropic' && !cfg.cle) throw new Error('Clé d\'accès manquante (Réglages).');
   const a = evaluations.filter(C.aDesTextes);
-  const systeme = C.instructionsReformulation({ personne: cfg.personne });
+  const systeme = C.instructionsReformulation();
   const propositions = [];
   const ignorees = [];
   for (let i = 0; i < a.length; i += TAILLE_LOT) {
@@ -79,6 +79,21 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
       ? await appelerServeur(cfg, parametres.serveurRappels, systeme, entrees, f)
       : await appelerAnthropic(cfg, systeme, entrees, f);
     const r = C.lireReponseReformulation(texte, lot);
+    // Contrôle : une proposition encore à la première personne est redemandée une fois, avec un rappel
+    const aCorriger = r.propositions.filter((p) => ['explication', 'complement', 'prevision'].some((k) => C.contientPremierePersonne(p[k])));
+    if (aCorriger.length) {
+      const lot2 = lot.filter((e) => aCorriger.some((p) => p.id === e.id));
+      const rappel = `${systeme}\n\nATTENTION : ta réponse précédente employait la première personne. Réécris ces entrées en parlant uniquement du « patient », sans aucun « je », « me », « mon », « ma », « mes ».`;
+      try {
+        const texte2 = cfg.fournisseur === 'serveur'
+          ? await appelerServeur(cfg, parametres.serveurRappels, rappel, C.entreesReformulation(lot2), f)
+          : await appelerAnthropic(cfg, rappel, C.entreesReformulation(lot2), f);
+        for (const p of C.lireReponseReformulation(texte2, lot2).propositions) {
+          const i = r.propositions.findIndex((x) => x.id === p.id);
+          if (i >= 0) r.propositions[i] = p;
+        }
+      } catch { /* on garde la première proposition : le patient la relit de toute façon */ }
+    }
     propositions.push(...r.propositions);
     ignorees.push(...r.ignorees);
   }

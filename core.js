@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.7.0';
+export const VERSION_APP = '1.7.1';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -640,8 +640,8 @@ export function textesOriginaux(ev) {
   return { explication: ev.explication || '', complement: ev.complement || '', prevision: (ev.prevision && ev.prevision.motif) || '' };
 }
 
-/** Méthode de rédaction des versions pour le thérapeute (2 : complète, motifs intégrés, traduction en français). */
-export const METHODE_VERSION = 2;
+/** Méthode de rédaction des versions pour le thérapeute (3 : complète, motifs intégrés, traduite, toujours « le patient »). */
+export const METHODE_VERSION = 3;
 
 /** Champs qui peuvent recevoir une version : l'explication intègre aussi les motifs cochés. */
 export function champsVersion(ev) {
@@ -724,10 +724,15 @@ export function entreesReformulation(evaluations) {
   });
 }
 
-export function instructionsReformulation({ personne = 'troisieme' } = {}) {
-  const style = personne === 'premiere'
-    ? 'à la première personne (« je »), comme si le patient écrivait lui-même de façon soignée'
-    : 'à la troisième personne (« Le patient… », « Il… »)';
+/** Pronoms et possessifs de la première personne (hors citations) : la version doit parler du « patient ». */
+const PREMIERE_PERSONNE = /(^|[^\p{L}])(?:(?:je|moi|me|mon|ma|mes|nous|notre|nos)(?=[^\p{L}]|$)|[jm]['’](?=\p{L}))/iu;
+export function contientPremierePersonne(texte) {
+  const sansCitations = String(texte || '').replace(/«[^»]*»|"[^"]*"|“[^”]*”/g, ' ');
+  return PREMIERE_PERSONNE.test(sansCitations);
+}
+
+export function instructionsReformulation() {
+  const style = 'toujours à la troisième personne, en désignant l\'auteur par « le patient » (puis « il » ou « le patient »)';
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois des entrées du journal d'humeur d'un patient, destinées à son psychothérapeute. Le patient relira et validera chaque texte.
 
 Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, précise et naturelle, d'un registre professionnel, neutre et factuel :
@@ -736,6 +741,7 @@ Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, p
 - « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a ; chaîne vide si les deux sont vides.
 
 Règles impératives :
+- Écris exclusivement à la troisième personne : jamais « je », « j' », « me », « moi », « mon », « ma », « mes », « nous ». Même si le patient écrit « je », transpose systématiquement (« je suis fatigué » devient « Le patient se dit fatigué » ou « Le patient est fatigué »). Chaque texte commence par « Le patient » ou « Il ».
 - Si un texte est rédigé en allemand, en anglais, en luxembourgeois ou dans un mélange de langues, traduis-le fidèlement en français.
 - Corrige toutes les fautes d'orthographe, de grammaire, de conjugaison, d'accord et de ponctuation.
 - Ne résume pas et ne raccourcis pas : conserve l'intégralité du contenu, chaque fait, émotion, nuance, cause évoquée, projet, difficulté, chiffre, nom propre et lieu. Tu peux réorganiser les phrases pour la clarté, mais rien ne doit être omis.

@@ -1366,8 +1366,7 @@ function vueTextes([idCible]) {
   const cible = idCible ? tous.find((e) => e.id === idCible) : null;
   const filtre = ui.filtreTextes || 'a-faire';
   const affichees = cible ? [cible] : (filtre === 'toutes' ? tous : tous.filter((e) => !e.reformulation || e.reformulation.statut !== 'validee'));
-  const personne = ui.personneTextes || (etat.parametres.ia && etat.parametres.ia.personne) || 'troisieme';
-  const demande = aTraiter.length ? C.demandeReformulation(aTraiter, { personne }) : '';
+  const demande = aTraiter.length ? C.demandeReformulation(aTraiter) : '';
   const auto = iaPrete();
   const dest = (etat.parametres.destinataire || '').trim() || 'le thérapeute';
   const carte = (ev) => {
@@ -1380,6 +1379,7 @@ function vueTextes([idCible]) {
       ${champs.map((k) => `<div class="champ" style="margin-top:14px">
         <label for="t-${esc(ev.id)}-${k}">${LIBELLES_TEXTES[k]} – version pour ${esc(dest)}</label>
         <textarea id="t-${esc(ev.id)}-${k}" data-champ="${k}" rows="${Math.min(10, Math.max(3, Math.ceil((r && r[k] ? r[k] : t[k]).length / 70)))}" maxlength="10000" spellcheck="true" lang="fr" autocapitalize="sentences" placeholder="Pas encore de version corrigée">${esc(r ? r[k] : '')}</textarea>
+        ${r && C.contientPremierePersonne(r[k]) ? '<p class="bandeau" style="margin:6px 0">Ce texte emploie encore la première personne (« je », « mon »…) : touche <strong>Nouvelle proposition</strong> ou corrige-le pour parler du « patient ».</p>' : ''}
         <small class="doux" data-compte="${k}">${r && r[k] ? `${nbMots(r[k])} mots, ` : ''}original : ${nbMots(t[k])} mots</small>
         <details class="repli" ${cible ? 'open' : ''}><summary>Ton texte original</summary><p class="texte-libre encre-2">${esc(t[k])}</p></details>
       </div>`).join('')}
@@ -1412,7 +1412,7 @@ function vueTextes([idCible]) {
       <div class="bloc">
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
-          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec l'ancienne méthode (texte raccourci, sans les motifs). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
+          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (texte raccourci, motifs absents ou texte à la première personne). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
         ${aTraiter.length ? `<details class="repli" style="margin-top:14px"><summary>Ou par copier-coller dans un assistant</summary>
@@ -1421,10 +1421,6 @@ function vueTextes([idCible]) {
             <li>Colle-la dans l'assistant de ton choix, par exemple Claude, et envoie-la.</li>
             <li>Colle sa réponse complète ci-dessous, puis importe-la.</li>
           </ol>
-          <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Style souhaité</legend><div class="segmente">
-            <label><input type="radio" name="personne" value="troisieme" ${personne === 'troisieme' ? 'checked' : ''}><span>« Le patient… »</span></label>
-            <label><input type="radio" name="personne" value="premiere" ${personne === 'premiere' ? 'checked' : ''}><span>« Je… »</span></label>
-          </div></fieldset>
           <div class="bandeau"><strong>Confidentialité</strong>En collant la demande dans un assistant en ligne, tu lui transmets ces textes. Elle ne contient ni ton nom, ni tes notes, ni les dates, mais les textes restent des données personnelles de santé.</div>
           <div class="rangee"><button type="button" class="bouton-secondaire" id="btn-copier-demande">Copier la demande</button></div>
           <details class="repli" style="margin-top:8px"><summary>Voir la demande</summary><textarea id="demande-texte" rows="10" readonly>${esc(demande)}</textarea></details>
@@ -1445,7 +1441,6 @@ function vueTextes([idCible]) {
   }
 
   const rafraichir = () => vueTextes(cible ? [cible.id] : []);
-  contenu.querySelectorAll('[name="personne"]').forEach((r) => r.addEventListener('change', () => { ui.personneTextes = r.value; vueTextes([]); }));
   contenu.querySelectorAll('[name="filtre-textes"]').forEach((r) => r.addEventListener('change', () => { ui.filtreTextes = r.value; vueTextes([]); }));
   const bPreparer = document.getElementById('btn-preparer-tout');
   if (bPreparer) bPreparer.addEventListener('click', async () => {
@@ -2328,10 +2323,7 @@ function blocIA() {
       <small class="doux">À créer dans la Claude Console (console.anthropic.com, rubrique API Keys), après avoir ajouté un petit crédit. Elle reste sur cet appareil et n'est jamais incluse dans les sauvegardes. Fixe une limite de dépense mensuelle dans la Console.</small></div>
     <details class="repli" data-ia-anthropic ${ia.fournisseur === 'anthropic' ? '' : 'hidden'}><summary>Réglage avancé</summary>
       <div class="champ"><label for="ia-modele">Modèle</label><input type="text" id="ia-modele" value="${esc(!ia.modele || ia.modele === 'claude-sonnet-5-5' ? 'claude-opus-5-5' : ia.modele)}" spellcheck="false" autocapitalize="off"></div></details>
-    <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Style de la version</legend><div class="segmente">
-      <label><input type="radio" name="ia-personne" value="troisieme" ${ia.personne !== 'premiere' ? 'checked' : ''}><span>« Le patient… »</span></label>
-      <label><input type="radio" name="ia-personne" value="premiere" ${ia.personne === 'premiere' ? 'checked' : ''}><span>« Je… »</span></label>
-    </div></fieldset>
+    <p class="encre-2">Style : toujours à la troisième personne (« Le patient… »), en français soigné.</p>
     <label class="interrupteur"><input type="checkbox" id="ia-auto" ${ia.automatique ? 'checked' : ''}> <span>Préparer automatiquement après chaque évaluation</span></label>
     <div class="bandeau" style="margin-top:14px"><strong>Ton accord</strong>
       <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires et mes motifs cochés soient envoyés au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mon adresse, ni mon matricule, ni mes notes, ni les dates, ni mes lieux ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label></div>
@@ -2366,7 +2358,7 @@ function brancherIA() {
       fournisseur,
       cle: document.getElementById('ia-cle').value.trim(),
       modele: document.getElementById('ia-modele').value.trim() || 'claude-opus-5-5',
-      personne: form.querySelector('[name="ia-personne"]:checked').value,
+      personne: 'troisieme',
       automatique: document.getElementById('ia-auto').checked,
     };
     if (!accord) {
