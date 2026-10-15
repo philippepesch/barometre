@@ -160,7 +160,7 @@ main:focus, main:focus-visible { outline: none; }
 label { font-weight: 600; }
 .champ { display: grid; gap: 6px; margin-bottom: 14px; }
 .champ small { font-weight: 400; }
-input[type="text"], input[type="password"], input[type="email"], input[type="tel"], input[type="url"], input[type="date"], input[type="datetime-local"], input[type="search"], select, textarea {
+input[type="text"], input[type="password"], input[type="email"], input[type="tel"], input[type="url"], input[type="date"], input[type="time"], input[type="datetime-local"], input[type="search"], select, textarea {
   width: 100%; font: inherit; color: var(--encre); background: var(--surface); border: 1px solid var(--filet-fort);
   border-radius: var(--rayon-petit); padding: 10px 12px; min-height: 44px;
 }

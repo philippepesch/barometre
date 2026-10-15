@@ -331,7 +331,10 @@ export async function genererRapport(PDFLib, donnees, options) {
   const nbReformules = [...textes.values()].filter((t) => t.reformule).length;
   const modifsReelles = (e) => (e.historique || []).filter((h) => h.changements.some((c) => c.champ !== 'reformulation') && !estCompletion(h));
   const parametres = donnees.parametres || {};
-  const destinataire = (parametres.destinataire || '').trim();
+  const patient = parametres.patient || {};
+  const therapeute = parametres.therapeute || {};
+  const destinataire = (parametres.destinataire || '').trim() || (therapeute.nom || '').trim();
+  const listeSeances = C.seancesDepuisParametres(parametres);
   const grille = C.grilleCreneaux(debut, fin, toutes, instant, parametres.debutSuiviUtc);
   const comptes = C.comptesCreneaux(grille);
   const stats = C.statistiques(evals);
@@ -365,16 +368,43 @@ export async function genererRapport(PDFLib, donnees, options) {
     italique: await doc.embedFont(PDFLib.StandardFonts.HelveticaOblique),
   };
   const periodeCourte = `Du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)}`;
-  const R = new Redacteur(PDFLib, doc, polices, { gauche: `Baromètre de l'humeur – ${titreDoc}`, droite: periodeCourte });
+  const R = new Redacteur(PDFLib, doc, polices, { gauche: `Baromètre de l'humeur – ${patient.nom ? `${patient.nom} – ` : ''}${titreDoc}`, droite: periodeCourte });
 
   // 1. Titre et période
   R.texte('Baromètre de l\'humeur', MARGE, R.y + 10, { taille: 10, police: 'gras', couleur: LAITON });
   R.y += 22;
   R.paragraphe(titreDoc, { taille: 22, police: 'gras', interligne: 1.2, apres: 4 });
+  // Identités : patient (à gauche) et destinataire (à droite)
+  const blocPatient = [patient.nom, ...String(patient.adresse || '').split('\n'), options.inclureCNS && patient.cns ? `Matricule CNS : ${C.formatCNS(patient.cns)}` : ''].filter(Boolean);
+  const blocTherapeute = [therapeute.nom, therapeute.titre, ...String(therapeute.adresse || '').split('\n')].filter(Boolean);
+  if (blocPatient.length || blocTherapeute.length) {
+    const col = (LARGEUR - 24) / 2;
+    const lignesDe = (bloc) => bloc.flatMap((l) => R.couper(l, 9.5, 'normal', col));
+    const gauche = lignesDe(blocPatient), droite = lignesDe(blocTherapeute);
+    const n = Math.max(gauche.length, droite.length);
+    R.y += 4;
+    if (gauche.length) R.texte('Patient', MARGE, R.y + 8, { taille: 8, police: 'gras', couleur: LAITON });
+    if (droite.length) R.texte('Destinataire', MARGE + col + 24, R.y + 8, { taille: 8, police: 'gras', couleur: LAITON });
+    R.y += 14;
+    for (let i = 0; i < n; i++) {
+      if (gauche[i]) R.texte(gauche[i], MARGE, R.y + 9.5, { taille: 9.5, police: i === 0 ? 'gras' : 'normal' });
+      if (droite[i]) R.texte(droite[i], MARGE + col + 24, R.y + 9.5, { taille: 9.5, police: i === 0 ? 'gras' : 'normal' });
+      R.y += 13.5;
+    }
+    R.y += 10;
+  }
   R.paragraphe(`Période analysée : du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`, { taille: 11, apres: 2 });
+  {
+    const t = instant;
+    const precedente = C.seancesPassees(listeSeances, t)[0];
+    const prochaine = C.prochaineSeance(listeSeances, t);
+    const lignes = [precedente ? `Séance précédente : ${C.libelleSeance(precedente)}` : '', prochaine ? `Prochaine séance : ${C.libelleSeance(prochaine)}` : ''].filter(Boolean);
+    for (const l of lignes) R.paragraphe(l, { taille: 9.5, apres: 1 });
+    if (lignes.length) R.y += 1;
+  }
   R.paragraphe(`Rapport ${type === 'complet' ? 'complet' : 'synthétique'} établi le ${C.formatDateHeure(instant)} (heure de Luxembourg).`, { taille: 9, couleur: DOUX, apres: 10 });
   const avert = 'Toutes les données proviennent exclusivement des saisies du patient dans l\'application. Les chiffres sont descriptifs : ils ne constituent ni un diagnostic ni une évaluation clinique, et ne remplacent pas l\'échange avec le thérapeute.'
-    + (nbReformules ? ` ${nbReformules === 1 ? 'Un commentaire est présenté' : `${nbReformules} commentaires sont présentés`} dans une version corrigée et raccourcie, relue et validée par le patient${modeTextes === 'les-deux' ? ', suivie du texte original' : ' ; les textes originaux sont conservés dans l\'application'}.` : '');
+    + (nbReformules ? ` ${nbReformules === 1 ? 'Un commentaire est présenté' : `${nbReformules} commentaires sont présentés`} dans une version rédigée à partir de ses saisies (orthographe corrigée, traduite en français si nécessaire), relue et validée par le patient${modeTextes === 'les-deux' ? ', suivie du texte original' : ' ; les textes originaux sont conservés dans l\'application'}.` : '');
   const lignesAvert = R.couper(avert, 8.8, 'italique', LARGEUR - 20);
   const hAvert = lignesAvert.length * 8.8 * 1.4 + 14;
   R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - hAvert, width: LARGEUR, height: hAvert, color: R.couleur(FOND) });
@@ -559,7 +589,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       const libMotifs = (l) => l.map((m) => `${m.libelle} (${C.LIBELLE_POLARITE[m.polarite].toLowerCase()})`).join(', ');
       R.paragraphe(`Motifs cochés : ${e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun'}`, { taille: 9.5, apres: 3 });
       const tx = textes.get(e.id);
-      if (tx.explication) { R.paragraphe('Explication :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.explication, { taille: 9.5, apres: 3 }); }
+      if (tx.explication) { R.paragraphe(tx.reformule ? 'Description :' : 'Explication :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.explication, { taille: 9.5, apres: 3 }); }
       if (tx.complement) { R.paragraphe('Complément :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.complement, { taille: 9.5, apres: 3 }); }
       if (e.prevision) {
         const p = e.prevision;
@@ -567,7 +597,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         R.paragraphe(t, { taille: 9.5, apres: 3 });
       }
       if (tx.reformule) {
-        R.paragraphe(`Texte corrigé et raccourci, relu et validé par le patient${tx.valideeLeUtc ? ` le ${C.formatDateHeure(tx.valideeLeUtc)}` : ''}.`, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
+        R.paragraphe(`${tx.methode >= 2 ? 'Texte rédigé à partir des saisies du patient (motifs et commentaires, orthographe corrigée, traduit en français si nécessaire)' : 'Texte corrigé et raccourci'}, relu et validé par le patient${tx.valideeLeUtc ? ` le ${C.formatDateHeure(tx.valideeLeUtc)}` : ''}.`, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
         if (tx.original) {
           const o = tx.original;
           R.paragraphe('Texte original du patient :', { taille: 8.5, police: 'gras', couleur: DOUX, apres: 0 });

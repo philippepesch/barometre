@@ -7,7 +7,11 @@ export const FOURNISSEURS = {
   serveur: { nom: 'Mistral AI', pays: 'France', mode: 'par ton serveur européen' },
 };
 
-const TAILLE_LOT = 8;
+const TAILLE_LOT = 4;
+/** Modèle par défaut : le plus soigné pour la rédaction (l'ancien défaut est remplacé automatiquement). */
+export const MODELE_DEFAUT = 'claude-opus-5-5';
+const ANCIENS_DEFAUTS = ['claude-sonnet-5-5'];
+export const modeleEffectif = (cfg) => (!cfg.modele || ANCIENS_DEFAUTS.includes(cfg.modele) ? MODELE_DEFAUT : cfg.modele);
 
 async function lireErreur(rep) {
   try { const d = await rep.json(); return (d && d.error && (d.error.message || d.error.type)) || d.erreur || ''; } catch { return ''; }
@@ -33,8 +37,8 @@ async function appelerAnthropic(cfg, systeme, entrees, f) {
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: cfg.modele || 'claude-sonnet-5-5',
-      max_tokens: 8000,
+      model: modeleEffectif(cfg),
+      max_tokens: 16000,
       system: systeme,
       messages: [{ role: 'user', content: `Entrées :\n${JSON.stringify(entrees, null, 2)}` }],
     }),
@@ -81,7 +85,7 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
   return { propositions, ignorees };
 }
 
-/** Cherche un modèle Claude « Sonnet » disponible si le modèle configuré n'existe pas (ou plus). */
+/** Cherche un modèle Claude disponible (Opus de préférence, sinon Sonnet) si le modèle configuré n'existe pas (ou plus). */
 export async function trouverModele(cle, { fetch: f = globalThis.fetch.bind(globalThis) } = {}) {
   const rep = await f('https://api.anthropic.com/v1/models?limit=100', {
     headers: { 'x-api-key': cle, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -89,5 +93,5 @@ export async function trouverModele(cle, { fetch: f = globalThis.fetch.bind(glob
   if (!rep.ok) throw new Error(messageErreur(rep.status, await lireErreur(rep), 'anthropic'));
   const d = await rep.json();
   const ids = (d.data || []).map((m) => m.id);
-  return ids.find((id) => /sonnet/i.test(id)) || ids[0] || null;
+  return ids.find((id) => /opus/i.test(id)) || ids.find((id) => /sonnet/i.test(id)) || ids[0] || null;
 }

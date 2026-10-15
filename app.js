@@ -28,6 +28,40 @@ async function chargerEtat() {
 }
 
 const parCreneau = () => C.indexerParCreneau(etat.evaluations);
+const seances = () => C.seancesDepuisParametres(etat.parametres || {});
+
+/** Enregistre la liste des séances (et l'ancien champ « prochaineSeance » pour les appareils pas encore à jour). */
+async function enregistrerSeances(liste) {
+  const triees = C.trierSeances(liste);
+  const proch = C.prochaineSeance(triees, maintenant());
+  await enregistrerParametres({ seances: triees, prochaineSeance: proch ? proch.date : '' });
+}
+
+/** Fenêtre d'ajout ou de modification d'une séance. Retourne la séance enregistrée, ou null. */
+async function dialogueSeance(existante = null) {
+  const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
+  for (;;) {
+    const r = await dialogue(`<h2 id="dialogue-titre">${existante ? 'Modifier la séance' : `Prochaine séance avec ${esc(dest)}`}</h2>
+      <div class="champ"><label for="s-date">Date</label><input type="date" id="s-date" name="date" value="${esc(existante ? existante.date : '')}" required autofocus></div>
+      <div class="rangee" style="align-items:flex-start">
+        <div class="champ" style="flex:1;min-width:120px"><label for="s-debut">De</label><input type="time" id="s-debut" name="debut" value="${esc(existante ? existante.debut : '')}" step="300"></div>
+        <div class="champ" style="flex:1;min-width:120px"><label for="s-fin">À</label><input type="time" id="s-fin" name="fin" value="${esc(existante ? existante.fin : '')}" step="300"></div>
+      </div>
+      <p class="doux">Heure de Luxembourg. Les heures sont facultatives.</p>
+      <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+    if (r.valeur !== 'oui') return null;
+    try {
+      const sea = C.normaliserSeance({ id: existante ? existante.id : undefined, date: r.donnees.get('date'), debut: r.donnees.get('debut'), fin: r.donnees.get('fin') });
+      const liste = seances().filter((x) => x.id !== sea.id);
+      await enregistrerSeances([...liste, sea]);
+      annoncer(`Séance enregistrée : ${C.libelleSeance(sea)}.`);
+      return sea;
+    } catch (e) {
+      annoncer(e.message);
+      existante = { id: existante ? existante.id : undefined, date: r.donnees.get('date') || '', debut: r.donnees.get('debut') || '', fin: r.donnees.get('fin') || '' };
+    }
+  }
+}
 const motifParId = () => new Map(etat.motifs.map((m) => [m.id, m]));
 const motifsActifs = () => etat.motifs.filter((m) => m.actif && !m.regroupeDans)
   .sort((a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr'));
@@ -348,7 +382,7 @@ function vueAccueil() {
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
-        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}</section>
+        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}</section>
         ${manquants.length ? `<section class="bloc"><h2>Créneaux sans réponse</h2>
           <p class="doux">Tu peux encore les renseigner : la saisie sera signalée comme rétrospective.</p>
           <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('omis')}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
@@ -388,15 +422,29 @@ function bandeauContexte() {
 
 function bandeauSeance() {
   const p = etat.parametres;
-  const seance = p.prochaineSeance;
-  if (!seance || !C.estDateValide(seance)) return '';
+  const dest = (p.destinataire || '').trim() || 'ton thérapeute';
+  const liste = seances();
+  const proch = C.prochaineSeance(liste, maintenant());
+  if (!proch) {
+    const passee = C.seancesPassees(liste, maintenant())[0];
+    if (!passee) return '';
+    return `<div class="bandeau rangee-espacee"><span>Ta séance du ${esc(C.libelleSeance(passee, { court: true }))} est passée. Indique la prochaine séance avec ${esc(dest)}.</span><button type="button" class="bouton-secondaire" data-action="ajouter-seance">Ajouter la prochaine séance</button></div>`;
+  }
+  const seance = proch.date;
   const auj = aujourdhui();
   const veille = C.ajouterJours(seance, -1);
   if (auj !== seance && auj !== veille) return '';
   const dr = p.dernierRapport;
   if (dr && dr.genereLeUtc && C.dateLocale(Date.parse(dr.genereLeUtc)) >= veille) return '';
-  const dest = (p.destinataire || '').trim() || 'ton thérapeute';
-  return `<div class="bandeau bandeau-laiton rangee-espacee"><span>Séance avec ${esc(dest)} ${auj === seance ? 'aujourd\'hui' : 'demain'} : prépare ton rapport.</span><button type="button" class="bouton" data-action="ouvrir-pdf">Générer le rapport</button></div>`;
+  const heure = proch.debut ? ` à ${proch.debut.replace(':', ' h ').replace(/ h 00$/, ' h').replace(/^0/, '')}` : '';
+  return `<div class="bandeau bandeau-laiton rangee-espacee"><span>Séance avec ${esc(dest)} ${auj === seance ? 'aujourd\'hui' : 'demain'}${heure} : prépare ton rapport.</span><button type="button" class="bouton" data-action="ouvrir-pdf">Générer le rapport</button></div>`;
+}
+
+function ligneProchaineSeance() {
+  const proch = C.prochaineSeance(seances(), maintenant());
+  if (!proch) return '';
+  const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
+  return `<p class="etat-creneau">Prochaine séance avec ${esc(dest)} : <strong>${esc(C.libelleSeance(proch))}</strong>. <button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(proch.id)}">Modifier</button></p>`;
 }
 
 function besoinRappelSauvegarde() {
@@ -771,6 +819,14 @@ function formulaire(cible, ev) {
       </div>
     </section>
 
+    <section class="question" aria-labelledby="q4">
+      <p class="question-numero">Contexte</p>
+      <h2 id="q4">Où es-tu, et quelle est ta situation ?</h2>
+      <p class="doux">${repris ? 'Repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif. Cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
+      ${L.champLieuHTML('lieu', lieuInitial)}
+      ${L.champSituationHTML('situation', situationInitiale)}
+    </section>
+
     <section class="question" aria-labelledby="q2">
       <p class="question-numero">Question 2</p>
       <h2 id="q2">Pourquoi te sens-tu ainsi ?</h2>
@@ -804,14 +860,6 @@ function formulaire(cible, ev) {
       <div class="champ"><label for="prevision-motif">Pourquoi ? <small class="doux">(facultatif)</small></label>
         <textarea id="prevision-motif" spellcheck="true" lang="fr" autocapitalize="sentences" rows="2" maxlength="10000">${esc(ev && ev.prevision ? ev.prevision.motif : '')}</textarea></div>
       <details class="repli" ${selectionPrev.size ? 'open' : ''}><summary>Associer des motifs à cette prévision</summary>${pucesMotifs('motif-prev', selectionPrev, extraPrev)}</details>
-    </section>
-
-    <section class="question" aria-labelledby="q4">
-      <p class="question-numero">Contexte</p>
-      <h2 id="q4">Où es-tu, et quelle est ta situation ?</h2>
-      <p class="doux">${repris ? 'Repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif. Cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
-      ${L.champLieuHTML('lieu', lieuInitial)}
-      ${L.champSituationHTML('situation', situationInitiale)}
     </section>
 
     ${ev ? `<div class="champ"><label for="raison">Raison de la modification <small class="doux">(facultatif, conservée dans l'historique)</small></label><input type="text" id="raison" maxlength="300"></div>` : ''}
@@ -1265,16 +1313,30 @@ async function actionMotif(action, id) {
 }
 
 // ---------------------------------------------------------------------------
-// Textes pour le rapport : version corrigée, raccourcie et professionnelle
+// Textes pour le rapport : version corrigée, complète, traduite en français et professionnelle
 
 const aRelire = () => etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut !== 'validee' && C.aDesTextes(e)).length;
 const nbMots = (t) => (String(t || '').trim() ? String(t).trim().split(/\s+/).length : 0);
-const LIBELLES_TEXTES = { explication: 'Explication', complement: 'Complément', prevision: 'Motif de la prévision' };
+const LIBELLES_TEXTES = { explication: 'Description (motifs et explication)', complement: 'Complément', prevision: 'Motif de la prévision' };
+
+/** Ce que le patient a saisi pour chaque champ (les motifs cochés font partie de la description). */
+function originalPourChamp(ev, k) {
+  const t = C.textesOriginaux(ev);
+  if (k === 'explication') {
+    const m = [...(ev.motifs || []), ...(ev.autresMotifs || [])].map((x) => `${x.libelle} (${C.LIBELLE_POLARITE[x.polarite].toLowerCase()})`);
+    return [m.length ? `Motifs cochés : ${m.join(', ')}.` : '', t.explication].filter(Boolean).join('\n');
+  }
+  if (k === 'prevision') {
+    const m = ((ev.prevision && ev.prevision.motifs) || []).map((x) => x.libelle);
+    return [t.prevision, m.length ? `Motifs associés : ${m.join(', ')}.` : ''].filter(Boolean).join('\n');
+  }
+  return t[k];
+}
 
 function blocVersionRapport(ev) {
   const r = ev.reformulation;
   if (!r) return `<div class="bloc"><h2>Version pour le rapport</h2><p class="doux">Aucune version corrigée : le rapport reprendra le texte original.</p><a class="bouton-secondaire" href="#/textes/${esc(ev.id)}">Préparer une version corrigée</a></div>`;
-  const t = C.textesOriginaux(ev);
+  const t = C.champsVersion(ev);
   return `<div class="bloc"><h2>Version pour le rapport</h2>
     <p>${badgeReformulation(r)}${r.valideeLeUtc ? ` <span class="doux">le ${C.formatDateHeure(r.valideeLeUtc)}</span>` : ''}</p>
     <dl>${Object.keys(LIBELLES_TEXTES).filter((k) => t[k] && r[k]).map((k) => `<dt>${LIBELLES_TEXTES[k]}</dt><dd class="texte-libre">${esc(r[k])}</dd>`).join('')}</dl>
@@ -1299,6 +1361,7 @@ function vueTextes([idCible]) {
   const tous = C.trierChrono(etat.evaluations.filter(C.aDesTextes)).reverse();
   const aTraiter = tous.filter(C.aReformuler);
   const proposees = tous.filter((e) => e.reformulation && e.reformulation.statut === 'proposee');
+  const anciennes = tous.filter((e) => C.versionAncienneMethode(e) && !C.aReformuler(e));
   const validees = tous.filter((e) => e.reformulation && e.reformulation.statut === 'validee');
   const cible = idCible ? tous.find((e) => e.id === idCible) : null;
   const filtre = ui.filtreTextes || 'a-faire';
@@ -1308,7 +1371,8 @@ function vueTextes([idCible]) {
   const auto = iaPrete();
   const dest = (etat.parametres.destinataire || '').trim() || 'le thérapeute';
   const carte = (ev) => {
-    const t = C.textesOriginaux(ev);
+    const permis = C.champsVersion(ev);
+    const t = Object.fromEntries(Object.keys(LIBELLES_TEXTES).map((k) => [k, permis[k] ? originalPourChamp(ev, k) : '']));
     const r = ev.reformulation;
     const champs = Object.keys(LIBELLES_TEXTES).filter((k) => t[k]);
     return `<article class="bloc carte-texte" id="t-${esc(ev.id)}" data-id="${esc(ev.id)}">
@@ -1332,14 +1396,14 @@ function vueTextes([idCible]) {
   if (cible) {
     contenu.innerHTML = `<section class="colonne-centree">
       <h1>Version pour ${esc(dest)}</h1>
-      <p class="encre-2">${cible.reformulation && cible.reformulation.statut === 'proposee' ? 'Voici une proposition corrigée, raccourcie et rédigée dans un style professionnel. Vérifie qu\'elle respecte ce que tu voulais dire, modifie-la si besoin, puis valide-la : seule une version validée figure dans le rapport.' : 'Relis ou rédige la version qui figurera dans le rapport. Ton texte original reste intact.'}</p>
+      <p class="encre-2">${cible.reformulation && cible.reformulation.statut === 'proposee' ? 'Voici une proposition complète, corrigée, traduite en français si besoin et rédigée dans un français soigné, qui intègre tes motifs cochés. Vérifie qu\'elle respecte ce que tu voulais dire, modifie-la si besoin, puis valide-la : seule une version validée figure dans le rapport.' : 'Relis ou rédige la version qui figurera dans le rapport. Ton texte original reste intact.'}</p>
       ${carte(cible)}
       <p><a class="bouton-discret" href="#/textes">Tous les textes pour le rapport</a></p>
     </section>`;
   } else {
     contenu.innerHTML = `<section class="colonne-centree">
       <h1>Textes pour le rapport</h1>
-      <p class="encre-2">Le rapport PDF présente tes commentaires avec l'orthographe corrigée, des phrases plus courtes et un style professionnel, dans une version que tu as relue et validée. Ton texte original n'est jamais modifié ; sans version validée, c'est lui qui figure dans le rapport.</p>
+      <p class="encre-2">Le rapport PDF présente tes commentaires et tes motifs dans une version complète, corrigée, traduite en français si besoin et rédigée dans un français soigné, que tu as relue et validée. Ton texte original n'est jamais modifié ; sans version validée, c'est lui qui figure dans le rapport.</p>
       <div class="tuiles" style="margin-bottom:18px">
         <div class="tuile"><div class="tuile-valeur">${aTraiter.length}</div><div class="tuile-libelle">sans version corrigée</div></div>
         <div class="tuile"><div class="tuile-valeur">${proposees.length}</div><div class="tuile-libelle">propositions à valider</div></div>
@@ -1348,6 +1412,7 @@ function vueTextes([idCible]) {
       <div class="bloc">
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
+          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec l'ancienne méthode (texte raccourci, sans les motifs). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
         ${aTraiter.length ? `<details class="repli" style="margin-top:14px"><summary>Ou par copier-coller dans un assistant</summary>
@@ -1389,6 +1454,14 @@ function vueTextes([idCible]) {
     if (n !== null) annoncer(`${C.pluriel(n, 'proposition préparée', 'propositions préparées')} : relis-les et valide-les.`);
     vueTextes([]);
   });
+  const bRefaire = document.getElementById('btn-refaire-anciennes');
+  if (bRefaire) bRefaire.addEventListener('click', async () => {
+    bRefaire.disabled = true; bRefaire.textContent = 'Rédaction en cours…';
+    const n = await preparerVersions(anciennes, { silencieux: false, force: true });
+    if (n !== null) annoncer(`${C.pluriel(n, 'nouvelle proposition', 'nouvelles propositions')} : relis-les et valide-les.`);
+    ui.filtreTextes = 'a-faire';
+    vueTextes([]);
+  });
   const bCopier = document.getElementById('btn-copier-demande');
   if (bCopier) bCopier.addEventListener('click', async () => annoncer(await copierTexte(demande) ? 'Demande copiée : colle-la dans l\'assistant.' : 'Copie automatique impossible : sélectionne le texte de la demande et copie-le.'));
   const bImporter = document.getElementById('btn-importer-reponse');
@@ -1417,15 +1490,14 @@ function vueTextes([idCible]) {
     const id = carteEl.dataset.id;
     carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => ta.addEventListener('input', () => {
       const ev = etat.evaluations.find((e) => e.id === id);
-      carteEl.querySelector(`[data-compte="${ta.dataset.champ}"]`).textContent = `${nbMots(ta.value)} mots, original : ${nbMots(C.textesOriginaux(ev)[ta.dataset.champ])} mots`;
+      carteEl.querySelector(`[data-compte="${ta.dataset.champ}"]`).textContent = `${nbMots(ta.value)} mots, original : ${nbMots(originalPourChamp(ev, ta.dataset.champ))} mots`;
     }));
     carteEl.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-texte]');
       if (!b) return;
       const ev = etat.evaluations.find((x) => x.id === id);
       if (b.dataset.texte === 'partir') {
-        const t = C.textesOriginaux(ev);
-        carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => { ta.value = t[ta.dataset.champ]; ta.dispatchEvent(new Event('input')); });
+        carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => { ta.value = originalPourChamp(ev, ta.dataset.champ); ta.dispatchEvent(new Event('input')); });
         carteEl.querySelector('textarea[data-champ]').focus();
         return;
       }
@@ -1469,7 +1541,7 @@ async function enregistrerPropositions(propositions, raison) {
   for (const p of propositions) {
     const ev = etat.evaluations.find((e) => e.id === p.id);
     if (!ev) continue;
-    const maj = C.definirReformulation(ev, { ...p, statut: 'proposee', source: 'assistant' }, raison, instant);
+    const maj = C.definirReformulation(ev, { ...p, statut: 'proposee', source: 'assistant', methode: C.METHODE_VERSION }, raison, instant);
     if (maj) await enregistrerEvaluation(maj);
   }
 }
@@ -1500,7 +1572,7 @@ async function preparerApresSaisie(ev) {
   if (!navigator.onLine) { annoncer('Hors connexion : la version pour le thérapeute sera préparée automatiquement plus tard.'); return false; }
   const dest = (etat.parametres.destinataire || '').trim() || 'le thérapeute';
   dlg.innerHTML = `<div class="dialogue-corps"><h2 id="dialogue-titre">Version pour ${esc(dest)}</h2>
-    <p>Correction et reformulation de ton commentaire en cours…</p>
+    <p>Rédaction de la version pour le thérapeute en cours…</p>
     <p class="doux">Tu pourras la relire et la valider dans un instant. Ton texte original reste intact.</p>
     <div class="dialogue-actions"><button type="button" class="bouton-discret" id="btn-sans-attendre">Continuer sans attendre</button></div></div>`;
   let attend = true;
@@ -1705,7 +1777,7 @@ const estMobile = estIOS || /Android/i.test(navigator.userAgent);
 function envoyerRapport(blob, nom, debut, fin) {
   const p = etat.parametres;
   const email = C.estEmailValide(p.emailTherapeute) ? p.emailTherapeute.trim() : '';
-  const { objet, corps } = C.messageEnvoiRapport({ destinataire: p.destinataire, debut, fin, prochaineSeance: p.prochaineSeance, aujourdhui: aujourdhui() });
+  const { objet, corps } = C.messageEnvoiRapport({ destinataire: p.destinataire, debut, fin, seance: C.prochaineSeance(seances(), maintenant()), aujourdhui: aujourdhui(), patient: (p.patient && p.patient.nom) || '' });
   const aide = document.getElementById('pdf-envoi-aide');
   const dire = (html) => { if (aide) { aide.hidden = false; aide.innerHTML = html; } };
   const copie = email && navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(email).then(() => true, () => false) : Promise.resolve(false);
@@ -1736,31 +1808,43 @@ async function ouvrirPdf() {
   const fin = aujourdhui();
   const dates = [C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)), ...etat.evaluations.map((e) => e.date)].sort();
   const debutTout = dates[0] < fin ? dates[0] : fin;
-  const debut30 = C.ajouterJours(fin, -29) > debutTout ? C.ajouterJours(fin, -29) : debutTout;
   const dest = (etat.parametres.destinataire || '').trim();
-  // Par défaut : tout ce qui s'est passé depuis le dernier rapport (ou depuis le début du suivi)
   const dr = etat.parametres.dernierRapport;
-  let debutDefaut = debutTout;
-  if (dr && dr.fin) { debutDefaut = C.ajouterJours(dr.fin, 1); if (debutDefaut > fin) debutDefaut = dr.debut || debutTout; }
+  // Périodes proposées : depuis la dernière séance, entre deux séances, 7 jours, dernier mois, depuis le début
+  const options = C.periodesRapport(seances(), { instant: maintenant(), aujourdhui: fin, debutSuivi: debutTout });
+  if (dr && dr.fin) {
+    let d = C.ajouterJours(dr.fin, 1);
+    if (d > fin) d = dr.debut || debutTout;
+    options.splice(options.findIndex((o) => !o.entre && o.cle !== 'depuis-seance'), 0, { cle: 'depuis', libelle: 'Depuis le dernier rapport', debut: d, fin });
+  }
+  const simples = options.filter((o) => !o.entre);
+  const entre = options.filter((o) => o.entre);
+  // Par défaut : depuis la dernière séance, sinon depuis le dernier rapport, sinon tout le suivi
+  const defaut = options.find((o) => o.cle === 'depuis-seance') || options.find((o) => o.cle === 'depuis') || options.find((o) => o.cle === 'tout');
+  const debutDefaut = defaut.debut;
+  const patient = etat.parametres.patient || {};
   dlg.innerHTML = `<form class="dialogue-corps" id="form-pdf" novalidate>
     <h2 id="dialogue-titre">Générer le rapport PDF${dest ? ` pour ${esc(dest)}` : ''}</h2>
     <p class="encre-2">Le rapport est calculé sur cet appareil à partir de tes données enregistrées, uniquement quand tu le demandes.${dr ? ` Dernier rapport : du ${C.formatDateCourte(dr.debut)} au ${C.formatDateCourte(dr.fin)}, généré le ${C.formatDateHeure(dr.genereLeUtc)}.` : ''}</p>
-    <div class="rangee" style="margin-bottom:12px">
-      ${dr ? '<button type="button" class="bouton-discret" data-periode="depuis">Depuis le dernier rapport</button>' : ''}
-      <button type="button" class="bouton-discret" data-periode="7">7 derniers jours</button>
-      <button type="button" class="bouton-discret" data-periode="30">30 derniers jours</button>
-      <button type="button" class="bouton-discret" data-periode="tout">Tout le suivi</button>
-    </div>
+    <fieldset class="champ" style="border:0;padding:0;margin:0 0 10px;min-width:0"><legend style="font-weight:600;margin-bottom:8px;padding:0">Période</legend>
+      <div class="puces">
+        ${simples.map((o) => `<label class="puce" data-periode="${esc(o.cle)}"><input type="radio" name="pdf-periode" value="${esc(o.cle)}" ${o === defaut ? 'checked' : ''}><span>${esc(o.libelle)}</span></label>`).join('')}
+        ${entre.length ? '<label class="puce" data-periode="entre"><input type="radio" name="pdf-periode" value="entre"><span>Entre deux séances</span></label>' : ''}
+        <label class="puce" data-periode="perso"><input type="radio" name="pdf-periode" value="perso"><span>Personnalisée</span></label>
+      </div>
+      ${entre.length ? `<div class="champ" id="pdf-entre-zone" style="margin-top:10px" hidden><label for="pdf-entre">Séances</label><select id="pdf-entre">${entre.map((o) => `<option value="${esc(o.cle)}">${esc(o.libelle)}</option>`).join('')}</select></div>` : ''}
+    </fieldset>
     <div class="rangee" style="align-items:flex-start">
       <div class="champ" style="flex:1;min-width:150px"><label for="pdf-debut">Date de début</label><input type="date" id="pdf-debut" value="${debutDefaut}" max="${fin}" required></div>
       <div class="champ" style="flex:1;min-width:150px"><label for="pdf-fin">Date de fin</label><input type="date" id="pdf-fin" value="${fin}" required></div>
     </div>
+    ${patient.cns ? `<label class="interrupteur" style="margin-bottom:14px"><input type="checkbox" id="pdf-cns" ${etat.parametres.rapportAvecCNS !== false ? 'checked' : ''}> <span>Inclure mon matricule CNS <span class="doux">(${esc(C.formatCNS(patient.cns))})</span></span></label>` : ''}
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Type de rapport</legend>
       <label class="interrupteur"><input type="radio" name="type" value="complet" checked> <span>Complet <span class="doux">– tous les commentaires en annexe</span></span></label>
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="type" value="synthetique"> <span>Synthétique <span class="doux">– commentaires abrégés, tableaux résumés</span></span></label>
     </fieldset>
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Commentaires dans le rapport</legend>
-      <label class="interrupteur"><input type="radio" name="textes" value="reformule" checked> <span>Version corrigée et raccourcie <span class="doux">– si tu l'as validée, sinon texte original</span></span></label>
+      <label class="interrupteur"><input type="radio" name="textes" value="reformule" checked> <span>Version rédigée pour le thérapeute <span class="doux">– si tu l'as validée, sinon texte original</span></span></label>
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="textes" value="les-deux"> <span>Version corrigée, suivie du texte original</span></label>
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="textes" value="original"> <span>Texte original uniquement</span></label>
     </fieldset>
@@ -1773,10 +1857,17 @@ async function ouvrirPdf() {
   const form = document.getElementById('form-pdf');
   form.querySelector('[data-fermer]').addEventListener('click', () => dlg.close());
   form.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
-  form.querySelectorAll('[data-periode]').forEach((b) => b.addEventListener('click', () => {
-    document.getElementById('pdf-fin').value = fin;
-    document.getElementById('pdf-debut').value = b.dataset.periode === 'tout' ? debutTout : b.dataset.periode === 'depuis' ? debutDefaut : C.ajouterJours(fin, -(Number(b.dataset.periode) - 1));
+  const zoneEntre = document.getElementById('pdf-entre-zone');
+  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; };
+  form.querySelectorAll('[name="pdf-periode"]').forEach((r) => r.addEventListener('change', () => {
+    if (zoneEntre) zoneEntre.hidden = r.value !== 'entre';
+    if (r.value === 'perso') { document.getElementById('pdf-debut').focus(); return; }
+    appliquer(r.value === 'entre' ? entre.find((o) => o.cle === document.getElementById('pdf-entre').value) : options.find((o) => o.cle === r.value));
   }));
+  if (zoneEntre) document.getElementById('pdf-entre').addEventListener('change', (ev) => appliquer(entre.find((o) => o.cle === ev.target.value)));
+  for (const id of ['pdf-debut', 'pdf-fin']) document.getElementById(id).addEventListener('input', () => { const perso = form.querySelector('[name="pdf-periode"][value="perso"]'); if (perso) perso.checked = true; if (zoneEntre) zoneEntre.hidden = true; });
+  const caseCns = document.getElementById('pdf-cns');
+  if (caseCns) caseCns.addEventListener('change', () => enregistrerParametres({ rapportAvecCNS: caseCns.checked }));
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('pdf-message');
@@ -1794,22 +1885,27 @@ async function ouvrirPdf() {
     try {
       const PDFLib = await chargerPdfLib();
       const { genererRapport, nomFichierRapport } = await import('./rapport.js');
-      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: etat.parametres }, { debut, fin: finChoisie, type, textes, instant: maintenant() });
+      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked) });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
       const nbPages = (new TextDecoder('latin1').decode(octets).match(/\/Type\s*\/Page[^s]/g) || []).length;
       res.hidden = false;
       await enregistrerParametres({ dernierRapport: { debut, fin: finChoisie, type, genereLeUtc: new Date(maintenant()).toISOString() } });
-      const seance = etat.parametres.prochaineSeance || '';
+      const proch = C.prochaineSeance(seances(), maintenant());
       const email = C.estEmailValide(etat.parametres.emailTherapeute) ? etat.parametres.emailTherapeute.trim() : '';
       const boutonsEnvoi = email ? `<button type="button" class="bouton" data-envoi="email">${dest ? `Envoyer à ${esc(dest)}` : 'Envoyer par e-mail'}</button>` : '';
       res.innerHTML = `<div class="bandeau bandeau-laiton"><strong>Rapport prêt</strong>${esc(nom)}${nbPages ? `, ${nbPages} page${nbPages > 1 ? 's' : ''}` : ''}.<div class="rangee" style="margin-top:10px">${boutonsEnvoi}<button type="button" class="${email ? 'bouton-secondaire' : 'bouton'}" id="pdf-telecharger">Télécharger</button>${navigator.canShare ? '<button type="button" class="bouton-secondaire" id="pdf-partager">Partager ou enregistrer</button>' : ''}<button type="button" class="bouton-discret" id="pdf-ouvrir">Ouvrir</button></div><div id="pdf-envoi-aide" class="encre-2 aide-envoi" style="margin-top:10px" hidden></div></div>
-        <div class="champ" style="margin-top:12px"><label for="pdf-seance">Date de ta prochaine séance <small class="doux">(facultatif : un rappel s'affichera la veille et le jour même)</small></label>
-          <div class="rangee"><input type="date" id="pdf-seance" value="${seance > fin ? seance : ''}" min="${C.ajouterJours(fin, 1)}" style="flex:1;min-width:150px"><button type="button" class="bouton-secondaire" id="pdf-seance-ok">Enregistrer</button></div></div>`;
-      document.getElementById('pdf-seance-ok').addEventListener('click', async () => {
-        const v = document.getElementById('pdf-seance').value;
-        await enregistrerParametres({ prochaineSeance: C.estDateValide(v) ? v : '' });
-        annoncer(C.estDateValide(v) ? `Prochaine séance notée : ${C.formatDateLongue(v)}.` : 'Date de séance effacée.');
+        ${proch ? `<p class="encre-2" style="margin-top:12px">Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong> <span class="doux">(modifiable dans Réglages, Séances)</span>.</p>`
+    : `<div class="champ" style="margin-top:12px"><label for="pdf-seance">Prochaine séance <small class="doux">(facultatif : un rappel s'affichera la veille et le jour même)</small></label>
+          <div class="rangee"><input type="date" id="pdf-seance" min="${C.ajouterJours(fin, 0)}" style="flex:2;min-width:140px" aria-label="Date"><input type="time" id="pdf-seance-debut" step="300" style="flex:1;min-width:100px" aria-label="De"><input type="time" id="pdf-seance-fin" step="300" style="flex:1;min-width:100px" aria-label="À"><button type="button" class="bouton-secondaire" id="pdf-seance-ok">Enregistrer</button></div></div>`}`;
+      const bSeance = document.getElementById('pdf-seance-ok');
+      if (bSeance) bSeance.addEventListener('click', async () => {
+        try {
+          const sea = C.normaliserSeance({ date: document.getElementById('pdf-seance').value, debut: document.getElementById('pdf-seance-debut').value, fin: document.getElementById('pdf-seance-fin').value });
+          await enregistrerSeances([...seances(), sea]);
+          annoncer(`Prochaine séance notée : ${C.libelleSeance(sea)}.`);
+          bSeance.closest('.champ').outerHTML = `<p class="encre-2" style="margin-top:12px">Prochaine séance : <strong>${esc(C.libelleSeance(sea))}</strong>.</p>`;
+        } catch (err) { annoncer(err.message); }
       });
       document.getElementById('pdf-telecharger').addEventListener('click', () => telecharger(blob, nom));
       res.querySelectorAll('[data-envoi]').forEach((b) => b.addEventListener('click', () => envoyerRapport(blob, nom, debut, finChoisie)));
@@ -2062,12 +2158,38 @@ async function vueReglages([section] = []) {
     <form class="bloc" id="form-general"><h2>Rapport et suivi</h2>
       <div class="champ"><label for="destinataire">Destinataire du rapport PDF</label><input type="text" id="destinataire" value="${esc(p.destinataire)}" maxlength="80" placeholder="Nom de ton thérapeute"><small class="doux">Apparaît sur le bouton et en titre du rapport.</small></div>
       <div class="champ"><label for="email-therapeute">Adresse e-mail de ton thérapeute <small class="doux">(facultatif : pour envoyer le rapport en un geste)</small></label><input type="email" id="email-therapeute" value="${esc(p.emailTherapeute || '')}" maxlength="120" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="email" placeholder="adresse@exemple.lu"></div>
-      <div class="champ"><label for="prochaine-seance">Prochaine séance <small class="doux">(facultatif : rappel la veille et le jour même pour générer le rapport)</small></label><input type="date" id="prochaine-seance" value="${esc(p.prochaineSeance || '')}"></div>
       <div class="champ"><label for="debut-suivi">Début du suivi dans l'application</label><input type="datetime-local" id="debut-suivi" value="${debutLocal}"><small class="doux">Heure de Luxembourg. Les créneaux terminés avant cette date sont « non renseignés » et ne comptent pas comme omis.</small></div>
       <div class="champ"><label for="contact-nom">Personne de confiance ou thérapeute <small class="doux">(proposée dans l'écran d'aide)</small></label>
         <div class="rangee"><input type="text" id="contact-nom" value="${esc(p.contactConfiance.nom)}" placeholder="Nom" style="flex:1;min-width:140px"><input type="tel" id="contact-tel" value="${esc(p.contactConfiance.telephone)}" placeholder="Téléphone" style="flex:1;min-width:140px"></div></div>
       <button class="bouton" type="submit">Enregistrer</button>
     </form>
+
+    <form class="bloc" id="form-identites" novalidate><h2>Identités pour le rapport</h2>
+      <p class="encre-2">Elles figurent en tête du rapport PDF. Elles restent sur tes appareils (et dans la copie de synchronisation chiffrée) et ne sont jamais envoyées au service de rédaction.</p>
+      <h3>Toi</h3>
+      <div class="champ"><label for="patient-nom">Nom complet</label><input type="text" id="patient-nom" value="${esc((p.patient || {}).nom || '')}" maxlength="120" autocomplete="name"></div>
+      <div class="champ"><label for="patient-adresse">Adresse</label><textarea id="patient-adresse" rows="3" maxlength="300" autocomplete="street-address">${esc((p.patient || {}).adresse || '')}</textarea></div>
+      <div class="champ"><label for="patient-cns">Matricule CNS <small class="doux">(13 chiffres ; tu choisis à chaque rapport de l'inclure ou non)</small></label><input type="text" id="patient-cns" value="${esc(C.formatCNS((p.patient || {}).cns || ''))}" maxlength="20" inputmode="numeric" autocomplete="off" spellcheck="false"></div>
+      <h3 style="margin-top:18px">Ton thérapeute</h3>
+      <div class="champ"><label for="therapeute-nom">Nom complet</label><input type="text" id="therapeute-nom" value="${esc((p.therapeute || {}).nom || '')}" maxlength="120" autocomplete="off"></div>
+      <div class="champ"><label for="therapeute-titre">Titre professionnel</label><input type="text" id="therapeute-titre" value="${esc((p.therapeute || {}).titre || '')}" maxlength="120" placeholder="Par exemple : Psychothérapeute" autocomplete="off"></div>
+      <div class="champ"><label for="therapeute-adresse">Adresse professionnelle</label><textarea id="therapeute-adresse" rows="3" maxlength="300" autocomplete="off">${esc((p.therapeute || {}).adresse || '')}</textarea></div>
+      <button class="bouton" type="submit">Enregistrer</button>
+    </form>
+
+    <div class="bloc" id="seances"><h2>Séances</h2>
+      ${(() => {
+    const liste = seances();
+    const proch = C.prochaineSeance(liste, maintenant());
+    const futures = liste.filter((x) => C.bornesSeance(x).fin > maintenant());
+    const passees = C.seancesPassees(liste, maintenant());
+    const ligne = (x) => `<li><span>${esc(C.libelleSeance(x))}</span><span><button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(x.id)}">Modifier</button><button type="button" class="bouton-discret" data-action="supprimer-seance" data-id="${esc(x.id)}">Supprimer</button></span></li>`;
+    return `<p>${proch ? `Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong>.` : 'Aucune séance à venir.'} La veille et le jour même, l'accueil te rappelle de préparer le rapport ; une fois la séance passée, il te propose d'indiquer la suivante.</p>
+      <p><button type="button" class="bouton" data-action="ajouter-seance">Ajouter une séance</button></p>
+      ${futures.length ? `<h3>À venir</h3><ul class="liste-simple">${futures.map(ligne).join('')}</ul>` : ''}
+      ${passees.length ? `<h3 style="margin-top:14px">Passées</h3><ul class="liste-simple">${passees.slice(0, 12).map(ligne).join('')}</ul>` : ''}`;
+  })()}
+    </div>
 
     <div class="bloc" id="lieux"><h2>Lieu et situation</h2>
       <p>Chaque évaluation peut indiquer le lieu où tu te trouves et ta situation professionnelle. Le tableau de bord et le rapport PDF montrent ensuite ton humeur selon ces deux informations.</p>
@@ -2152,13 +2274,22 @@ async function vueReglages([section] = []) {
       destinataire: document.getElementById('destinataire').value.trim(),
       emailTherapeute: document.getElementById('email-therapeute').value.trim(),
       contactConfiance: { nom: document.getElementById('contact-nom').value.trim(), telephone: document.getElementById('contact-tel').value.trim() },
-      prochaineSeance: C.estDateValide(document.getElementById('prochaine-seance').value) ? document.getElementById('prochaine-seance').value : '',
     };
     if (modifs.emailTherapeute && !C.estEmailValide(modifs.emailTherapeute)) { annoncer('Adresse e-mail incomplète : vérifie-la (forme nom@domaine.lu).'); document.getElementById('email-therapeute').focus(); return; }
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(debutVal)) modifs.debutSuiviUtc = new Date(C.localVersUtc(debutVal.slice(0, 10), debutVal.slice(11))).toISOString();
     await enregistrerParametres(modifs);
     majBoutonPdf();
     annoncer('Réglages enregistrés.');
+  });
+  document.getElementById('form-identites').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const patient = C.normaliserPatient({ nom: document.getElementById('patient-nom').value, adresse: document.getElementById('patient-adresse').value, cns: document.getElementById('patient-cns').value });
+      const therapeute = C.normaliserTherapeute({ nom: document.getElementById('therapeute-nom').value, titre: document.getElementById('therapeute-titre').value, adresse: document.getElementById('therapeute-adresse').value });
+      await enregistrerParametres({ patient, therapeute });
+      document.getElementById('patient-cns').value = C.formatCNS(patient.cns);
+      annoncer('Identités enregistrées.');
+    } catch (err) { annoncer(err.message); document.getElementById('patient-cns').focus(); }
   });
   document.getElementById('recherche-lieux').addEventListener('change', async (e) => {
     await enregistrerParametres({ rechercheLieux: e.target.checked });
@@ -2184,7 +2315,7 @@ function blocIA() {
   const pret = iaPrete();
   const serv = etat.parametres.serveurRappels || {};
   return `<form class="bloc" id="ia" autocomplete="off"><h2>Version professionnelle automatique</h2>
-    <p>Après chaque évaluation commentée, ton texte est envoyé à un service d'intelligence artificielle qui prépare une version corrigée, raccourcie et rédigée dans un style professionnel pour ${esc((etat.parametres.destinataire || '').trim() || 'ton thérapeute')}. L'écran de validation s'ouvre aussitôt : tu valides ou tu modifies. Ton texte original reste intact.</p>
+    <p>Après chaque évaluation commentée, ton texte et tes motifs cochés sont envoyés à un service d'intelligence artificielle qui prépare une version complète, corrigée, traduite en français si tu as écrit en allemand ou en anglais, et rédigée dans un français soigné et professionnel pour ${esc((etat.parametres.destinataire || '').trim() || 'ton thérapeute')}. L'écran de validation s'ouvre aussitôt : tu valides ou tu modifies. Ton texte original reste intact.</p>
     <p class="encre-2">État : <strong>${pret ? `activée avec ${esc(FOURNISSEURS[ia.fournisseur].nom)} depuis le ${C.formatDateHeure(ia.consentementUtc)}` : 'désactivée'}</strong>.</p>
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Service utilisé</legend>
       <label class="interrupteur"><input type="radio" name="ia-fournisseur" value="anthropic" ${ia.fournisseur === 'anthropic' ? 'checked' : ''}> <span>Claude, d'Anthropic <span class="doux">– recommandé : le plus simple, directement depuis l'iPhone ou le PC ; quelques centimes par évaluation</span></span></label>
@@ -2196,14 +2327,14 @@ function blocIA() {
       <input type="password" id="ia-cle" value="${esc(ia.cle)}" placeholder="sk-ant-…" spellcheck="false" autocapitalize="off">
       <small class="doux">À créer dans la Claude Console (console.anthropic.com, rubrique API Keys), après avoir ajouté un petit crédit. Elle reste sur cet appareil et n'est jamais incluse dans les sauvegardes. Fixe une limite de dépense mensuelle dans la Console.</small></div>
     <details class="repli" data-ia-anthropic ${ia.fournisseur === 'anthropic' ? '' : 'hidden'}><summary>Réglage avancé</summary>
-      <div class="champ"><label for="ia-modele">Modèle</label><input type="text" id="ia-modele" value="${esc(ia.modele)}" spellcheck="false" autocapitalize="off"></div></details>
+      <div class="champ"><label for="ia-modele">Modèle</label><input type="text" id="ia-modele" value="${esc(!ia.modele || ia.modele === 'claude-sonnet-5-5' ? 'claude-opus-5-5' : ia.modele)}" spellcheck="false" autocapitalize="off"></div></details>
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Style de la version</legend><div class="segmente">
       <label><input type="radio" name="ia-personne" value="troisieme" ${ia.personne !== 'premiere' ? 'checked' : ''}><span>« Le patient… »</span></label>
       <label><input type="radio" name="ia-personne" value="premiere" ${ia.personne === 'premiere' ? 'checked' : ''}><span>« Je… »</span></label>
     </div></fieldset>
     <label class="interrupteur"><input type="checkbox" id="ia-auto" ${ia.automatique ? 'checked' : ''}> <span>Préparer automatiquement après chaque évaluation</span></label>
     <div class="bandeau" style="margin-top:14px"><strong>Ton accord</strong>
-      <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires soit envoyé au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mes notes, ni les dates ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label></div>
+      <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires et mes motifs cochés soient envoyés au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mon adresse, ni mon matricule, ni mes notes, ni les dates, ni mes lieux ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label></div>
     <div class="rangee">
       <button type="submit" class="bouton">Enregistrer et tester</button>
       ${pret ? '<button type="button" class="bouton-discret" id="ia-desactiver">Désactiver et retirer mon accord</button>' : ''}
@@ -2234,7 +2365,7 @@ function brancherIA() {
       ...C.parametresParDefaut().ia, ...ancien,
       fournisseur,
       cle: document.getElementById('ia-cle').value.trim(),
-      modele: document.getElementById('ia-modele').value.trim() || 'claude-sonnet-5-5',
+      modele: document.getElementById('ia-modele').value.trim() || 'claude-opus-5-5',
       personne: form.querySelector('[name="ia-personne"]:checked').value,
       automatique: document.getElementById('ia-auto').checked,
     };
@@ -2249,7 +2380,7 @@ function brancherIA() {
     await enregistrerParametres({ ia: nouveau });
     res.textContent = 'Test en cours avec une phrase d\'exemple…';
     const { reformuler, trouverModele } = await import('./ia.js');
-    const exemple = C.creerEvaluation({ date: aujourdhui(), creneau: 'matin', note: 5, explication: 'je me sent un peu fatiguer aujourdhui mais sa va quand meme, jai bien dormi' });
+    const exemple = C.creerEvaluation({ date: aujourdhui(), creneau: 'matin', note: 5, explication: 'je me sent un peu fatiguer aujourdhui, aber ich habe gut geschlafen' });
     try {
       let r;
       try { r = await reformuler(etat.parametres, [exemple]); } catch (err) {
@@ -2261,7 +2392,7 @@ function brancherIA() {
         r = await reformuler(etat.parametres, [exemple]);
       }
       const p = r.propositions[0];
-      res.innerHTML = p ? `Test réussi. Exemple : « je me sent un peu fatiguer aujourdhui mais sa va quand meme, jai bien dormi » devient « ${esc(p.explication)} ». La préparation automatique est active.` : 'Le service a répondu, mais sans proposition exploitable. Réessaie.';
+      res.innerHTML = p ? `Test réussi. Exemple : « je me sent un peu fatiguer aujourdhui, aber ich habe gut geschlafen » devient « ${esc(p.explication)} ». La préparation automatique est active.` : 'Le service a répondu, mais sans proposition exploitable. Réessaie.';
       annoncer('Préparation automatique activée.');
       rattrapageVersions().catch(() => {});
     } catch (err) {
@@ -2358,6 +2489,19 @@ document.addEventListener('click', (e) => {
   const { action, id } = cible.dataset;
   if (action === 'ouvrir-pdf') { e.preventDefault(); ouvrirPdf(); return; }
   if (action === 'aide') { e.preventDefault(); ouvrirAide(); return; }
+  if (action === 'ajouter-seance') { dialogueSeance().then((x) => { if (x) router(); }); return; }
+  if (action === 'modifier-seance' || action === 'supprimer-seance') {
+    const sea = seances().find((x) => x.id === id);
+    if (!sea) return;
+    if (action === 'modifier-seance') { dialogueSeance(sea).then((x) => { if (x) router(); }); return; }
+    confirmer('Supprimer cette séance ?', esc(C.libelleSeance(sea)), 'Supprimer').then(async (ok) => {
+      if (!ok) return;
+      await enregistrerSeances(seances().filter((x) => x.id !== id));
+      annoncer('Séance supprimée.');
+      router();
+    });
+    return;
+  }
   if (action === 'masquer-contexte') { enregistrerParametres({ contexteBandeauMasque: true }).then(() => router()); return; }
   if (action === 'masquer-mise-en-route') { enregistrerParametres({ miseEnRouteMasquee: true }).then(() => router()); return; }
   if (action === 'demarrer-synchro') { demarrerParSynchro(); return; }

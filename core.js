@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.6.0';
+export const VERSION_APP = '1.7.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -610,9 +610,10 @@ export function modifierEvaluation(ev, saisie, raison, instant = Date.now()) {
   }
   if (!changements.length) return null;
   // Si un texte original change, la version reformulée doit être revue avant d'être réutilisée.
-  const textesChanges = changements.some((c) => c.champ === 'explication' || c.champ === 'complement'
-    || (c.champ === 'prevision' && ((c.avant && c.avant.motif) || '') !== ((c.apres && c.apres.motif) || '')));
-  if (textesChanges && ev.reformulation && ev.reformulation.statut === 'validee') {
+  const motifsPrev = (p) => JSON.stringify(((p && p.motifs) || []).map((m) => m.libelle));
+  const textesChanges = changements.some((c) => c.champ === 'explication' || c.champ === 'complement' || c.champ === 'motifs' || c.champ === 'autresMotifs'
+    || (c.champ === 'prevision' && (((c.avant && c.avant.motif) || '') !== ((c.apres && c.apres.motif) || '') || motifsPrev(c.avant) !== motifsPrev(c.apres))));
+  if (textesChanges && ev.reformulation && ev.reformulation.statut !== 'a_revoir') {
     nouveau.reformulation = { ...ev.reformulation, statut: 'a_revoir', valideeLeUtc: null };
     changements.push({ champ: 'reformulation', avant: ev.reformulation, apres: nouveau.reformulation });
   }
@@ -630,7 +631,7 @@ export function modifierEvaluation(ev, saisie, raison, instant = Date.now()) {
 }
 
 // ---------------------------------------------------------------------------
-// Version reformulée pour le rapport (orthographe corrigée, phrases raccourcies, style professionnel).
+// Version rédigée pour le rapport (orthographe corrigée, motifs intégrés, traduite en français, style professionnel).
 // Le texte original n'est jamais modifié ; seule une version VALIDÉE par le patient figure dans le PDF.
 
 export const STATUTS_REFORMULATION = { proposee: 'Proposition à relire', validee: 'Validée', a_revoir: 'À revoir (texte original modifié)' };
@@ -639,9 +640,27 @@ export function textesOriginaux(ev) {
   return { explication: ev.explication || '', complement: ev.complement || '', prevision: (ev.prevision && ev.prevision.motif) || '' };
 }
 
-export function aDesTextes(ev) {
+/** Méthode de rédaction des versions pour le thérapeute (2 : complète, motifs intégrés, traduction en français). */
+export const METHODE_VERSION = 2;
+
+/** Champs qui peuvent recevoir une version : l'explication intègre aussi les motifs cochés. */
+export function champsVersion(ev) {
   const t = textesOriginaux(ev);
-  return !!(t.explication || t.complement || t.prevision);
+  const motifs = (ev.motifs || []).length + (ev.autresMotifs || []).length;
+  const motifsPrev = (ev.prevision && (ev.prevision.motifs || []).length) || 0;
+  return { explication: !!(t.explication || motifs), complement: !!t.complement, prevision: !!(t.prevision || motifsPrev) };
+}
+
+/** Évaluation qui a de la matière pour une version rédigée (commentaires ou motifs cochés). */
+export function aDesTextes(ev) {
+  const c = champsVersion(ev);
+  return c.explication || c.complement || c.prevision;
+}
+
+/** Version préparée avec une méthode antérieure (à refaire pour bénéficier de la nouvelle rédaction). */
+export function versionAncienneMethode(ev) {
+  const r = ev.reformulation;
+  return !!(r && (r.methode || 1) < METHODE_VERSION);
 }
 
 /**
@@ -654,14 +673,15 @@ export function definirReformulation(ev, reformulation, raison, instant = Date.n
   if (reformulation) {
     const champs = { explication: nettoyerTexte(reformulation.explication), complement: nettoyerTexte(reformulation.complement), prevision: nettoyerTexte(reformulation.prevision) };
     for (const v of Object.values(champs)) if (v.length > LIMITE_TEXTE) throw new Error('Texte reformulé trop long.');
-    const orig = textesOriginaux(ev);
-    for (const k of Object.keys(champs)) if (champs[k] && !orig[k]) throw new Error('Une version reformulée ne peut pas ajouter un texte absent de l\'original.');
+    const permis = champsVersion(ev);
+    for (const k of Object.keys(champs)) if (champs[k] && !permis[k]) throw new Error('Une version reformulée ne peut pas ajouter un texte absent de l\'original.');
     if (!champs.explication && !champs.complement && !champs.prevision) throw new Error('La version reformulée est vide.');
     const statut = reformulation.statut === 'validee' ? 'validee' : 'proposee';
     apres = {
       ...champs,
       statut,
       source: reformulation.source === 'manuelle' ? 'manuelle' : 'assistant',
+      methode: reformulation.methode || (ev.reformulation && ev.reformulation.methode) || (reformulation.source === 'manuelle' ? METHODE_VERSION : 1),
       creeLeUtc: (ev.reformulation && ev.reformulation.creeLeUtc) || le,
       valideeLeUtc: statut === 'validee' ? le : null,
     };
@@ -684,14 +704,23 @@ export function textesPourRapport(ev, mode = 'reformule') {
   const r = ev.reformulation;
   const valide = !!(r && r.statut === 'validee');
   if (mode === 'original' || !valide) return { ...orig, reformule: false, original: null, valideeLeUtc: null };
-  const choix = { explication: orig.explication ? (r.explication || orig.explication) : '', complement: orig.complement ? (r.complement || orig.complement) : '', prevision: orig.prevision ? (r.prevision || orig.prevision) : '' };
-  return { ...choix, reformule: true, original: mode === 'les-deux' ? orig : null, valideeLeUtc: r.valideeLeUtc };
+  const c = champsVersion(ev);
+  const choix = { explication: c.explication ? (r.explication || orig.explication) : '', complement: c.complement ? (r.complement || orig.complement) : '', prevision: c.prevision ? (r.prevision || orig.prevision) : '' };
+  return { ...choix, reformule: true, original: mode === 'les-deux' ? orig : null, valideeLeUtc: r.valideeLeUtc, methode: r.methode || 1 };
 }
 
+/** Ce qui est transmis pour la rédaction : textes et motifs cochés, sans nom, note, date, lieu ni situation. */
 export function entreesReformulation(evaluations) {
   return trierChrono(evaluations).filter(aDesTextes).map((e) => {
     const t = textesOriginaux(e);
-    return { id: e.id, explication: t.explication, complement: t.complement, prevision: t.prevision };
+    const tous = [...(e.motifs || []), ...(e.autresMotifs || [])];
+    const parPol = (pol) => tous.filter((m) => m.polarite === pol).map((m) => m.libelle);
+    return {
+      id: e.id,
+      motifs_favorables: parPol('favorable'), motifs_defavorables: parPol('defavorable'), motifs_mixtes: parPol('mixte'),
+      explication: t.explication, complement: t.complement,
+      prevision: t.prevision, motifs_prevision: ((e.prevision && e.prevision.motifs) || []).map((m) => m.libelle),
+    };
   });
 }
 
@@ -699,16 +728,20 @@ export function instructionsReformulation({ personne = 'troisieme' } = {}) {
   const style = personne === 'premiere'
     ? 'à la première personne (« je »), comme si le patient écrivait lui-même de façon soignée'
     : 'à la troisième personne (« Le patient… », « Il… »)';
-  return `Tu es un assistant de rédaction. Tu reçois des extraits du journal d'humeur d'un patient, destinés à son psychothérapeute.
+  return `Tu es un rédacteur francophone de très haut niveau. Tu reçois des entrées du journal d'humeur d'un patient, destinées à son psychothérapeute. Le patient relira et validera chaque texte.
 
-Pour chaque entrée et chaque champ non vide :
-- corrige l'orthographe, la grammaire et la ponctuation ;
-- raccourcis nettement (environ la moitié de la longueur, ou moins) ;
-- adopte un style professionnel, clair, neutre et factuel, ${style} ;
-- conserve toutes les informations utiles au thérapeute : faits, émotions, causes évoquées, projets, difficultés, chiffres et noms propres ;
-- n'ajoute aucune information, aucune interprétation, aucun vocabulaire clinique ni diagnostic ;
-- si un champ est vide, renvoie une chaîne vide ;
-- conserve exactement chaque « id ».
+Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, précise et naturelle, d'un registre professionnel, neutre et factuel :
+- « explication » : un texte complet qui présente d'abord les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), en les intégrant naturellement (par exemple « Le patient mentionne comme éléments favorables… »), puis tout le contenu du texte « explication ». S'il n'y a que des motifs, une ou deux phrases qui les présentent suffisent. S'il n'y a ni motifs ni explication, renvoie une chaîne vide.
+- « complement » : tout le contenu du complément ; chaîne vide s'il est vide.
+- « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a ; chaîne vide si les deux sont vides.
+
+Règles impératives :
+- Si un texte est rédigé en allemand, en anglais, en luxembourgeois ou dans un mélange de langues, traduis-le fidèlement en français.
+- Corrige toutes les fautes d'orthographe, de grammaire, de conjugaison, d'accord et de ponctuation.
+- Ne résume pas et ne raccourcis pas : conserve l'intégralité du contenu, chaque fait, émotion, nuance, cause évoquée, projet, difficulté, chiffre, nom propre et lieu. Tu peux réorganiser les phrases pour la clarté, mais rien ne doit être omis.
+- N'ajoute aucune information absente des entrées, aucune interprétation, aucune hypothèse, aucun vocabulaire clinique ni diagnostic.
+- Présente les motifs comme des éléments mentionnés par le patient, sans en tirer de conclusion.
+- Conserve exactement chaque « id ».
 
 Réponds uniquement avec du JSON valide, sans texte autour, sous cette forme exacte :
 {"entrees": [{"id": "…", "explication": "…", "complement": "…", "prevision": "…"}]}`;
@@ -748,9 +781,9 @@ export function lireReponseReformulation(texte, evaluations) {
   for (const x of liste) {
     const ev = x && parId.get(x.id);
     if (!ev) { ignorees.push(x && x.id); continue; }
-    const orig = textesOriginaux(ev);
+    const permis = champsVersion(ev);
     const prop = {};
-    for (const k of ['explication', 'complement', 'prevision']) prop[k] = orig[k] ? nettoyerTexte(x[k]) : '';
+    for (const k of ['explication', 'complement', 'prevision']) prop[k] = permis[k] ? nettoyerTexte(x[k]) : '';
     if (!prop.explication && !prop.complement && !prop.prevision) { ignorees.push(x.id); continue; }
     propositions.push({ id: ev.id, ...prop });
   }
@@ -925,16 +958,124 @@ export function parametresParDefaut(instant = Date.now()) {
     contactConfiance: { nom: '', telephone: '' },
     rappelsDansApplication: false,
     serveurRappels: { url: '', jeton: '', actif: false },
-    ia: { actif: false, fournisseur: 'anthropic', cle: '', modele: 'claude-sonnet-5-5', personne: 'troisieme', automatique: true, consentementUtc: null, consentementFournisseur: '' },
+    ia: { actif: false, fournisseur: 'anthropic', cle: '', modele: 'claude-opus-5-5', personne: 'troisieme', automatique: true, consentementUtc: null, consentementFournisseur: '' },
     titreRappelDiscret: false,
     derniereSauvegardeUtc: null,
     prochaineSeance: '',
+    seances: [],
+    patient: { nom: '', adresse: '', cns: '' },
+    therapeute: { nom: '', titre: '', adresse: '' },
+    rapportAvecCNS: true,
     dernierRapport: null,
     reglagesModifiesLeUtc: null,
     motifsSupprimes: [],
     synchro: { actif: false, phrase: '', version: 0, derniereUtc: null, erreur: '' },
     derniereSauvegardeFichierUtc: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Identités (rapport) : patient et thérapeute. Restent sur les appareils (et la copie chiffrée) ;
+// jamais transmises au service de reformulation.
+
+/** Matricule CNS luxembourgeois : 13 chiffres. Retourne les chiffres, ou '' si vide ; lève une erreur si invalide. */
+export function normaliserCNS(texte) {
+  const brut = String(texte || '').trim();
+  if (!brut) return '';
+  const chiffres = brut.replace(/[\s.\-/]/g, '');
+  if (!/^\d{13}$/.test(chiffres)) throw new Error('Le matricule CNS doit comporter 13 chiffres.');
+  return chiffres;
+}
+
+/** 1985061512345 → « 1985 0615 123 45 » (année, mois-jour, numéro, contrôle). */
+export function formatCNS(cns) {
+  const c = String(cns || '');
+  return /^\d{13}$/.test(c) ? `${c.slice(0, 4)} ${c.slice(4, 8)} ${c.slice(8, 11)} ${c.slice(11)}` : c;
+}
+
+const nettoyerLignes = (t, max = 300) => String(t || '').split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n').slice(0, max);
+
+export function normaliserPatient(p = {}) {
+  return { nom: nettoyerLignes(p.nom, 120).replace(/\n/g, ' '), adresse: nettoyerLignes(p.adresse), cns: normaliserCNS(p.cns) };
+}
+
+export function normaliserTherapeute(t = {}) {
+  return { nom: nettoyerLignes(t.nom, 120).replace(/\n/g, ' '), titre: nettoyerLignes(t.titre, 120).replace(/\n/g, ' '), adresse: nettoyerLignes(t.adresse) };
+}
+
+// ---------------------------------------------------------------------------
+// Séances (consultations) : date, heure de début et de fin, en heure de Luxembourg
+
+const heureFr = (h) => h.replace(/^0(\d)/, '$1').replace(':', ' h ').replace(/ h 00$/, ' h');
+const estHeure = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(h || '');
+
+export function normaliserSeance(x) {
+  if (!x || !estDateValide(x.date)) throw new Error('Date de séance invalide.');
+  const debut = estHeure(x.debut) ? x.debut : '';
+  const fin = estHeure(x.fin) ? x.fin : '';
+  if (fin && !debut) throw new Error('Indique aussi l\'heure de début.');
+  if (debut && fin && fin <= debut) throw new Error('L\'heure de fin doit être après l\'heure de début.');
+  return { id: x.id || nouvelId(), date: x.date, debut, fin };
+}
+
+/** Début et fin de la séance (ms UTC). Sans heure : toute la journée ; sans fin : une heure. */
+export function bornesSeance(s) {
+  const debut = localVersUtc(s.date, s.debut || '00:00');
+  let fin;
+  if (s.fin) fin = localVersUtc(s.date, s.fin);
+  else if (s.debut) fin = debut + 3600000;
+  else fin = localVersUtc(ajouterJours(s.date, 1), '00:00');
+  return { debut, fin };
+}
+
+export function trierSeances(seances) {
+  return [...(seances || [])].sort((a, b) => (a.date + (a.debut || '')).localeCompare(b.date + (b.debut || '')));
+}
+
+/** Prochaine séance (en cours ou à venir), ou null. */
+export function prochaineSeance(seances, instant) {
+  return trierSeances(seances).find((s) => bornesSeance(s).fin > instant) || null;
+}
+
+/** Séances terminées, de la plus récente à la plus ancienne. */
+export function seancesPassees(seances, instant) {
+  return trierSeances(seances).filter((s) => bornesSeance(s).fin <= instant).reverse();
+}
+
+export function libelleSeance(s, { court = false } = {}) {
+  if (!s) return '';
+  const jour = court ? formatDateCourte(s.date) : formatDateLongue(s.date);
+  const heures = s.debut ? (s.fin ? `, ${heureFr(s.debut)}–${heureFr(s.fin)}` : `, ${heureFr(s.debut)}`) : '';
+  return `${jour}${heures}`;
+}
+
+/** Liste des séances après l'ancien réglage « prochaineSeance » (date seule). */
+export function seancesDepuisParametres(p) {
+  const liste = Array.isArray(p && p.seances) ? p.seances.filter((s) => s && estDateValide(s.date)) : [];
+  if (!liste.length && p && estDateValide(p.prochaineSeance)) return [{ id: `ancienne-${p.prochaineSeance}`, date: p.prochaineSeance, debut: '', fin: '' }];
+  return trierSeances(liste);
+}
+
+/**
+ * Périodes proposées pour le rapport. Chaque option : { cle, libelle, debut, fin }.
+ * « Entre deux séances » : du jour de la séance au jour de la suivante (inclus).
+ */
+export function periodesRapport(seances, { instant, aujourdhui, debutSuivi }) {
+  const passees = seancesPassees(seances, instant);
+  const options = [];
+  const borne = (d) => d;
+  if (passees.length) {
+    options.push({ cle: 'depuis-seance', libelle: `Depuis la dernière séance (${libelleSeance(passees[0], { court: true })})`, debut: borne(passees[0].date), fin: aujourdhui });
+  }
+  for (let i = 0; i + 1 < passees.length && i < 8; i++) {
+    const a = passees[i + 1], b = passees[i];
+    options.push({ cle: `entre-${a.id}-${b.id}`, entre: true, libelle: `Entre les séances du ${formatDateCourte(a.date)} et du ${formatDateCourte(b.date)}`, debut: borne(a.date), fin: b.date < aujourdhui ? b.date : aujourdhui });
+  }
+  const auPlusTot = (d) => (d < debutSuivi ? debutSuivi : d);
+  options.push({ cle: '7', libelle: '7 derniers jours', debut: auPlusTot(ajouterJours(aujourdhui, -6)), fin: aujourdhui });
+  options.push({ cle: '30', libelle: 'Dernier mois (30 jours)', debut: auPlusTot(ajouterJours(aujourdhui, -29)), fin: aujourdhui });
+  options.push({ cle: 'tout', libelle: 'Depuis le début du suivi', debut: debutSuivi < aujourdhui ? debutSuivi : aujourdhui, fin: aujourdhui });
+  return options.filter((o) => o.debut <= o.fin);
 }
 
 // ---------------------------------------------------------------------------
@@ -945,13 +1086,14 @@ export function estEmailValide(texte) {
 }
 
 /** Objet et texte du message qui accompagne le rapport. N'inclut aucune donnée de santé. */
-export function messageEnvoiRapport({ destinataire = '', debut, fin, prochaineSeance = '', aujourdhui = '' }) {
+export function messageEnvoiRapport({ destinataire = '', debut, fin, prochaineSeance = '', seance: seanceObj = null, aujourdhui = '', patient = '' }) {
   const d = String(destinataire || '').trim();
   const periode = debut === fin ? `du ${formatDateCourte(debut)}` : `du ${formatDateCourte(debut)} au ${formatDateCourte(fin)}`;
-  const seance = estDateValide(prochaineSeance) && (!aujourdhui || prochaineSeance >= aujourdhui) ? `, en vue de notre séance du ${formatDateLongue(prochaineSeance)}` : '';
+  const s = seanceObj || (estDateValide(prochaineSeance) ? { date: prochaineSeance, debut: '', fin: '' } : null);
+  const seance = s && (!aujourdhui || s.date >= aujourdhui) ? `, en vue de notre séance du ${formatDateLongue(s.date)}${s.debut ? (s.fin ? ` de ${heureFr(s.debut)} à ${heureFr(s.fin)}` : ` à ${heureFr(s.debut)}`) : ''}` : '';
   return {
     objet: `Baromètre de l'humeur – rapport ${periode}`,
-    corps: `${d ? `Bonjour ${d},` : 'Bonjour,'}\n\nVeuillez trouver ci-joint mon rapport du baromètre de l'humeur pour la période ${periode}${seance}.\n\nCordialement`,
+    corps: `${d ? `Bonjour ${d},` : 'Bonjour,'}\n\nVeuillez trouver ci-joint mon rapport du baromètre de l'humeur pour la période ${periode}${seance}.\n\nCordialement${patient ? `\n\n${patient}` : ''}`,
   };
 }
 
@@ -1308,7 +1450,7 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'contactConfiance', 'prochaineSeance', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
 
 function empreinteTexte(s) {
   let h = 5381;
