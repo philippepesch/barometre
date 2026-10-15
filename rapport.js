@@ -57,6 +57,7 @@ class Redacteur {
   constructor(PDFLib, doc, polices, entete) {
     Object.assign(this, { PDFLib, doc, polices, entete });
     this.pages = [];
+    this.sommaire = [];
     this.nouvellePage();
   }
 
@@ -72,6 +73,51 @@ class Redacteur {
         ...(f.trait ? { borderColor: this.couleur(f.trait), borderWidth: (f.epaisseur || 1) * k, borderLineCap: this.PDFLib.LineCapStyle.Round } : {}),
       });
     }
+  }
+
+  /** Rectangle aux coins arrondis (yHaut = bord supérieur). */
+  cadre(x, yHaut, l, h, { fond = null, bord = null, epaisseur = 0.6, rayon = 5 } = {}) {
+    const r = Math.min(rayon, l / 2, h / 2);
+    const d = `M${x + r} ${yHaut} H${x + l - r} A${r} ${r} 0 0 1 ${x + l} ${yHaut + r} V${yHaut + h - r} A${r} ${r} 0 0 1 ${x + l - r} ${yHaut + h} `
+      + `H${x + r} A${r} ${r} 0 0 1 ${x} ${yHaut + h - r} V${yHaut + r} A${r} ${r} 0 0 1 ${x + r} ${yHaut} Z`;
+    this.page.drawSvgPath(d, { x: 0, y: A4[1], ...(fond ? { color: this.couleur(fond) } : {}), ...(bord ? { borderColor: this.couleur(bord), borderWidth: epaisseur } : {}) });
+  }
+
+  /**
+   * Texte composé de segments [texte, police] (par ex. une étiquette en gras suivie de sa valeur),
+   * avec retour à la ligne automatique.
+   */
+  riche(segments, { taille = 9.5, couleur = ENCRE, retrait = 0, interligne = 1.42, apres = 3, largeur = LARGEUR } = {}) {
+    const mots = [];
+    for (const [t, police = 'normal', coul = couleur] of segments) {
+      if (!t) continue;
+      const parts = texteWinAnsi(t).split(/( +)/);
+      for (const p of parts) {
+        if (!p) continue;
+        if (/^ +$/.test(p)) { mots.push({ espace: true, police }); continue; }
+        mots.push({ t: p, police, coul });
+      }
+    }
+    const lignes = [[]];
+    let x = 0;
+    const max = largeur - retrait;
+    let espaceEnAttente = null;
+    for (const m of mots) {
+      if (m.espace) { espaceEnAttente = m; continue; }
+      const lm = this.largeur(m.t, taille, m.police);
+      const le = espaceEnAttente && lignes[lignes.length - 1].length ? this.largeur(' ', taille, espaceEnAttente.police) : 0;
+      if (x + le + lm > max && lignes[lignes.length - 1].length) { lignes.push([]); x = 0; } else x += le;
+      lignes[lignes.length - 1].push({ ...m, x });
+      x += lm;
+      espaceEnAttente = null;
+    }
+    const h = taille * interligne;
+    for (const ligne of lignes) {
+      this.place(h);
+      for (const m of ligne) this.texte(m.t, MARGE + retrait + m.x, this.y + taille, { taille, police: m.police, couleur: m.coul });
+      this.y += h;
+    }
+    this.y += apres;
   }
 
   nouvellePage() {
@@ -137,34 +183,39 @@ class Redacteur {
     this.y += 4;
   }
 
-  section(numero, titre, besoin = 90) {
-    this.place(46 + besoin);
-    this.y += 12;
-    this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y }, thickness: 0.6, color: this.couleur(FILET) });
-    this.y += 20;
-    this.texte(`${numero}.`, MARGE, this.y, { taille: 13, police: 'gras', couleur: LAITON });
-    this.texte(titre, MARGE + 24, this.y, { taille: 13, police: 'gras' });
-    this.y += 14;
+  section(numero, titre, besoin = 90, { nouvellePage = false } = {}) {
+    if (nouvellePage && this.y > HAUT_CONTENU + 1) this.nouvellePage();
+    else if (!this.place(50 + besoin)) this.y += 16;
+    const num = String(numero);
+    this.cadre(MARGE, this.y, 22, 22, { fond: LAITON, rayon: 4 });
+    this.texte(num, MARGE + 11 - this.largeur(num, 11, 'gras') / 2, this.y + 15.2, { taille: 11, police: 'gras', couleur: '#FFFFFF' });
+    this.texte(titre, MARGE + 32, this.y + 16, { taille: 14, police: 'gras' });
+    this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - 29 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 29 }, thickness: 0.8, color: this.couleur(FILET) });
+    this.sommaire.push({ numero, titre, page: this.pages.length - 1, y: this.y });
+    this.y += 40;
   }
 
   sousTitre(t) {
-    this.place(30);
-    this.y += 4;
-    this.texte(t, MARGE, this.y + 10, { taille: 10.5, police: 'gras' });
+    this.place(34);
+    this.y += 6;
+    this.texte(t, MARGE, this.y + 10, { taille: 10.5, police: 'gras', couleur: LAITON });
     this.y += 18;
   }
 
   chiffres(cases) {
-    const h = 54;
+    const h = 56;
     this.place(h + 8);
     const l = (LARGEUR - (cases.length - 1) * 8) / cases.length;
     cases.forEach((c, i) => {
       const x = MARGE + i * (l + 8);
-      this.page.drawRectangle({ x, y: A4[1] - this.y - h, width: l, height: h, color: this.couleur(FOND) });
-      this.texte(c.valeur, x + 10, this.y + 26, { taille: 18, police: 'gras' });
-      this.texte(c.libelle, x + 10, this.y + 43, { taille: 8.5, couleur: DOUX });
+      this.cadre(x, this.y, l, h, { fond: FOND, rayon: 5 });
+      let xt = x + 11;
+      if (Number.isInteger(c.icone)) { this.meteo(c.icone, x + 9, this.y + 7, 24); xt = x + 39; }
+      this.texte(c.valeur, xt, this.y + 27, { taille: 18, police: 'gras' });
+      if (c.suffixe) this.texte(c.suffixe, xt + this.largeur(c.valeur, 18, 'gras') + 1.5, this.y + 27, { taille: 10, police: 'gras', couleur: DOUX });
+      this.couper(c.libelle, 8.3, 'normal', l - 20).slice(0, 2).forEach((lg, k) => this.texte(lg, x + 11, this.y + 42 + k * 9.5, { taille: 8.3, couleur: DOUX }));
     });
-    this.y += h + 10;
+    this.y += h + 12;
   }
 
   tableau(colonnes, lignes, { taille = 9 } = {}) {
@@ -173,7 +224,7 @@ class Redacteur {
     const pad = 5;
     const dessinerEntete = () => {
       const h = taille * 1.4 + 2 * pad;
-      this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur(FOND) });
+      this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur('#E6EBEE') });
       let x = MARGE;
       colonnes.forEach((c, i) => { this.texte(c.titre, x + pad, this.y + pad + taille, { taille, police: 'gras' }); x += largeurs[i]; });
       this.y += h;
@@ -198,21 +249,24 @@ class Redacteur {
 
   graphique(grille, previsions, contexte = null) {
     const dense = grille.length > 60;
-    const hauteur = dense ? 230 : 190;
+    const hauteur = dense ? 250 : 232;
     const legende = 22;
     const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
     const hBandes = avecBandes ? 52 : 0;
-    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + 70);
-    const gauche = MARGE + 22, droite = MARGE + LARGEUR - 6;
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0));
+    // À gauche : note et pictogramme météo de chaque niveau ; à droite : nom du niveau
+    const gauche = MARGE + 36, droite = MARGE + LARGEUR - 60;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
     const n = grille.length;
     const xDe = (i) => (n <= 1 ? (gauche + droite) / 2 : gauche + 8 + (i * (droite - gauche - 16)) / (n - 1));
     const yDe = (note) => bas - (note / 10) * (bas - haut);
     const P = (x, y) => ({ x, y: A4[1] - y });
-    for (let v = 0; v <= 10; v += 2) {
-      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.35, color: this.couleur(v === 0 ? '#9AA5AD' : '#E1E6E9') });
+    for (let v = 0; v <= 10; v++) {
+      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.35, color: this.couleur(v === 0 ? '#9AA5AD' : v % 2 ? '#EEF1F3' : '#E1E6E9') });
       const lib = String(v);
-      this.texte(lib, gauche - 8 - this.largeur(lib, 8), yDe(v) + 3, { taille: 8, couleur: DOUX });
+      this.texte(lib, gauche - 21 - this.largeur(lib, 7.5, 'gras'), yDe(v) + 2.7, { taille: 7.5, police: 'gras', couleur: DOUX });
+      this.meteo(v, gauche - 17, yDe(v) - 6.5, 13);
+      this.texte(C.NIVEAUX[v], droite + 7, yDe(v) + 2.5, { taille: 6.8, couleur: DOUX });
     }
     // Étiquettes de dates (au plus ~10)
     const jours = [...new Set(grille.map((s) => s.date))];
@@ -278,7 +332,7 @@ class Redacteur {
       this.y += hBandes - 6;
     }
     // Légende
-    let x = MARGE + 22;
+    let x = gauche;
     const yl = this.y + 6;
     const item = (dessin, lib) => { dessin(x + 4, yl); this.texte(lib, x + 12, yl + 3, { taille: 8.5, couleur: DOUX }); x += 22 + this.largeur(lib, 8.5); };
     item((cx, cy) => this.page.drawCircle({ ...P(cx, cy), size: 3.4, color: this.couleur(DOUX) }), 'Note du matin');
@@ -289,13 +343,13 @@ class Redacteur {
     if (avecBandes) {
       for (const [titre, items] of [['Lieu', contexte.legendeLieux], ['Situation', contexte.legendeSituations]]) {
         if (!items.length) continue;
-        let xl = MARGE + 22;
+        let xl = gauche;
         const yl2 = () => this.y + 6;
         this.texte(`${titre} :`, xl, yl2() + 3, { taille: 8.5, police: 'gras', couleur: ENCRE });
         xl += this.largeur(`${titre} :`, 8.5, 'gras') + 8;
         for (const it of items) {
           const lw = 14 + this.largeur(it.libelle, 8.5) + 10;
-          if (xl + lw > MARGE + LARGEUR) { this.y += 14; xl = MARGE + 22 + 50; }
+          if (xl + lw > MARGE + LARGEUR) { this.y += 14; xl = gauche + 50; }
           const yy = yl2();
           if (it.couleur) this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(it.couleur) });
           else this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
@@ -305,30 +359,46 @@ class Redacteur {
         this.y += 16;
       }
     }
-    // Échelle des niveaux, avec leurs pictogrammes
-    {
-      const pas = (LARGEUR - 22) / 11;
-      const yE = this.y + 18;
-      this.texte('Échelle :', MARGE + 22, this.y + 12, { taille: 8.5, police: 'gras', couleur: ENCRE });
-      grille.length && C.NIVEAUX.forEach((nom, i) => {
-        const xc = MARGE + 22 + i * pas;
-        this.meteo(i, xc + pas / 2 - 8, yE + 4, 16);
-        const lib = `${i}`;
-        this.texte(lib, xc + pas / 2 - this.largeur(lib, 7.5, 'gras') / 2, yE + 29, { taille: 7.5, police: 'gras', couleur: ENCRE });
-        const mots = this.couper(nom, 6.8, 'normal', pas - 2);
-        mots.forEach((m, k) => this.texte(m, xc + pas / 2 - this.largeur(m, 6.8) / 2, yE + 38 + k * 8, { taille: 6.8, couleur: DOUX }));
-      });
-      this.y += 70;
-    }
+  }
+
+  /** Sommaire en deux colonnes, dessiné à la fin (numéros de page connus), avec liens cliquables. */
+  dessinerSommaire(page, yHaut, colonnes = 1) {
+    const ici = this.page;
+    this.page = page;
+    const pas = 16;
+    const parCol = Math.ceil(this.sommaire.length / colonnes);
+    const lc = (LARGEUR - 20 - (colonnes - 1) * 18) / colonnes;
+    this.sommaire.forEach((e, i) => {
+      const col = Math.floor(i / parCol), lig = i % parCol;
+      const x = MARGE + 10 + col * (lc + 18), y = yHaut + lig * pas;
+      const num = `${e.numero}`;
+      const pg = String(e.page + 1);
+      this.texte(num, x + 12 - this.largeur(num, 9, 'gras'), y + 9, { taille: 9, police: 'gras', couleur: LAITON });
+      const titre = this.couper(e.titre, 9, 'normal', lc - 50)[0] + (this.largeur(e.titre, 9) > lc - 50 ? '…' : '');
+      this.texte(titre, x + 18, y + 9, { taille: 9 });
+      const fin = x + 18 + this.largeur(titre, 9) + 4, xp = x + lc - this.largeur(pg, 9, 'gras');
+      if (xp - 4 > fin) page.drawLine({ start: { x: fin, y: A4[1] - y - 8.4 }, end: { x: xp - 4, y: A4[1] - y - 8.4 }, thickness: 0.7, color: this.couleur('#AEB8BF'), dashArray: [0.7, 2.3] });
+      this.texte(pg, xp, y + 9, { taille: 9, police: 'gras' });
+      try { // lien vers la section
+        const ctx = this.doc.context;
+        const cible = this.pages[e.page];
+        const annot = ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [x, A4[1] - y - 12, x + lc, A4[1] - y + 2], Border: [0, 0, 0], Dest: [cible.ref, 'XYZ', null, A4[1] - e.y + 12, null] });
+        page.node.addAnnot(ctx.register(annot));
+      } catch { /* liens facultatifs */ }
+    });
+    this.page = ici;
+    return parCol * pas;
   }
 
   paginer(pied) {
     const n = this.pages.length;
     this.pages.forEach((p, i) => {
       this.page = p;
-      p.drawLine({ start: { x: MARGE, y: A4[1] - 40 }, end: { x: MARGE + LARGEUR, y: A4[1] - 40 }, thickness: 0.4, color: this.couleur(FILET) });
-      this.texte(this.entete.gauche, MARGE, 34, { taille: 8, couleur: DOUX });
-      this.texte(this.entete.droite, MARGE + LARGEUR - this.largeur(this.entete.droite, 8), 34, { taille: 8, couleur: DOUX });
+      if (i > 0) {
+        p.drawLine({ start: { x: MARGE, y: A4[1] - 40 }, end: { x: MARGE + LARGEUR, y: A4[1] - 40 }, thickness: 0.4, color: this.couleur(FILET) });
+        this.texte(this.entete.gauche, MARGE, 34, { taille: 8, couleur: DOUX });
+        this.texte(this.entete.droite, MARGE + LARGEUR - this.largeur(this.entete.droite, 8), 34, { taille: 8, couleur: DOUX });
+      }
       const num = `Page ${i + 1} sur ${n}`;
       p.drawLine({ start: { x: MARGE, y: 40 }, end: { x: MARGE + LARGEUR, y: 40 }, thickness: 0.4, color: this.couleur(FILET) });
       this.texte(pied, MARGE, A4[1] - 26, { taille: 7.5, couleur: DOUX });
@@ -398,50 +468,103 @@ export async function genererRapport(PDFLib, donnees, options) {
   const periodeCourte = `Du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)}`;
   const R = new Redacteur(PDFLib, doc, polices, { gauche: `Baromètre de l'humeur – ${patient.nom ? `${patient.nom} – ` : ''}${titreDoc}`, droite: periodeCourte });
 
-  // 1. Titre et période
-  R.texte('Baromètre de l\'humeur', MARGE, R.y + 10, { taille: 10, police: 'gras', couleur: LAITON });
-  R.y += 22;
-  R.paragraphe(titreDoc, { taille: 22, police: 'gras', interligne: 1.2, apres: 4 });
-  // Identités : patient (à gauche) et destinataire (à droite)
-  const blocPatient = [patient.nom, ...String(patient.adresse || '').split('\n'), options.inclureCNS && patient.cns ? `Matricule CNS : ${C.formatCNS(patient.cns)}` : ''].filter(Boolean);
-  const blocTherapeute = [therapeute.nom, therapeute.titre, ...String(therapeute.adresse || '').split('\n')].filter(Boolean);
-  if (blocPatient.length || blocTherapeute.length) {
-    const col = (LARGEUR - 24) / 2;
-    const lignesDe = (bloc) => bloc.flatMap((l) => R.couper(l, 9.5, 'normal', col));
-    const gauche = lignesDe(blocPatient), droite = lignesDe(blocTherapeute);
-    const n = Math.max(gauche.length, droite.length);
-    R.y += 4;
-    if (gauche.length) R.texte('Patient', MARGE, R.y + 8, { taille: 8, police: 'gras', couleur: LAITON });
-    if (droite.length) R.texte('Destinataire', MARGE + col + 24, R.y + 8, { taille: 8, police: 'gras', couleur: LAITON });
-    R.y += 14;
-    for (let i = 0; i < n; i++) {
-      if (gauche[i]) R.texte(gauche[i], MARGE, R.y + 9.5, { taille: 9.5, police: i === 0 ? 'gras' : 'normal' });
-      if (droite[i]) R.texte(droite[i], MARGE + col + 24, R.y + 9.5, { taille: 9.5, police: i === 0 ? 'gras' : 'normal' });
-      R.y += 13.5;
-    }
-    R.y += 10;
+  // Page de garde : titre, identités, informations du rapport, chiffres clés, sommaire
+  R.y = 46;
+  R.page.drawRectangle({ x: 0, y: A4[1] - 8, width: A4[0], height: 8, color: R.couleur(LAITON) });
+  R.texte('BAROMÈTRE DE L\'HUMEUR  ·  RAPPORT DE SUIVI', MARGE, R.y + 9, { taille: 8.5, police: 'gras', couleur: LAITON });
+  R.y += 18;
+  R.paragraphe(titreDoc, { taille: 24, police: 'gras', interligne: 1.15, apres: 2 });
+  R.paragraphe(`Du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`, { taille: 12, police: 'gras', couleur: DOUX, apres: 12 });
+
+  // Identités : patient et thérapeute, dans deux cadres
+  const nomTherapeute = (therapeute.nom || '').trim() || destinataire;
+  const cnsVisible = options.inclureCNS && patient.cns;
+  const cartePatient = [
+    patient.nom ? [patient.nom, 'gras', 11.5] : null,
+    ...String(patient.adresse || '').split('\n').filter((l) => l.trim()).map((l) => [l.trim(), 'normal', 9.5]),
+  ].filter(Boolean);
+  const carteTherapeute = [
+    nomTherapeute ? [nomTherapeute, 'gras', 11.5] : null,
+    therapeute.titre ? [therapeute.titre, 'gras', 9.5, LAITON] : null,
+    ...String(therapeute.adresse || '').split('\n').filter((l) => l.trim()).map((l) => [l.trim(), 'normal', 9.5]),
+  ].filter(Boolean);
+  if (cartePatient.length || carteTherapeute.length || cnsVisible) {
+    const col = (LARGEUR - 14) / 2;
+    const lignes = (carte) => carte.flatMap(([t, pol, tl, coul]) => R.couper(t, tl, pol, col - 26).map((l) => [l, pol, tl, coul]));
+    const lp = lignes(cartePatient), lt = lignes(carteTherapeute);
+    const hauteurLignes = (l) => l.reduce((h, [, , tl]) => h + tl * 1.42, 0);
+    const h = Math.max(hauteurLignes(lp) + (cnsVisible ? 26 : 0), hauteurLignes(lt)) + 36;
+    const carte = (x, titre, l, cns) => {
+      R.cadre(x, R.y, col, h, { fond: FOND, rayon: 6 });
+      R.page.drawRectangle({ x, y: A4[1] - R.y - h + 6, width: 3, height: h - 12, color: R.couleur(LAITON) });
+      R.texte(titre, x + 14, R.y + 18, { taille: 7.8, police: 'gras', couleur: LAITON });
+      let y = R.y + 26;
+      for (const [t, pol, tl, coul] of l) { R.texte(t, x + 14, y + tl, { taille: tl, police: pol, couleur: coul || ENCRE }); y += tl * 1.42; }
+      if (cns) {
+        y += 6;
+        R.texte('Matricule CNS', x + 14, y + 8, { taille: 7.8, couleur: DOUX });
+        R.texte(C.formatCNS(patient.cns), x + 14, y + 20, { taille: 10.5, police: 'gras' });
+      }
+    };
+    carte(MARGE, 'PATIENT', lp, cnsVisible);
+    carte(MARGE + col + 14, 'THÉRAPEUTE', lt, false);
+    R.y += h + 16;
   }
-  R.paragraphe(`Période analysée : du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`, { taille: 11, apres: 2 });
+
+  // Informations du rapport (étiquette à gauche, valeur en gras)
   {
-    const t = instant;
-    const precedente = C.seancesPassees(listeSeances, t)[0];
-    const prochaine = C.prochaineSeance(listeSeances, t);
-    const lignes = [precedente ? `Séance précédente : ${C.libelleSeance(precedente)}` : '', prochaine ? `Prochaine séance : ${C.libelleSeance(prochaine)}` : ''].filter(Boolean);
-    for (const l of lignes) R.paragraphe(l, { taille: 9.5, apres: 1 });
-    if (lignes.length) R.y += 1;
+    const precedente = C.seancesPassees(listeSeances, instant)[0];
+    const prochaine = C.prochaineSeance(listeSeances, instant);
+    const nbJours = C.joursEntre(debut, fin) + 1;
+    const infos = [
+      ['Période analysée', `du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)} (${C.pluriel(nbJours, 'jour')})`],
+      precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
+      prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : null,
+      ['Type de rapport', type === 'complet' ? 'complet (annexe intégrale)' : 'synthétique (annexe abrégée)'],
+      ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
+    ].filter(Boolean);
+    for (const [lib, val] of infos) {
+      R.texte(lib, MARGE, R.y + 9.5, { taille: 9, couleur: DOUX });
+      R.couper(val, 9.5, 'gras', LARGEUR - 120).forEach((l, k) => R.texte(l, MARGE + 120, R.y + 9.5 + k * 13, { taille: 9.5, police: 'gras' }));
+      R.y += 15.5;
+      R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y + 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y + 3 }, thickness: 0.35, color: R.couleur('#E1E6E9') });
+    }
+    R.y += 14;
   }
-  R.paragraphe(`Rapport ${type === 'complet' ? 'complet' : 'synthétique'} établi le ${C.formatDateHeure(instant)} (heure de Luxembourg).`, { taille: 9, couleur: DOUX, apres: 10 });
+
+  // Chiffres clés
+  R.texte('En bref', MARGE, R.y + 11, { taille: 12, police: 'gras' });
+  R.y += 20;
+  {
+    const arrondi = stats.nombre ? Math.round(stats.moyenne) : null;
+    R.chiffres([
+      { valeur: stats.nombre ? C.nombreFr(stats.moyenne) : '—', suffixe: stats.nombre ? '/10' : '', libelle: stats.nombre ? `moyenne générale (${C.NIVEAUX[arrondi]})` : 'moyenne générale', icone: arrondi },
+      { valeur: String(comptes.completees), suffixe: `/${comptes.attendues}`, libelle: 'évaluations complétées / attendues' },
+      { valeur: stats.nombre ? String(stats.min) : '—', suffixe: stats.nombre ? '/10' : '', libelle: 'note la plus basse', icone: stats.nombre ? stats.min : null },
+      { valeur: stats.nombre ? String(stats.max) : '—', suffixe: stats.nombre ? '/10' : '', libelle: 'note la plus haute', icone: stats.nombre ? stats.max : null },
+    ]);
+  }
+
+  // Sommaire (rempli à la fin, quand les numéros de page sont connus)
+  const NB_SECTIONS = 12;
+  const hSommaire = NB_SECTIONS * 16 + 40;
+  R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: 6 });
+  R.texte('Sommaire', MARGE + 10, R.y + 20, { taille: 12, police: 'gras' });
+  const pageSommaire = R.page, ySommaire = R.y + 30;
+  R.y += hSommaire + 12;
+
+  // Avertissement
   const avert = 'Toutes les données proviennent exclusivement des saisies du patient dans l\'application. Les chiffres sont descriptifs : ils ne constituent ni un diagnostic ni une évaluation clinique, et ne remplacent pas l\'échange avec le thérapeute.'
     + (nbReformules ? ` ${nbReformules === 1 ? 'Un commentaire est présenté' : `${nbReformules} commentaires sont présentés`} dans une version rédigée à partir de ses saisies (orthographe corrigée, traduite en français si nécessaire), relue et validée par le patient${modeTextes === 'les-deux' ? ', suivie du texte original' : ' ; les textes originaux sont conservés dans l\'application'}.` : '');
-  const lignesAvert = R.couper(avert, 8.8, 'italique', LARGEUR - 20);
-  const hAvert = lignesAvert.length * 8.8 * 1.4 + 14;
-  R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - hAvert, width: LARGEUR, height: hAvert, color: R.couleur(FOND) });
-  R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - hAvert, width: 2.5, height: hAvert, color: R.couleur(LAITON) });
-  lignesAvert.forEach((l, i) => R.texte(l, MARGE + 12, R.y + 7 + 8.8 + i * 8.8 * 1.4, { taille: 8.8, police: 'italique', couleur: DOUX }));
+  const lignesAvert = R.couper(avert, 8.6, 'italique', LARGEUR - 24);
+  const hAvert = lignesAvert.length * 8.6 * 1.4 + 14;
+  R.place(hAvert);
+  R.cadre(MARGE, R.y, LARGEUR, hAvert, { fond: FOND, rayon: 5 });
+  lignesAvert.forEach((l, i) => R.texte(l, MARGE + 12, R.y + 7 + 8.6 + i * 8.6 * 1.4, { taille: 8.6, police: 'italique', couleur: DOUX }));
   R.y += hAvert + 4;
 
   // 2. Évaluations attendues, complétées, omises
-  R.section(2, 'Évaluations attendues, complétées et omises');
+  R.section(1, 'Évaluations attendues, complétées et omises', 90, { nouvellePage: true });
   R.chiffres([
     { valeur: String(comptes.attendues), libelle: 'attendues' },
     { valeur: String(comptes.completees), libelle: 'complétées' },
@@ -460,7 +583,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   for (const d of det) R.paragraphe(d, { taille: 9.5, couleur: DOUX, apres: 4 });
 
   // 3. Moyennes
-  R.section(3, 'Moyennes');
+  R.section(2, 'Moyennes');
   if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
   else {
     R.tableau(
@@ -475,7 +598,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 4. Minimum et maximum
-  R.section(4, 'Notes minimale et maximale');
+  R.section(3, 'Notes minimale et maximale');
   if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
   else {
     const quand = (l) => l.map((e) => libCreneau(e)).join(', ');
@@ -489,7 +612,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 5. Graphique
-  R.section(5, 'Graphique chronologique', 270);
+  R.section(4, 'Graphique chronologique', 330);
   if (grille.length > 2 * 400) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
@@ -498,7 +621,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 6. Tendances
-  R.section(6, 'Tendances principales');
+  R.section(5, 'Tendances principales');
   R.puces(C.tendancesDescriptives(evals));
 
   // 7 et 8. Facteurs
@@ -512,16 +635,16 @@ export async function genererRapport(PDFLib, donnees, options) {
     return true;
   };
   const rappelMotifs = 'Seuls les motifs explicitement cochés lors d\'une évaluation sont comptés ; les commentaires libres sont reproduits en annexe.';
-  R.section(7, 'Facteurs favorables mentionnés');
+  R.section(6, 'Facteurs favorables mentionnés');
   if (!tableFacteurs('favorable')) R.paragraphe('Aucun facteur favorable n\'a été coché sur la période.');
   R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
-  R.section(8, 'Facteurs défavorables mentionnés');
+  R.section(7, 'Facteurs défavorables mentionnés');
   if (!tableFacteurs('defavorable')) R.paragraphe('Aucun facteur défavorable n\'a été coché sur la période.');
   if (freq.some((f) => f.polarite === 'mixte')) { R.sousTitre('Facteurs mixtes'); tableFacteurs('mixte'); }
   R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
 
   // 9. Lieu de séjour et situation professionnelle
-  R.section(9, 'Lieu de séjour et situation professionnelle');
+  R.section(8, 'Lieu de séjour et situation professionnelle');
   if (!parLieu.lignes.length && !parSituation.lignes.length) R.paragraphe('Aucun lieu ni aucune situation professionnelle n\'ont été indiqués sur la période.');
   else {
     const tableCat = (titre, r) => {
@@ -539,7 +662,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 10. Prévisions et réalité
-  R.section(10, 'Comparaison entre prévisions et réalité');
+  R.section(9, 'Comparaison entre prévisions et réalité');
   if (!prev.lignes.length) R.paragraphe('Aucune prévision n\'a été formulée sur la période.');
   else {
     const etatCible = (l) => {
@@ -569,7 +692,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 10. Évaluations manquantes
-  R.section(11, 'Évaluations manquantes');
+  R.section(10, 'Évaluations manquantes');
   const omis = grille.filter((s) => s.statut === 'omis');
   const attente = grille.filter((s) => s.statut === 'en_attente');
   const nonRens = grille.filter((s) => s.statut === 'non_renseigne');
@@ -579,12 +702,12 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (nonRens.length) R.paragraphe(`Non renseigné (antérieur au début du suivi dans l'application, données inconnues) : ${nonRens.map(libCreneau).join(', ')}.`, { taille: 9.5, couleur: DOUX });
 
   // 11. Synthèse neutre
-  R.section(12, 'Sujets susceptibles d\'être abordés en séance');
+  R.section(11, 'Sujets susceptibles d\'être abordés en séance');
   R.paragraphe('Relevé factuel établi automatiquement à partir des saisies, sans interprétation ; libre au patient et au thérapeute de s\'en saisir ou non.', { taille: 9, couleur: DOUX });
   R.puces(C.sujetsDeDiscussion(evals, freq, prev, comptes));
 
   // 12. Annexe
-  R.section(13, 'Annexe chronologique des évaluations', 120);
+  R.section(12, 'Annexe chronologique des évaluations', 120, { nouvellePage: true });
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
   if (type === 'synthetique' && evals.length) {
@@ -600,31 +723,41 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.paragraphe(`Rapport synthétique : les commentaires longs sont abrégés ; le rapport complet les reproduit intégralement.${nbReformules ? ' Les commentaires reformulés sont repris dans leur version validée par le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
   } else {
     for (const e of evals) {
-      R.place(70);
-      R.y += 6;
-      R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - 22, width: LARGEUR, height: 22, color: R.couleur(FOND) });
-      R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - 22, width: 4, height: 22, color: R.couleur(COULEURS_NIVEAUX[e.note]) });
+      R.place(80);
+      R.y += 8;
+      R.cadre(MARGE, R.y, LARGEUR, 26, { fond: FOND, rayon: 4 });
+      R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - 26, width: 4, height: 26, color: R.couleur(COULEURS_NIVEAUX[e.note]) });
       const tete = `${C.majuscule(C.formatDateLongue(e.date))} – ${C.LIBELLE_CRENEAU[e.creneau]}`;
-      R.texte(tete, MARGE + 12, R.y + 15, { taille: 10, police: 'gras' });
+      R.texte(tete, MARGE + 14, R.y + 17, { taille: 10.5, police: 'gras' });
       const note = C.libelleNote(e.note);
-      const xNote = MARGE + LARGEUR - 10 - R.largeur(note, 10, 'gras');
-      R.texte(note, xNote, R.y + 15, { taille: 10, police: 'gras' });
-      R.meteo(e.note, xNote - 21, R.y + 2, 18);
-      R.y += 30;
+      const xNote = MARGE + LARGEUR - 10 - R.largeur(note, 10.5, 'gras');
+      R.texte(note, xNote, R.y + 17, { taille: 10.5, police: 'gras' });
+      R.meteo(e.note, xNote - 25, R.y + 2, 22);
+      R.y += 34;
       const meta = [`Rappel prévu : ${C.formatHeure(e.rappelPrevuUtc)}`, `Validation : ${heureValidation(e)}`];
       if (e.saisieRetrospective) meta.push('saisie rétrospective, après la fin du créneau');
       R.paragraphe(meta.join('   |   '), { taille: 8.5, couleur: DOUX, apres: 3 });
-      if (e.lieu || e.situation) R.paragraphe([e.lieu ? `Lieu : ${C.libelleLieu(e.lieu, { complet: true })}` : '', e.situation ? `Situation : ${C.libelleSituation(e.situation)}` : ''].filter(Boolean).join('   |   '), { taille: 9.5, apres: 3 });
+      if (e.lieu || e.situation) {
+        R.riche([
+          ...(e.lieu ? [['Lieu : ', 'gras'], [C.libelleLieu(e.lieu, { complet: true })]] : []),
+          ...(e.lieu && e.situation ? [['   |   ', 'normal', FILET]] : []),
+          ...(e.situation ? [['Situation : ', 'gras'], [C.libelleSituation(e.situation)]] : []),
+        ]);
+      }
       if (e.noteOrigine) R.paragraphe(e.noteOrigine, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
       const libMotifs = (l) => l.map((m) => `${m.libelle} (${C.LIBELLE_POLARITE[m.polarite].toLowerCase()})`).join(', ');
-      R.paragraphe(`Motifs cochés : ${e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun'}`, { taille: 9.5, apres: 3 });
+      R.riche([['Motifs cochés : ', 'gras'], [e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun']]);
       const tx = textes.get(e.id);
       if (tx.explication) { R.paragraphe(tx.reformule ? 'Description :' : 'Explication :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.explication, { taille: 9.5, apres: 3 }); }
       if (tx.complement) { R.paragraphe('Complément :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.complement, { taille: 9.5, apres: 3 }); }
       if (e.prevision) {
         const p = e.prevision;
-        const t = `Prévision pour ${C.formatDateLongue(p.cible.date)}, ${C.LIBELLE_CRENEAU[p.cible.creneau].toLowerCase()} : ${Number.isInteger(p.note) ? C.libelleNote(p.note) : 'aucune note'}${tx.prevision ? `. Motif : ${tx.prevision}` : ''}${p.motifs && p.motifs.length ? ` (motifs associés : ${p.motifs.map((m) => m.libelle).join(', ')})` : ''}`;
-        R.paragraphe(t, { taille: 9.5, apres: 3 });
+        R.riche([
+          [`Prévision pour ${C.formatDateLongue(p.cible.date)}, ${C.LIBELLE_CRENEAU[p.cible.creneau].toLowerCase()} : `, 'gras'],
+          [Number.isInteger(p.note) ? C.libelleNote(p.note) : 'aucune note'],
+          ...(tx.prevision ? [['. Motif : ', 'gras'], [tx.prevision]] : []),
+          ...(p.motifs && p.motifs.length ? [[` (motifs associés : ${p.motifs.map((m) => m.libelle).join(', ')})`]] : []),
+        ]);
       }
       if (tx.reformule) {
         R.paragraphe(`${tx.methode >= 2 ? 'Texte rédigé à partir des saisies du patient (motifs et commentaires, orthographe corrigée, traduit en français si nécessaire)' : 'Texte corrigé et raccourci'}, relu et validé par le patient${tx.valideeLeUtc ? ` le ${C.formatDateHeure(tx.valideeLeUtc)}` : ''}.`, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
@@ -650,6 +783,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     }
   }
 
+  R.dessinerSommaire(pageSommaire, ySommaire, 1);
   R.paginer('Document personnel et confidentiel – données de santé');
   return doc.save();
 }
