@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.9.0';
+export const VERSION_APP = '1.11.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -311,12 +311,19 @@ export const MODALITES = { teletravail: 'Télétravail', sur_site: 'Sur site' };
 
 const nombreOuNull = (v, min, max) => (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? Math.round(v * 1e5) / 1e5 : null);
 
-/** Lieu normalisé { nom, region, pays, codePays, lat, lon, source } ou null. */
+/** Pas de lieu fixe sur la période : randonnée, tour à vélo, balade… */
+export const LIEU_ITINERANCE = Object.freeze({ nom: 'Itinérance', region: '', pays: '', codePays: '', lat: null, lon: null, source: 'itinerance' });
+export const estItinerance = (l) => !!l && l.source === 'itinerance';
+export const LONGUEUR_ACTIVITE = 80;
+
+/** Lieu normalisé { nom, region, pays, codePays, lat, lon, source, activite? } ou null. */
 export function normaliserLieu(l) {
   if (!l) return null;
-  const nom = String(l.nom || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  if (!nom) return null;
   const txt = (v, n = 120) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
+  const activite = txt(l.activite, LONGUEUR_ACTIVITE);
+  if (l.source === 'itinerance') return { ...LIEU_ITINERANCE, ...(activite ? { activite } : {}) };
+  const nom = txt(l.nom);
+  if (!nom) return null;
   const code = txt(l.codePays, 3).toUpperCase();
   return {
     nom,
@@ -326,7 +333,15 @@ export function normaliserLieu(l) {
     lat: nombreOuNull(l.lat, -90, 90),
     lon: nombreOuNull(l.lon, -180, 180),
     source: l.source === 'carte' ? 'carte' : 'libre',
+    ...(activite ? { activite } : {}),
   };
+}
+
+/** Le lieu seul, sans l'activité (pour le proposer à nouveau). */
+export function lieuSansActivite(l) {
+  if (!l) return null;
+  const { activite, ...reste } = l;
+  return reste;
 }
 
 /** Clé de regroupement : même nom (sans accents ni casse) et même pays. */
@@ -336,10 +351,63 @@ export function cleLieu(l) {
 
 export function libelleLieu(l, { complet = false } = {}) {
   if (!l) return '';
+  if (estItinerance(l)) return complet ? 'Itinérance (randonnée, vélo, balade…)' : 'Itinérance';
   if (!complet) return l.nom;
   const details = [l.region && normaliserLibelle(l.region) !== normaliserLibelle(l.nom) ? l.region : '', l.pays].filter(Boolean);
   return details.length ? `${l.nom} (${details.join(', ')})` : l.nom;
 }
+
+export const MAX_LIEUX = 8;
+
+/** Liste ordonnée de lieux normalisés (lieux vides ignorés, au plus MAX_LIEUX). */
+export function normaliserLieux(liste) {
+  return (Array.isArray(liste) ? liste : [liste]).map(normaliserLieu).filter(Boolean).slice(0, MAX_LIEUX);
+}
+
+/**
+ * Lieux d'une évaluation, dans l'ordre de la journée. Les évaluations anciennes (ou modifiées sur un
+ * appareil pas encore mis à jour) n'ont que « lieu » : on s'y fie si la liste ne commence pas par lui.
+ */
+export function lieuxDe(e) {
+  if (!e) return [];
+  if (Array.isArray(e.lieux) && e.lieux.length && cleLieu(e.lieux[0]) === cleLieu(e.lieu)) return e.lieux;
+  return e.lieu ? [e.lieu] : [];
+}
+
+/** « Arsdorf → Schouweiler (pédicure médicale) → Leudelange → Arsdorf » */
+export function libelleLieux(liste, { complet = false, activites = true, separateur = ' → ' } = {}) {
+  return (liste || []).map((l) => `${libelleLieu(l, { complet })}${activites && l.activite ? ` (${l.activite})` : ''}`).join(separateur);
+}
+
+/** Activités suggérées au départ ; celles déjà saisies passent devant. */
+export const ACTIVITES_PROPOSEES = [
+  'Lieu de travail', 'Télétravail', 'Courses', 'Restaurant', 'Visite familiale', 'Sortie entre amis',
+  'Rendez-vous médical', 'Pédicure médicale', 'Kinésithérapie', 'Séance de psychothérapie', 'Démarches administratives',
+  'Sport', 'Match de foot', 'Randonnée', 'Tour à vélo', 'Promenade', 'Cinéma', 'Concert', 'Lecture', 'Repos à la maison', 'Jardinage', 'Bricolage',
+];
+
+/** Activités déjà saisies (de la plus fréquente à la moins fréquente), puis les suggestions de départ. */
+export function activitesConnues(evaluations) {
+  const compte = new Map();
+  for (const e of evaluations) {
+    for (const l of lieuxDe(e)) {
+      if (!l.activite) continue;
+      const k = normaliserLibelle(l.activite);
+      const c = compte.get(k) || { libelle: l.activite, nombre: 0 };
+      c.nombre++;
+      compte.set(k, c);
+    }
+  }
+  const saisies = [...compte.values()].sort((a, b) => b.nombre - a.nombre || a.libelle.localeCompare(b.libelle, 'fr')).map((c) => c.libelle);
+  const vus = new Set(compte.keys());
+  return [...saisies, ...ACTIVITES_PROPOSEES.filter((a) => !vus.has(normaliserLibelle(a)))];
+}
+
+export function humeurParActivite(evaluations) {
+  return humeurParCategorie(evaluations, (e) => lieuxDe(e).filter((l) => l.activite).map((l) => l.activite), normaliserLibelle, (a) => a);
+}
+
+export function cleLieux(liste) { return (liste || []).map(cleLieu).join('>'); }
 
 /** Situation normalisée { statut, modalite } ou null. La modalité n'existe que pour le travail. */
 export function normaliserSituation(x) {
@@ -359,12 +427,15 @@ export function libelleSituation(x) {
 export function lieuxConnus(evaluations) {
   const parCle = new Map();
   for (const e of trierChrono(evaluations)) {
-    if (!e.lieu) continue;
-    const k = cleLieu(e.lieu);
-    const ex = parCle.get(k);
-    // On garde la version la plus précise (avec coordonnées) et la plus récente
-    const lieu = ex && ex.lieu.lat !== null && e.lieu.lat === null ? ex.lieu : e.lieu;
-    parCle.set(k, { cle: k, lieu, nombre: (ex ? ex.nombre : 0) + 1, dernier: e.creneauId });
+    for (const avecActivite of lieuxDe(e)) {
+      if (estItinerance(avecActivite)) continue; // proposée par son propre bouton
+      const l = lieuSansActivite(avecActivite);
+      const k = cleLieu(l);
+      const ex = parCle.get(k);
+      // On garde la version la plus précise (avec coordonnées) et la plus récente
+      const lieu = ex && ex.lieu.lat !== null && l.lat === null ? ex.lieu : l;
+      parCle.set(k, { cle: k, lieu, nombre: (ex ? ex.nombre : 0) + 1, dernier: e.creneauId });
+    }
   }
   return [...parCle.values()].sort((a, b) => (a.dernier < b.dernier ? 1 : -1));
 }
@@ -409,13 +480,15 @@ const estWeekend = (date) => { const j = new Date(`${date}T12:00:00Z`).getUTCDay
 
 /**
  * Proposition de lieu et de situation pour un créneau, d'après les évaluations précédentes :
- * lieu = celui de la dernière évaluation ; situation = celle de la dernière évaluation du même jour,
+ * lieu = le dernier lieu de la dernière évaluation ; situation = celle de la dernière évaluation du même jour,
  * sinon d'un jour du même type (semaine ou week-end). Rien n'est proposé sans antécédent.
  */
 export function suggestionContexte(evaluations, { date, creneau }) {
   const id = idCreneau(date, creneau);
   const avant = trierChrono(evaluations).filter((e) => e.creneauId < id).reverse();
-  const lieu = (avant.find((e) => e.lieu) || {}).lieu || null;
+  // Là où la période précédente s'est terminée (hors itinérance), sans l'activité
+  const precedente = avant.find((e) => lieuxDe(e).some((l) => !estItinerance(l)));
+  const lieu = precedente ? lieuSansActivite(lieuxDe(precedente).filter((l) => !estItinerance(l)).at(-1)) : null;
   const sit = avant.find((e) => e.situation && (e.date === date || estWeekend(e.date) === estWeekend(date)));
   return { lieu, situation: sit ? sit.situation : null };
 }
@@ -425,12 +498,18 @@ export function humeurParCategorie(evaluations, extraire, cle, libelle) {
   const groupes = new Map();
   let sansValeur = 0;
   for (const e of evaluations) {
-    const v = extraire(e);
-    if (!v) { sansValeur++; continue; }
-    const k = cle(v);
-    const g = groupes.get(k) || { cle: k, libelle: libelle(v), valeur: v, notes: [] };
-    g.notes.push(e.note);
-    groupes.set(k, g);
+    // Une évaluation avec plusieurs lieux compte une fois pour chacun d'eux
+    const valeurs = [].concat(extraire(e) || []).filter(Boolean);
+    if (!valeurs.length) { sansValeur++; continue; }
+    const vus = new Set();
+    for (const v of valeurs) {
+      const k = cle(v);
+      if (vus.has(k)) continue;
+      vus.add(k);
+      const g = groupes.get(k) || { cle: k, libelle: libelle(v), valeur: v, notes: [] };
+      g.notes.push(e.note);
+      groupes.set(k, g);
+    }
   }
   const lignes = [...groupes.values()].map((g) => ({
     cle: g.cle, libelle: g.libelle, valeur: g.valeur, nombre: g.notes.length,
@@ -440,7 +519,7 @@ export function humeurParCategorie(evaluations, extraire, cle, libelle) {
 }
 
 export function humeurParLieu(evaluations) {
-  return humeurParCategorie(evaluations, (e) => e.lieu, cleLieu, (l) => libelleLieu(l, { complet: true }));
+  return humeurParCategorie(evaluations, lieuxDe, cleLieu, (l) => libelleLieu(l, { complet: true }));
 }
 
 export function humeurParSituation(evaluations) {
@@ -465,7 +544,7 @@ export function ordreLieux(evaluations) {
 export function cibleCompletion(evaluations, { debut, fin, creneaux = CRENEAUX, lieu, situation, remplacer = false }) {
   return trierChrono(dansPeriode(evaluations, debut, fin)).filter((e) => {
     if (!creneaux.includes(e.creneau)) return false;
-    const changeLieu = lieu !== undefined && (remplacer || !e.lieu) && cleLieu(e.lieu) !== cleLieu(normaliserLieu(lieu));
+    const changeLieu = lieu !== undefined && (remplacer || !lieuxDe(e).length) && cleLieux(lieuxDe(e)) !== cleLieux(normaliserLieux([lieu]));
     const changeSit = situation !== undefined && (remplacer || !e.situation) && cleSituation(e.situation) !== cleSituation(normaliserSituation(situation));
     return changeLieu || changeSit;
   });
@@ -477,7 +556,7 @@ export function appliquerCompletion(evaluations, options, instant = Date.now()) 
   const modifiees = [];
   for (const e of cibleCompletion(evaluations, options)) {
     const saisie = {};
-    if (n.lieu !== undefined && (options.remplacer || !e.lieu)) saisie.lieu = n.lieu;
+    if (n.lieu !== undefined && (options.remplacer || !lieuxDe(e).length)) saisie.lieux = n.lieu ? [n.lieu] : [];
     if (n.situation !== undefined && (options.remplacer || !e.situation)) saisie.situation = n.situation;
     const r = modifierEvaluation(e, saisie, options.raison || 'Lieu et situation complétés a posteriori', instant);
     if (r) modifiees.push(r);
@@ -507,7 +586,10 @@ export function validerSaisie(s) {
     if (!POLARITES.includes(a.polarite)) erreurs.push('Polarité de motif inconnue.');
   }
   if (s.situation && !SITUATIONS[s.situation.statut]) erreurs.push('Situation professionnelle inconnue.');
-  if (s.lieu && String(s.lieu.nom || '').length > 120) erreurs.push('Nom de lieu trop long (120 caractères maximum).');
+  const lieuxSaisis = s.lieux !== undefined ? [].concat(s.lieux || []) : [].concat(s.lieu || []);
+  if (lieuxSaisis.some((l) => l && String(l.nom || '').length > 120)) erreurs.push('Nom de lieu trop long (120 caractères maximum).');
+  if (lieuxSaisis.some((l) => l && String(l.activite || '').trim().length > LONGUEUR_ACTIVITE)) erreurs.push(`Activité trop longue (${LONGUEUR_ACTIVITE} caractères maximum).`);
+  if (lieuxSaisis.filter(Boolean).length > MAX_LIEUX) erreurs.push(`${MAX_LIEUX} lieux au maximum par évaluation.`);
   return erreurs;
 }
 
@@ -556,7 +638,7 @@ export function creerEvaluation(saisie, instant = Date.now()) {
     explication: nettoyerTexte(saisie.explication),
     complement: nettoyerTexte(saisie.complement),
     prevision: construirePrevision(date, creneau, saisie.prevision),
-    lieu: normaliserLieu(saisie.lieu),
+    ...champsLieux(saisie.lieux !== undefined ? saisie.lieux : saisie.lieu),
     situation: normaliserSituation(saisie.situation),
     securite: verificationSecurite(saisie.note, textes),
     source: 'application',
@@ -567,11 +649,17 @@ export function creerEvaluation(saisie, instant = Date.now()) {
   };
 }
 
-const CHAMPS_MODIFIABLES = ['note', 'motifs', 'autresMotifs', 'explication', 'complement', 'prevision', 'lieu', 'situation'];
+/** { lieu, lieux } : « lieu » (le premier) reste renseigné pour les appareils pas encore mis à jour. */
+function champsLieux(saisie) {
+  const lieux = normaliserLieux(saisie == null ? [] : saisie);
+  return { lieu: lieux[0] || null, lieux };
+}
+
+const CHAMPS_MODIFIABLES = ['note', 'motifs', 'autresMotifs', 'explication', 'complement', 'prevision', 'lieux', 'situation'];
 export const LIBELLE_CHAMP = {
   note: 'Note', niveau: 'Niveau', motifs: 'Motifs', autresMotifs: 'Autres motifs', explication: 'Explication',
   complement: 'Complément', prevision: 'Prévision', reformulation: 'Version pour le rapport',
-  lieu: 'Lieu', situation: 'Situation professionnelle',
+  lieu: 'Lieu', lieux: 'Lieux', situation: 'Situation professionnelle',
 };
 
 /**
@@ -587,7 +675,7 @@ export function modifierEvaluation(ev, saisie, raison, instant = Date.now()) {
     explication: saisie.explication ?? ev.explication,
     complement: saisie.complement ?? ev.complement,
     prevision: saisie.prevision === undefined ? (ev.prevision ? { ...ev.prevision } : null) : saisie.prevision,
-    lieu: saisie.lieu === undefined ? ev.lieu : saisie.lieu,
+    lieux: saisie.lieux !== undefined ? saisie.lieux : saisie.lieu !== undefined ? [].concat(saisie.lieu || []) : lieuxDe(ev),
     situation: saisie.situation === undefined ? ev.situation : saisie.situation,
   };
   const erreurs = validerSaisie(fusion);
@@ -599,12 +687,12 @@ export function modifierEvaluation(ev, saisie, raison, instant = Date.now()) {
     explication: nettoyerTexte(fusion.explication),
     complement: nettoyerTexte(fusion.complement),
     prevision: saisie.prevision === undefined ? ev.prevision : construirePrevision(ev.date, ev.creneau, fusion.prevision),
-    lieu: saisie.lieu === undefined ? (ev.lieu ?? null) : normaliserLieu(fusion.lieu),
+    ...champsLieux(fusion.lieux),
     situation: saisie.situation === undefined ? (ev.situation ?? null) : normaliserSituation(fusion.situation),
   };
   const changements = [];
   for (const champ of CHAMPS_MODIFIABLES) {
-    const avant = ev[champ] ?? null;
+    const avant = champ === 'lieux' ? lieuxDe(ev) : (ev[champ] ?? null);
     const apres = nouveau[champ] ?? null;
     if (JSON.stringify(avant) !== JSON.stringify(apres)) changements.push({ champ, avant, apres });
   }
@@ -1137,12 +1225,14 @@ function verifierEvaluation(e) {
   const ok = e && typeof e.id === 'string' && estDateValide(e.date) && CRENEAUX.includes(e.creneau)
     && Number.isInteger(e.note) && e.note >= 0 && e.note <= 10 && e.creneauId === idCreneau(e.date, e.creneau);
   if (!ok) throw new Error(`Évaluation invalide dans le fichier (${e && e.id ? e.id : 'sans identifiant'}).`);
-  return {
-    motifs: [], autresMotifs: [], explication: '', complement: '', prevision: null, lieu: null, situation: null, historique: [],
+  const r = {
+    motifs: [], autresMotifs: [], explication: '', complement: '', prevision: null, lieu: null, lieux: [], situation: null, historique: [],
     securite: { declenchee: false, raisons: [] }, version: 1, modifieLeUtc: null, validationConnue: !!e.valideLeUtc,
     niveau: nomNiveau(e.note), rappelPrevuUtc: new Date(heurePrevue(e.date, e.creneau)).toISOString(),
     ...e,
   };
+  r.lieux = lieuxDe(r);
+  return r;
 }
 
 function verifierMotif(m) {
@@ -1173,7 +1263,7 @@ const COLONNES_EVAL = [
   'heure_validation_connue', 'saisie_retrospective', 'note', 'niveau', 'motifs', 'autres_motifs', 'explication',
   'complement', 'prevision_cible', 'prevision_note', 'prevision_niveau', 'prevision_motif', 'verification_securite',
   'source', 'note_origine', 'cree_le_utc', 'modifie_le_utc', 'version', 'motifs_json', 'autres_motifs_json', 'prevision_json',
-  'securite_json', 'reformulation_json', 'historique_json', 'lieu', 'situation', 'lieu_json', 'situation_json',
+  'securite_json', 'reformulation_json', 'historique_json', 'lieu', 'situation', 'lieu_json', 'situation_json', 'lieux_json',
 ];
 const COLONNES_MOTIF = ['id', 'libelle', 'polarite', 'actif', 'regroupe_dans', 'ordre', 'origine', 'cree_le_utc', 'modifie_le_utc'];
 
@@ -1204,8 +1294,9 @@ export function exporterCSVEvaluations(evaluations) {
       prevision_json: JSON.stringify(p || null), securite_json: JSON.stringify(e.securite || null),
       reformulation_json: 'reformulation' in e ? JSON.stringify(e.reformulation ?? null) : '',
       historique_json: JSON.stringify(e.historique || []),
-      lieu: libelleLieu(e.lieu, { complet: true }), situation: libelleSituation(e.situation),
+      lieu: libelleLieux(lieuxDe(e), { complet: true }), situation: libelleSituation(e.situation),
       lieu_json: e.lieu ? JSON.stringify(e.lieu) : '', situation_json: e.situation ? JSON.stringify(e.situation) : '',
+      lieux_json: lieuxDe(e).length > 1 || lieuxDe(e).some((l) => l.activite) ? JSON.stringify(lieuxDe(e)) : '',
     };
     lignes.push(COLONNES_EVAL.map((c) => celluleCSV(v[c])).join(';'));
   }
@@ -1265,7 +1356,7 @@ export function lireCSV(texte) {
         source: r.source || 'import', ...(r.note_origine ? { noteOrigine: r.note_origine } : {}), creeLeUtc: r.cree_le_utc || null, modifieLeUtc: r.modifie_le_utc || null,
         version: Number.parseInt(r.version, 10) || 1, historique: json('historique_json', []),
         ...(r.reformulation_json ? { reformulation: json('reformulation_json', null) } : {}),
-        ...('lieu_json' in r ? { lieu: r.lieu_json ? normaliserLieu(json('lieu_json', null)) : null } : {}),
+        ...('lieu_json' in r ? champsLieux(r.lieux_json ? json('lieux_json', []) : (r.lieu_json ? json('lieu_json', null) : [])) : {}),
         ...('situation_json' in r ? { situation: r.situation_json ? normaliserSituation(json('situation_json', null)) : null } : {}),
       });
     });

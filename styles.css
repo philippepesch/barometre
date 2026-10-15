@@ -402,6 +402,19 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .combo-message { padding: 8px 14px; font-size: .9rem; }
 .combo-etat { margin: 6px 0 0; font-size: .88rem; min-height: 0; }
 .champ-situation { border: 0; padding: 0; margin: 18px 0 0; min-width: 0; }
+.nombre-lieux { border: 0; padding: 0; margin: 0 0 6px; min-width: 0; }
+.nombre-lieux legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
+.nombre-lieux .segmente span { padding: 7px 12px; min-width: 2.2em; text-align: center; }
+.nombre-lieux .aide-lieux { margin: 8px 0 0; }
+#liste-lieux .champ-lieu + .champ-lieu { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--filet); }
+.tete-lieu { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.tete-lieu label { margin: 0; }
+.puce-action { font: inherit; font-size: .88rem; font-weight: 500; color: var(--encre); background: transparent; border: 1px dashed var(--filet-fort); border-radius: 999px; padding: 5px 13px; cursor: pointer; flex: none; }
+.puce-action[aria-pressed="true"] { background: var(--bouton); color: var(--bouton-texte); border-style: solid; border-color: var(--bouton); }
+.puce-action[aria-pressed="true"] .doux { color: inherit; opacity: .8; }
+.puce-action:focus-visible { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
+.champ-activite { margin-top: 10px; }
+.champ-activite label { display: block; font-weight: 500; font-size: .95rem; margin-bottom: 4px; }
 .champ-situation legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
 
 /* Bandes de contexte sous la courbe */

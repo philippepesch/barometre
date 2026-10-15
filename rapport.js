@@ -312,22 +312,31 @@ class Redacteur {
       const demi = n > 1 ? (xDe(1) - xDe(0)) / 2 : 6;
       const bande = (titre, y0, extraire, cle, couleur) => {
         this.texte(titre, gauche, y0 - 2, { taille: 7.5, police: 'gras', couleur: DOUX });
-        const cleDe = (s) => (s.evaluation ? (extraire(s.evaluation) ? cle(extraire(s.evaluation)) : '-') : null);
+        // Plusieurs lieux dans un créneau : le segment est partagé en bandes, dans l'ordre
+        const valeursDe = (s) => [].concat(extraire(s.evaluation) || []).filter(Boolean);
+        const cleDe = (s, i) => {
+          if (!s.evaluation) return null;
+          const vs = valeursDe(s);
+          return !vs.length ? '-' : vs.length > 1 ? `${i}#multi` : cle(vs[0]);
+        };
         for (let i = 0; i < n;) {
-          const k = cleDe(grille[i]);
+          const k = cleDe(grille[i], i);
           if (k === null) { i++; continue; }
           let j = i;
-          while (j + 1 < n && cleDe(grille[j + 1]) === k) j++;
+          while (j + 1 < n && cleDe(grille[j + 1], j + 1) === k) j++;
           const x0 = Math.max(gauche, i === 0 ? xDe(0) - demi : (xDe(i - 1) + xDe(i)) / 2);
           const x1 = Math.min(droite, j === n - 1 ? xDe(n - 1) + demi : (xDe(j) + xDe(j + 1)) / 2);
-          const v = extraire(grille[i].evaluation);
+          const vs = valeursDe(grille[i]);
           const w = Math.max(1, x1 - x0 - 1.4);
-          if (v) this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur(couleur(v)) });
+          if (vs.length > 1) {
+            const l = w / vs.length;
+            vs.forEach((v, q) => this.page.drawRectangle({ x: x0 + 0.7 + q * l, y: A4[1] - y0 - 9, width: Math.max(0.6, l - 0.5), height: 9, color: this.couleur(couleur(v)) }));
+          } else if (vs.length) this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur(couleur(vs[0])) });
           else this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
           i = j + 1;
         }
       };
-      bande('Lieu', this.y + 6, (e) => e.lieu, C.cleLieu, contexte.couleurLieu);
+      bande('Lieu', this.y + 6, C.lieuxDe, C.cleLieu, contexte.couleurLieu);
       bande('Situation professionnelle', this.y + 30, (e) => e.situation, C.cleSituation, contexte.couleurSituation);
       this.y += hBandes - 6;
     }
@@ -449,7 +458,14 @@ export async function genererRapport(PDFLib, donnees, options) {
   const legendeSituations = C.ORDRE_SITUATIONS.filter((st) => parSituation.lignes.some((l) => l.valeur.statut === st)).map((st) => ({ libelle: C.SITUATIONS[st], couleur: couleurSituation({ statut: st }) }));
   if (parLieu.sansValeur && parLieu.lignes.length) legendeLieux.push({ libelle: 'non indiqué', couleur: null });
   if (parSituation.sansValeur && parSituation.lignes.length) legendeSituations.push({ libelle: 'non indiquée', couleur: null });
-  const estCompletion = (h) => h.changements.every((c) => (c.champ === 'lieu' || c.champ === 'situation') && !c.avant);
+  const estCompletion = (h) => h.changements.every((c) => ['lieu', 'lieux', 'situation'].includes(c.champ) && (!c.avant || (Array.isArray(c.avant) && !c.avant.length)));
+  // Plusieurs lieux : noms courts dans l'ordre (la flèche n'existe pas dans les polices PDF standard)
+  const libLieux = (e, complet = false) => {
+    const l = C.lieuxDe(e);
+    const act = (x) => (x.activite ? ` (${x.activite})` : '');
+    return l.length > 1 ? l.map((x) => `${x.nom}${act(x)}`).join(' › ') : `${C.libelleLieu(l[0], { complet: complet && !C.estItinerance(l[0]) })}${act(l[0])}`;
+  };
+  const parActivite = C.humeurParActivite(evals);
 
   const doc = await PDFLib.PDFDocument.create();
   const titreDoc = destinataire ? `Rapport pour ${destinataire}` : 'Rapport de suivi de l\'humeur';
@@ -617,7 +633,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
     R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations });
-    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau.' : ''}`, { taille: 8.5, couleur: DOUX });
+    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
   // 6. Tendances
@@ -656,9 +672,11 @@ export async function genererRapport(PDFLib, donnees, options) {
       if (r.sansValeur) R.paragraphe(`${C.pluriel(r.sansValeur, 'évaluation')} sans cette information.`, { taille: 8.5, couleur: DOUX });
     };
     tableCat('Lieu', parLieu);
+    if (parActivite.lignes.length) tableCat('Activité', { ...parActivite, sansValeur: 0 });
     tableCat('Situation professionnelle', parSituation);
     const peu = [...parLieu.lignes, ...parSituation.lignes].some((l) => l.nombre < 4);
-    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet.${peu ? ' Une moyenne calculée sur moins de 4 évaluations est peu représentative.' : ''}`, { taille: 8.5, couleur: DOUX });
+    const multi = evals.some((e) => C.lieuxDe(e).length > 1);
+    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « Itinérance » désigne une période sans lieu fixe (randonnée, vélo, balade).' : ''}${peu ? ' Une moyenne calculée sur moins de 4 évaluations est peu représentative.' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
   // 10. Prévisions et réalité
@@ -715,7 +733,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.tableau(
       [{ titre: 'Créneau', part: 1.3 }, { titre: 'Note', part: 1.3 }, { titre: 'Saisie', part: 1.3 }, { titre: 'Motifs et commentaire', part: 4.2 }],
       evals.map((e) => [
-        [libCreneau(e), e.lieu ? C.libelleLieu(e.lieu) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
+        [libCreneau(e), e.lieu ? libLieux(e) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
         [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' '))].filter(Boolean).join(' — ') || '—',
       ]),
       { taille: 8.5 },
@@ -739,7 +757,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.paragraphe(meta.join('   |   '), { taille: 8.5, couleur: DOUX, apres: 3 });
       if (e.lieu || e.situation) {
         R.riche([
-          ...(e.lieu ? [['Lieu : ', 'gras'], [C.libelleLieu(e.lieu, { complet: true })]] : []),
+          ...(e.lieu ? [[C.lieuxDe(e).length > 1 ? 'Lieux : ' : 'Lieu : ', 'gras'], [libLieux(e, true)]] : []),
           ...(e.lieu && e.situation ? [['   |   ', 'normal', FILET]] : []),
           ...(e.situation ? [['Situation : ', 'gras'], [C.libelleSituation(e.situation)]] : []),
         ]);

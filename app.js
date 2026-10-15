@@ -558,10 +558,11 @@ function blocContexte(evals) {
   };
   const pl = C.humeurParLieu(evals);
   const ps = C.humeurParSituation(evals);
+  const pa = C.humeurParActivite(evals);
   const peu = [...pl.lignes, ...ps.lignes].some((l) => l.nombre < 4);
   return `<section class="bloc" aria-labelledby="titre-contexte"><h2 id="titre-contexte">Humeur selon le lieu et la situation</h2>
     <p class="doux">Moyenne de tes notes pour chaque lieu et chaque situation de la période. Ce sont des constats, pas des causes : d'autres facteurs peuvent jouer.${peu ? ' Avec moins de 4 évaluations, une moyenne est peu représentative.' : ''}</p>
-    <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu)}${table('Situation', ps, coul.situation)}</div>
+    <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu)}${table('Situation', ps, coul.situation)}${pa.lignes.length ? table('Activité', { ...pa, sansValeur: 0 }, () => 'var(--filet-fort)') : ''}</div>
     ${lienCompleter}</section>`;
 }
 
@@ -581,9 +582,9 @@ function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre) {
   const vus = new Map();
   let vide = false;
   for (const e of evals) {
-    const v = extraire(e);
-    if (!v) { vide = true; continue; }
-    if (!vus.has(cle(v))) vus.set(cle(v), v);
+    const vs = [].concat(extraire(e) || []).filter(Boolean);
+    if (!vs.length) { vide = true; continue; }
+    for (const v of vs) if (!vus.has(cle(v))) vus.set(cle(v), v);
   }
   if (!vus.size) return '';
   const items = [...vus.values()].sort((a, b) => ordre(a) - ordre(b));
@@ -643,31 +644,40 @@ function graphiqueHTML(grille, prev) {
     const bande = (titre, y0, extraire, cle, couleur) => {
       svg += `<text class="bande-titre" x="${g}" y="${y0}">${titre}</text>`;
       const yb = y0 + 5, hb = 11;
-      const cleDe = (s) => (s.evaluation ? (extraire(s.evaluation) ? cle(extraire(s.evaluation)) : '-') : null);
+      // Plusieurs lieux dans un créneau : le segment est partagé en bandes, dans l'ordre
+      const valeursDe = (s) => [].concat(extraire(s.evaluation) || []).filter(Boolean);
+      const cleDe = (s, i) => {
+        if (!s.evaluation) return null;
+        const vs = valeursDe(s);
+        return !vs.length ? '-' : vs.length > 1 ? `${i}#multi` : cle(vs[0]);
+      };
       for (let i = 0; i < n;) {
-        const k = cleDe(grille[i]);
+        const k = cleDe(grille[i], i);
         if (k === null) { i++; continue; }
         let j = i;
-        while (j + 1 < n && cleDe(grille[j + 1]) === k) j++;
+        while (j + 1 < n && cleDe(grille[j + 1], j + 1) === k) j++;
         const x0 = Math.max(g, i === 0 ? x(0) - demi : (x(i - 1) + x(i)) / 2);
         const x1 = Math.min(W - d, j === n - 1 ? x(n - 1) + demi : (x(j) + x(j + 1)) / 2);
-        const v = extraire(grille[i].evaluation);
-        svg += `<rect class="segment" x="${(x0 + 1).toFixed(1)}" y="${yb}" width="${Math.max(1.5, x1 - x0 - 2).toFixed(1)}" height="${hb}" rx="2.5" fill="${v ? couleur(v) : 'url(#hachures)'}"/>`;
+        const vs = valeursDe(grille[i]);
+        if (vs.length > 1) {
+          const l = (x1 - x0 - 2) / vs.length;
+          vs.forEach((v, q) => { svg += `<rect class="segment" x="${(x0 + 1 + q * l).toFixed(1)}" y="${yb}" width="${Math.max(1, l - 0.8).toFixed(1)}" height="${hb}" rx="1.5" fill="${couleur(v)}"/>`; });
+        } else svg += `<rect class="segment" x="${(x0 + 1).toFixed(1)}" y="${yb}" width="${Math.max(1.5, x1 - x0 - 2).toFixed(1)}" height="${hb}" rx="2.5" fill="${vs.length ? couleur(vs[0]) : 'url(#hachures)'}"/>`;
         i = j + 1;
       }
     };
     const yb0 = H0 - 44 + 30 + 22;
     svg = `<defs><pattern id="hachures" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--filet-fort)" stroke-width="1.6"/></pattern></defs>${svg}`;
-    bande('Lieu', yb0, (e) => e.lieu, C.cleLieu, coul.lieu);
+    bande('Lieu', yb0, C.lieuxDe, C.cleLieu, coul.lieu);
     bande('Situation', yb0 + 30, (e) => e.situation, C.cleSituation, coul.situation);
   }
   svg += '<line class="curseur-vertical" x1="0" x2="0" y1="0" y2="0" visibility="hidden"/>';
   donneesGraphique = { grille, x, W, H, prevParCible, haut: h, bas: H0 - 44 };
   const nbRep = grille.filter((s) => s.evaluation).length;
-  const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td>${avecContexte ? `<td>${s.evaluation && s.evaluation.lieu ? esc(C.libelleLieu(s.evaluation.lieu)) : '—'}</td><td>${s.evaluation && s.evaluation.situation ? esc(C.libelleSituation(s.evaluation.situation)) : '—'}</td>` : ''}</tr>`).join('');
+  const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td>${avecContexte ? `<td>${s.evaluation && s.evaluation.lieu ? esc(C.libelleLieux(C.lieuxDe(s.evaluation))) : '—'}</td><td>${s.evaluation && s.evaluation.situation ? esc(C.libelleSituation(s.evaluation.situation)) : '—'}</td>` : ''}</tr>`).join('');
   const evalsGrille = grille.filter((s) => s.evaluation).map((s) => s.evaluation);
   const ordreLieu = (l) => { const i = coul.ordre.indexOf(C.cleLieu(l)); return i < 0 ? 999 : i; };
-  const legendes = avecContexte ? `${legendeContexte('Lieu', evalsGrille, (e) => e.lieu, C.cleLieu, (l) => C.libelleLieu(l), coul.lieu, ordreLieu)}
+  const legendes = avecContexte ? `${legendeContexte('Lieu', evalsGrille, C.lieuxDe, C.cleLieu, (l) => C.libelleLieu(l), coul.lieu, ordreLieu)}
     ${legendeContexte('Situation', evalsGrille, (e) => e.situation, (x) => x.statut, (x) => C.SITUATIONS[x.statut], coul.situation, (x) => C.ORDRE_SITUATIONS.indexOf(x.statut))}` : '';
   return `<div class="graphique" id="graphique">
       <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe de ${nbRep} notes sur la période">${svg}</svg>
@@ -700,7 +710,7 @@ function attacherGraphique() {
     const lignes = [`<strong>${esc(C.formatDateMoyenne(s.date))}, ${s.creneau}</strong>`];
     if (s.evaluation) {
       lignes.push(`<span class="ligne-meteo">${iconeMeteo(s.evaluation.note, { taille: 22 })}${esc(C.libelleNote(s.evaluation.note))}</span>`);
-      if (s.evaluation.lieu) lignes.push(esc(C.libelleLieu(s.evaluation.lieu)));
+      if (s.evaluation.lieu) lignes.push(esc(C.libelleLieux(C.lieuxDe(s.evaluation))));
       if (s.evaluation.situation) lignes.push(esc(C.libelleSituation(s.evaluation.situation)));
     } else lignes.push(esc(C.STATUTS[s.statut]));
     if (l) lignes.push(`Prévu : ${l.prevue}/10`);
@@ -794,7 +804,8 @@ function formulaire(cible, ev) {
   const titre = `Évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'}`;
   // Contexte : valeurs de l'évaluation modifiée, sinon proposition d'après les évaluations précédentes
   const proposition = ev ? null : C.suggestionContexte(etat.evaluations, cible);
-  const lieuInitial = ev ? (ev.lieu || null) : proposition.lieu;
+  const lieuxInitiaux = ev ? C.lieuxDe(ev) : (proposition.lieu ? [proposition.lieu] : []);
+  const lieuInitial = lieuxInitiaux[0] || null;
   const situationInitiale = ev ? (ev.situation || null) : proposition.situation;
   const repris = !ev && (lieuInitial || situationInitiale);
 
@@ -822,9 +833,9 @@ function formulaire(cible, ev) {
 
     <section class="question" aria-labelledby="q4">
       <p class="question-numero">Contexte</p>
-      <h2 id="q4">Où es-tu, et quelle est ta situation ?</h2>
-      <p class="doux">${repris ? 'Repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif. Cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
-      ${L.champLieuHTML('lieu', lieuInitial)}
+      <h2 id="q4">Où as-tu été, et quelle est ta situation ?</h2>
+      <p class="doux">Indique les lieux où tu as été <strong>depuis ton évaluation précédente</strong>, soit environ les 12 dernières heures${cible.creneau === 'matin' ? ' (la soirée et la nuit)' : ' (la journée)'}. ${repris ? 'Le lieu est repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif : cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
+      ${L.champLieuxHTML(lieuxInitiaux, { activites: C.activitesConnues(etat.evaluations) })}
       ${L.champSituationHTML('situation', situationInitiale)}
     </section>
 
@@ -871,7 +882,7 @@ function formulaire(cible, ev) {
   </form>`;
 
   const form = document.getElementById('form-eval');
-  const champLieu = L.brancherChampLieu('lieu', { initial: lieuInitial, connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
+  const champLieux = L.brancherChampLieux(form, { initial: lieuxInitiaux, connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
   const champSituation = L.brancherChampSituation(form, 'situation');
   const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix, idIcone) => {
     const c = document.getElementById(idCurseur);
@@ -981,7 +992,7 @@ function formulaire(cible, ev) {
           motif: document.getElementById('prevision-motif').value,
           motifs: resoudre(new Set([...form.querySelectorAll('[name="motif-prev"]:checked')].map((c) => c.value)), extraPrev),
         },
-        lieu: champLieu.valeur(),
+        lieux: champLieux.valeurs(),
         situation: champSituation.valeur(),
       };
       let resultat;
@@ -1023,6 +1034,7 @@ function vueFiche([id]) {
     if (c === 'motifs' || c === 'autresMotifs') return v.length ? esc(v.map((m) => m.libelle).join(', ')) : '<em>aucun</em>';
     if (c === 'reformulation') return `${esc(C.STATUTS_REFORMULATION[v.statut] || v.statut)}${v.source === 'assistant' ? ' (proposée par un assistant)' : ''}`;
     if (c === 'lieu') return esc(C.libelleLieu(v, { complet: true }));
+    if (c === 'lieux') return v.length ? esc(C.libelleLieux(v, { complet: true })) : '<em>aucun</em>';
     if (c === 'situation') return esc(C.libelleSituation(v));
     if (c === 'prevision') return Number.isInteger(v.note) ? esc(`${C.libelleNote(v.note)}${v.motif ? ` – ${v.motif}` : ''}`) : esc(v.motif || 'aucune note');
     return `<span class="texte-libre">${esc(v)}</span>`;
@@ -1037,7 +1049,7 @@ function vueFiche([id]) {
       <dt>Validation</dt><dd>${ev.validationConnue ? C.formatDateHeure(ev.valideLeUtc) : 'Heure réelle inconnue (donnée historique)'}${ev.saisieRetrospective ? ' — saisie rétrospective, après la fin du créneau' : ''}</dd>
       ${ev.modifieLeUtc ? `<dt>Dernière modification</dt><dd>${C.formatDateHeure(ev.modifieLeUtc)}</dd>` : ''}
       ${ev.noteOrigine ? `<dt>Origine</dt><dd>${esc(ev.noteOrigine)}</dd>` : ''}
-      <dt>Lieu</dt><dd>${ev.lieu ? `${esc(C.libelleLieu(ev.lieu, { complet: true }))}${ev.lieu.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}` : '<span class="doux">non indiqué</span>'}</dd>
+      <dt>${C.lieuxDe(ev).length > 1 ? 'Lieux' : 'Lieu'}</dt><dd>${C.lieuxDe(ev).length ? C.lieuxDe(ev).map((l) => `${esc(C.libelleLieu(l, { complet: !C.estItinerance(l) }))}${l.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}${l.activite ? ` : <em>${esc(l.activite)}</em>` : ''}`).join(' <span class="doux">→</span> ') : '<span class="doux">non indiqué</span>'}</dd>
       <dt>Situation</dt><dd>${ev.situation ? esc(C.libelleSituation(ev.situation)) : '<span class="doux">non indiquée</span>'}</dd>
       <dt>Motifs</dt><dd><div class="puces">${libM([...ev.motifs, ...ev.autresMotifs])}</div></dd>
       ${ev.explication ? `<dt>Explication</dt><dd class="texte-libre">${esc(ev.explication)}</dd>` : ''}
@@ -1048,7 +1060,7 @@ function vueFiche([id]) {
     </dl></div>
     ${C.aDesTextes(ev) ? blocVersionRapport(ev) : ''}
     ${ev.historique && ev.historique.length ? `<div class="bloc"><h2>Historique des modifications</h2><ol class="historique">${ev.historique.map((h) => `<li><strong>${C.formatDateHeure(h.le)}</strong> (version ${h.version})${h.raison ? ` — raison : ${esc(h.raison)}` : ''}
-      <ul>${h.changements.map((c) => `<li>${esc(C.LIBELLE_CHAMP[c.champ] || c.champ)} : ${valeur(c.champ, c.avant)} → ${valeur(c.champ, c.apres)}</li>`).join('')}</ul></li>`).join('')}</ol></div>` : ''}
+      <ul>${h.changements.map((c) => `<li>${esc(c.champ === 'lieux' && (c.avant || []).length <= 1 && (c.apres || []).length <= 1 ? 'Lieu' : (C.LIBELLE_CHAMP[c.champ] || c.champ))} : ${valeur(c.champ, c.avant)} → ${valeur(c.champ, c.apres)}</li>`).join('')}</ul></li>`).join('')}</ol></div>` : ''}
     <div class="rangee">
       <a class="bouton" href="#/modifier/${esc(ev.id)}">Modifier</a>
       <button type="button" class="bouton-secondaire" data-action="retirer" data-id="${esc(ev.id)}">Retirer…</button>
@@ -1087,7 +1099,7 @@ function vueContexte() {
   const finDefaut = (incompletes[incompletes.length - 1] || toutes[toutes.length - 1] || { date: aujourdhui() }).date;
   const tuile = (v, l) => `<div class="tuile"><div class="tuile-valeur">${v}</div><div class="tuile-libelle">${l}</div></div>`;
   const lignes = [...toutes].reverse().map((e) => `<tr><td>${esc(C.formatDateCourte(e.date))}</td><td>${e.creneau}</td><td class="nombre">${e.note}</td>
-    <td>${e.lieu ? esc(C.libelleLieu(e.lieu)) : '<span class="doux">—</span>'}</td><td>${e.situation ? esc(C.libelleSituation(e.situation)) : '<span class="doux">—</span>'}</td>
+    <td>${e.lieu ? esc(C.libelleLieux(C.lieuxDe(e))) : '<span class="doux">—</span>'}</td><td>${e.situation ? esc(C.libelleSituation(e.situation)) : '<span class="doux">—</span>'}</td>
     <td><a class="bouton-discret" href="#/modifier/${esc(e.id)}">Modifier</a></td></tr>`).join('');
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Lieu et situation des évaluations passées</h1>

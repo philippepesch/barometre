@@ -20,9 +20,10 @@ export async function rechercherEnLigne(texte, { signal, fetch: f = globalThis.f
   throw new Error(`service de recherche indisponible (${derniere})`);
 }
 
-export function champLieuHTML(id, lieu) {
-  return `<div class="champ champ-lieu">
-    <label for="${id}">Lieu où tu te trouves</label>
+export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', activite = false, itinerance = false } = {}) {
+  const itin = C.estItinerance(lieu);
+  return `<div class="champ champ-lieu${itin ? ' est-itinerance' : ''}">
+    ${itinerance ? `<div class="tete-lieu"><label for="${id}">${esc(libelle)}</label><button type="button" class="puce-action" id="${id}-itinerance" aria-pressed="${itin}" title="Pas de lieu fixe : randonnée, tour à vélo, balade…">Itinérance</button></div>` : `<label for="${id}">${esc(libelle)}</label>`}
     <div class="combo">
       <input type="text" id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-liste" autocomplete="off" autocapitalize="words" spellcheck="false" maxlength="120"
         placeholder="Tape les premières lettres : Arsdorf, Luxembourg, Lisbonne…" value="${esc(C.libelleLieu(lieu, { complet: true }))}">
@@ -30,6 +31,10 @@ export function champLieuHTML(id, lieu) {
       <ul class="combo-liste" id="${id}-liste" role="listbox" aria-label="Lieux proposés" hidden></ul>
     </div>
     <p class="doux combo-etat" id="${id}-etat" aria-live="polite"></p>
+    ${activite ? `<div class="champ-activite">
+      <label for="${id}-activite">Ce que tu y as fait <small class="doux">(facultatif)</small></label>
+      <input type="text" id="${id}-activite" list="liste-activites" autocomplete="off" autocapitalize="sentences" maxlength="${C.LONGUEUR_ACTIVITE}" placeholder="Courses, restaurant, visite familiale…" value="${esc(lieu && lieu.activite ? lieu.activite : '')}">
+    </div>` : ''}
   </div>`;
 }
 
@@ -52,7 +57,7 @@ export function brancherChampLieu(id, { initial = null, connus = [], enLigne = t
   const decrire = () => {
     if (!input.value.trim()) { etat.textContent = ''; return; }
     const l = resoudre();
-    if (!l) etat.textContent = '';
+    if (!l || C.estItinerance(l)) etat.textContent = '';
     else if (l.source === 'carte') etat.textContent = `Lieu reconnu : ${[l.nom, l.region, l.pays].filter(Boolean).join(', ')}.`;
     else etat.textContent = 'Lieu enregistré tel que tu l\'as écrit. Pour qu\'il soit reconnu sur la carte, choisis une proposition de la liste.';
   };
@@ -109,11 +114,11 @@ export function brancherChampLieu(id, { initial = null, connus = [], enLigne = t
       controleur = new AbortController();
       try {
         const res = await rechercherEnLigne(texte, { signal: controleur.signal, fetch: f });
-        if (n !== requete) return;
+        if (n !== requete || document.activeElement !== input) return; // l'utilisateur est passé à autre chose
         const distants = res.filter((l) => !dejaVus.has(C.cleLieu(l)));
         dessiner(locaux, distants, distants.length || locaux.length ? '' : 'Aucun lieu trouvé : ton texte sera enregistré tel quel.');
       } catch (e) {
-        if (e.name === 'AbortError' || n !== requete) return;
+        if (e.name === 'AbortError' || n !== requete || document.activeElement !== input) return;
         dessiner(locaux, [], 'Recherche mondiale momentanément indisponible : ton texte sera enregistré tel quel.');
       }
     }, 300);
@@ -143,6 +148,7 @@ export function brancherChampLieu(id, { initial = null, connus = [], enLigne = t
     if (!t) return null;
     if (choisi && (t === C.libelleLieu(choisi, { complet: true }) || t === choisi.nom)) return choisi;
     const k = C.normaliserLibelle(t);
+    if (k.startsWith('itinerance')) return { ...C.LIEU_ITINERANCE };
     const connu = connus.find((c) => C.normaliserLibelle(c.lieu.nom) === k || C.normaliserLibelle(C.libelleLieu(c.lieu, { complet: true })) === k);
     if (connu) return connu.lieu;
     return C.normaliserLieu({ nom: t, source: 'libre' });
@@ -185,4 +191,72 @@ export function brancherChampSituation(racine, nom, { surChangement = () => {} }
   zone.addEventListener('change', maj);
   if (effacer) effacer.addEventListener('click', () => { zone.querySelectorAll('input').forEach((i) => { i.checked = false; }); maj(); });
   return { valeur: lire };
+}
+
+// ---------------------------------------------------------------------------
+// Plusieurs lieux pour une même évaluation, dans l'ordre (par ex. Arsdorf → Schouweiler → Leudelange → Arsdorf)
+
+const NB_PROPOSES = C.MAX_LIEUX;
+const idLieu = (i) => (i === 0 ? 'lieu' : `lieu-${i + 1}`);
+const ordinal = (i) => (i === 0 ? '1er lieu' : `${i + 1}e lieu`);
+
+export function champLieuxHTML(lieux, { activites = [] } = {}) {
+  const n = Math.max(1, Math.min(NB_PROPOSES, (lieux || []).length || 1));
+  return `<div class="champ-lieux" id="zone-lieux">
+    <fieldset class="champ nombre-lieux">
+      <legend>Nombre de lieux</legend>
+      <div class="segmente">${Array.from({ length: NB_PROPOSES }, (_, i) => `<label><input type="radio" name="nb-lieux" value="${i + 1}" ${i + 1 === n ? 'checked' : ''}><span>${i + 1}</span></label>`).join('')}</div>
+      <p class="doux aide-lieux" ${n > 1 ? '' : 'hidden'}>Indique-les dans l'ordre où tu y es allé.</p>
+    </fieldset>
+    <div id="liste-lieux">${champsHTML(lieux, n)}</div>
+    <datalist id="liste-activites">${activites.map((a) => `<option value="${esc(a)}"></option>`).join('')}</datalist>
+  </div>`;
+}
+
+function champsHTML(lieux, n) {
+  return Array.from({ length: n }, (_, i) => champLieuHTML(idLieu(i), (lieux || [])[i] || null, { libelle: n === 1 ? 'Lieu' : ordinal(i), activite: true, itinerance: true })).join('');
+}
+
+/** Branche le choix du nombre de lieux et les champs ; retourne { valeurs() } → liste ordonnée (cases vides ignorées). */
+export function brancherChampLieux(racine, { initial = [], connus = [], enLigne = true, fetch: f } = {}) {
+  const zone = racine.querySelector('#zone-lieux');
+  const liste = zone.querySelector('#liste-lieux');
+  const aide = zone.querySelector('.aide-lieux');
+  let champs = [];
+  const brancher = (valeurs) => {
+    champs = valeurs.map((v, i) => {
+      const id = idLieu(i);
+      const boutonItin = document.getElementById(`${id}-itinerance`);
+      const marquer = (l) => {
+        const itin = C.estItinerance(l);
+        boutonItin.setAttribute('aria-pressed', String(itin));
+        boutonItin.closest('.champ-lieu').classList.toggle('est-itinerance', itin);
+      };
+      const champ = brancherChampLieu(id, { initial: v ? C.lieuSansActivite(v) : null, connus, enLigne, fetch: f, surChangement: marquer });
+      boutonItin.addEventListener('click', () => {
+        if (C.estItinerance(champ.valeur())) { champ.definir(null); marquer(null); document.getElementById(id).focus(); return; }
+        champ.definir({ ...C.LIEU_ITINERANCE });
+        marquer(C.LIEU_ITINERANCE);
+        document.getElementById(`${id}-activite`).focus();
+      });
+      const activite = document.getElementById(`${id}-activite`);
+      return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); return l ? C.normaliserLieu({ ...l, activite: a }) : null; } };
+    });
+  };
+  brancher(Array.from({ length: Math.max(1, initial.length) }, (_, i) => initial[i] || null));
+  // Valeurs saisies, y compris celles des cases masquées quand on réduit le nombre (pour pouvoir revenir en arrière)
+  let memoire = [...initial];
+  zone.addEventListener('change', (e) => {
+    if (e.target.name !== 'nb-lieux') return;
+    const n = Number(e.target.value);
+    champs.forEach((c, i) => { memoire[i] = c.valeur(); });
+    const valeurs = Array.from({ length: n }, (_, i) => memoire[i] || null);
+    liste.innerHTML = champsHTML(valeurs, n);
+    aide.hidden = n < 2;
+    brancher(valeurs);
+    // Curseur dans la première case vide
+    const vide = valeurs.findIndex((v) => !v);
+    if (vide >= 0) document.getElementById(idLieu(vide)).focus();
+  });
+  return { valeurs: () => champs.map((c) => c.valeur()).filter(Boolean) };
 }
