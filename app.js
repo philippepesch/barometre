@@ -845,10 +845,7 @@ function pucesMotifs(nom, selection, extra = []) {
     .map((d) => ({ ...d, liste: racines.filter((m) => (C.domaineMotif(m, etat.motifs) || '') === d.id).sort(ordre) }))
     .filter((d) => d.liste.length);
   const nbCoches = (d) => d.liste.reduce((n, m) => n + (coche(m) ? 1 : 0), 0);
-  // Raccourcis : les motifs les plus souvent cochés ces derniers temps (un toucher)
-  const frequents = nom === 'motif' ? C.motifsFrequents(etat.evaluations, etat.motifs, { instant: maintenant() }).filter((m) => racines.some((r) => r.id === m.id)) : [];
   return `<div class="motifs-zone" data-motifs="${nom}">
-    ${frequents.length ? `<div class="raccourcis"><p class="raccourcis-titre">Tes motifs fréquents</p><div class="puces">${frequents.map((m) => `<button type="button" class="puce-raccourci" data-raccourci="${esc(m.id)}" aria-pressed="${coche(m)}"><span class="pastille ${m.polarite}" aria-hidden="true"></span>${esc(m.libelle)}</button>`).join('')}</div></div>` : ''}
     ${domaines.map((d) => `<details class="domaine" data-domaine="${esc(d.id)}" ${nbCoches(d) ? 'open' : ''}>
       <summary><span class="domaine-nom">${esc(d.libelle)}</span><span class="domaine-compte" data-compte-domaine>${nbCoches(d) ? `${nbCoches(d)} coché${nbCoches(d) > 1 ? 's' : ''}` : ''}</span></summary>
       <div class="puces">${blocs(d.liste)}</div></details>`).join('')}
@@ -914,7 +911,7 @@ function formulaire(cible, ev) {
     <section class="question" aria-labelledby="q2">
       <p class="question-numero">Question 2</p>
       <h2 id="q2">Pourquoi te sens-tu ainsi ?</h2>
-      <p class="doux">Coche tout ce qui s'applique (facultatif).</p>
+      <p class="doux">Ouvre un domaine et coche tout ce qui s'applique${!ev && etat.parametres.saisieComplete !== false ? ' (au moins un motif, ou une explication ci-dessous)' : ' (facultatif)'}.</p>
       ${pucesMotifs('motif', selection, extra)}
       <div class="motifs-groupe" id="autres-zone" ${s.autres.length ? '' : 'hidden'}><h3>Autres motifs</h3><div class="puces" id="autres-liste"></div></div>
       <p style="margin-top:12px"><button type="button" class="bouton-secondaire" id="btn-autre" aria-expanded="false" aria-controls="autre-panneau">Autre…</button></p>
