@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.14.1';
+export const VERSION_APP = '1.14.2';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1157,7 +1157,7 @@ Règles impératives :
 - ${LONGUEUR_SYNTHESE} caractères au maximum au total, espaces compris.
 - N'utilise que les données fournies : aucune information inventée, aucune hypothèse, aucun diagnostic, aucun vocabulaire clinique, aucun conseil de traitement.
 - Présente les liens comme des constats (« les notes les plus basses sont relevées le lundi »), jamais comme des causes.
-- Ne considère jamais qu'une note supérieure à zéro exclut un risque ; si une vérification de sécurité a eu lieu, mentionne-le sobrement.
+- Ne considère jamais qu'une note supérieure à zéro exclut un risque. Si « verifications_securite » est supérieur à 0, mentionne sobrement qu'une vérification de sécurité a été proposée ; s'il vaut 0, n'en parle pas du tout (ne dis jamais qu'aucune vérification n'a eu lieu).
 - Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement.
 - Aucune redite : chaque idée n'est écrite qu'une fois.
 - Pas de dates du calendrier (les jours sont numérotés) ; tu peux citer les jours de la semaine.
