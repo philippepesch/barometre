@@ -799,33 +799,62 @@ function brancherExplicationsMotifs(racine) {
       sous.hidden = !c.checked;
       if (!c.checked) sous.querySelectorAll('input').forEach((x) => { x.checked = false; });
     }
-    const groupe = c.closest('.motifs-groupe');
+    const groupe = c.closest('.motifs-zone');
     const zone = groupe && groupe.querySelector('[data-motifs-coches]');
     if (!zone) return;
     const coches = [...groupe.querySelectorAll(`[name="${c.name}"]:checked`)].map((x) => etat.motifs.find((m) => m.id === x.value) || { id: x.value, libelle: x.closest('label').textContent.trim() });
     zone.innerHTML = explicationsMotifs(coches);
+    // Compteur de chaque domaine et état des raccourcis
+    groupe.querySelectorAll('details.domaine').forEach((d) => {
+      const n = d.querySelectorAll(`:scope > .puces > label > [name="${c.name}"]:checked`).length;
+      d.querySelector('[data-compte-domaine]').textContent = n ? `${n} coché${n > 1 ? 's' : ''}` : '';
+    });
+    groupe.querySelectorAll('[data-raccourci]').forEach((b) => {
+      const x = groupe.querySelector(`[name="${c.name}"][value="${CSS.escape(b.dataset.raccourci)}"]`);
+      b.setAttribute('aria-pressed', String(!!(x && x.checked)));
+    });
+  });
+  // Raccourci : coche ou décoche le motif dans son domaine
+  racine.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-raccourci]');
+    if (!b) return;
+    const groupe = b.closest('.motifs-zone');
+    const x = groupe.querySelector(`[name="${groupe.dataset.motifs}"][value="${CSS.escape(b.dataset.raccourci)}"]`);
+    if (!x) return;
+    x.checked = !x.checked;
+    x.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
 
 function pucesMotifs(nom, selection, extra = []) {
   const actifs = motifsActifs();
-  const groupes = C.POLARITES.map((pol) => {
-    const liste = [...actifs.filter((m) => m.polarite === pol), ...extra.filter((m) => m.polarite === pol)];
-    if (!liste.length) return '';
-    const titre = { favorable: 'Facteurs favorables', defavorable: 'Facteurs défavorables', mixte: 'Facteurs mixtes' }[pol];
-    const desc = (m) => C.descriptionMotif(etat.motifs.find((x) => x.id === m.id) || m, etat.motifs);
-    const puce = (m, coche) => `<label class="puce"${desc(m) ? ` title="${esc(desc(m))}"` : ''}><input type="checkbox" name="${nom}" value="${esc(m.id)}" ${coche ? 'checked' : ''}><span>${esc(m.libelle)}</span></label>`;
-    // Sous-catégories : affichées sous leur motif quand il est coché (« Avec qui ? »)
-    const estSous = (m) => m.parentId && liste.some((p) => p.id === m.parentId);
-    const html = liste.filter((m) => !estSous(m)).map((m) => {
-      const sous = liste.filter((x) => x.parentId === m.id);
-      const ouvert = selection.has(m.id) || sous.some((x) => selection.has(x.id));
-      return puce(m, ouvert) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${ouvert ? '' : 'hidden'}><span class="sous-motifs-titre">Avec qui ? <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}</div>` : '');
-    }).join('');
-    return `<div class="motifs-groupe"><h3><span class="pastille ${pol}"></span>${titre}</h3><div class="puces">${html}</div>
-      <div class="motifs-coches" data-motifs-coches="${nom}" aria-live="polite">${explicationsMotifs(liste.filter((m) => selection.has(m.id)))}</div></div>`;
+  const tous = [...actifs, ...extra.filter((m) => !actifs.some((a) => a.id === m.id))];
+  if (!tous.length) return '<p class="doux">Ta bibliothèque de motifs est vide : utilise « Autre » pour en créer.</p>';
+  const desc = (m) => C.descriptionMotif(etat.motifs.find((x) => x.id === m.id) || m, etat.motifs);
+  const puce = (m, coche) => `<label class="puce"${desc(m) ? ` title="${esc(desc(m))}"` : ''}><input type="checkbox" name="${nom}" value="${esc(m.id)}" ${coche ? 'checked' : ''}><span><span class="pastille ${m.polarite}" aria-hidden="true"></span>${esc(m.libelle)}<span class="visuellement-cache"> (${C.LIBELLE_POLARITE[m.polarite].toLowerCase()})</span></span></label>`;
+  // Sous-catégories : affichées sous leur motif quand il est coché (« Avec qui ? »)
+  const estSous = (m) => m.parentId && tous.some((p) => p.id === m.parentId);
+  const coche = (m) => selection.has(m.id) || tous.some((x) => x.parentId === m.id && selection.has(x.id));
+  const blocs = (liste) => liste.map((m) => {
+    const sous = tous.filter((x) => x.parentId === m.id);
+    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}</div>` : '');
   }).join('');
-  return groupes || '<p class="doux">Ta bibliothèque de motifs est vide : utilise « Autre » pour en créer.</p>';
+  const ordre = (a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr');
+  const racines = tous.filter((m) => !estSous(m));
+  const domaines = [...C.DOMAINES.map((d) => ({ id: d.id, libelle: d.libelle, question: d.question })), { id: '', libelle: 'Autres', question: '' }]
+    .map((d) => ({ ...d, liste: racines.filter((m) => (C.domaineMotif(m, etat.motifs) || '') === d.id).sort(ordre) }))
+    .filter((d) => d.liste.length);
+  const nbCoches = (d) => d.liste.reduce((n, m) => n + (coche(m) ? 1 : 0), 0);
+  // Raccourcis : les motifs les plus souvent cochés ces derniers temps (un toucher)
+  const frequents = nom === 'motif' ? C.motifsFrequents(etat.evaluations, etat.motifs, { instant: maintenant() }).filter((m) => racines.some((r) => r.id === m.id)) : [];
+  return `<div class="motifs-zone" data-motifs="${nom}">
+    ${frequents.length ? `<div class="raccourcis"><p class="raccourcis-titre">Tes motifs fréquents</p><div class="puces">${frequents.map((m) => `<button type="button" class="puce-raccourci" data-raccourci="${esc(m.id)}" aria-pressed="${coche(m)}"><span class="pastille ${m.polarite}" aria-hidden="true"></span>${esc(m.libelle)}</button>`).join('')}</div></div>` : ''}
+    ${domaines.map((d) => `<details class="domaine" data-domaine="${esc(d.id)}" ${nbCoches(d) ? 'open' : ''}>
+      <summary><span class="domaine-nom">${esc(d.libelle)}</span><span class="domaine-compte" data-compte-domaine>${nbCoches(d) ? `${nbCoches(d)} coché${nbCoches(d) > 1 ? 's' : ''}` : ''}</span></summary>
+      <div class="puces">${blocs(d.liste)}</div></details>`).join('')}
+    <p class="legende-polarite doux"><span><span class="pastille favorable"></span>favorable</span> <span><span class="pastille defavorable"></span>défavorable</span>${tous.some((m) => m.polarite === 'mixte') ? ' <span><span class="pastille mixte"></span>mixte</span>' : ''}</p>
+    <div class="motifs-coches" data-motifs-coches="${nom}" aria-live="polite">${explicationsMotifs(tous.filter((m) => selection.has(m.id)))}</div>
+  </div>`;
 }
 
 function formulaire(cible, ev) {
@@ -1333,7 +1362,7 @@ function vueMotifs() {
     return `<div class="motif-ligne${parent && m.actif && !m.regroupeDans ? ' sous' : ''}">
       <div><div class="motif-libelle"><span class="pastille ${m.polarite}"></span> ${esc(m.libelle)}</div>
         ${m.description ? `<div class="motif-description">${esc(m.description)}</div>` : ''}
-        <div class="motif-meta">${parent ? `Sous-catégorie de « ${esc(parent.libelle)} », ` : ''}${C.LIBELLE_POLARITE[m.polarite]}, utilisé ${usage.get(m.id) || 0} fois${enfants.length ? `, regroupe : ${enfants.map((x) => esc(x.libelle)).join(', ')}` : ''}${m.regroupeDans ? `, regroupé dans « ${esc(parId.get(m.regroupeDans)?.libelle || '?')} »` : ''}${!m.actif && !m.regroupeDans ? ', désactivé' : ''}</div></div>
+        <div class="motif-meta">${parent ? `Sous-catégorie de « ${esc(parent.libelle)} », ` : `${C.domaineMotif(m, etat.motifs) ? `${esc(C.libelleDomaine(C.domaineMotif(m, etat.motifs)))}, ` : 'Domaine à choisir, '}`}${C.LIBELLE_POLARITE[m.polarite]}, utilisé ${usage.get(m.id) || 0} fois${enfants.length ? `, regroupe : ${enfants.map((x) => esc(x.libelle)).join(', ')}` : ''}${m.regroupeDans ? `, regroupé dans « ${esc(parId.get(m.regroupeDans)?.libelle || '?')} »` : ''}${!m.actif && !m.regroupeDans ? ', désactivé' : ''}</div></div>
       <div class="actions">
         ${m.regroupeDans ? `<button type="button" class="bouton-discret" data-action="motif-degrouper" data-id="${esc(m.id)}">Dégrouper</button>`
     : `<button type="button" class="bouton-discret" data-action="motif-modifier" data-id="${esc(m.id)}">Modifier</button>
@@ -1348,12 +1377,13 @@ function vueMotifs() {
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Bibliothèque de motifs</h1>
     <p class="encre-2">Les motifs proposés à la question 2. Les modifier, les regrouper ou les supprimer ne change jamais les évaluations déjà enregistrées : chacune conserve les motifs tels qu'ils ont été cochés. Un motif regroupé est compté avec son motif principal dans les statistiques.</p>
-    ${proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Simplifier la bibliothèque</h2>
-      <p>${actifs.length} motifs actifs, dont plusieurs se ressemblent. Proposition : les réunir en ${plan.groupes.filter((g) => g.cible.parent === null).length} motifs plus courts et plus clairs (certains avec des sous-catégories), chacun avec une courte description. Rien n'est supprimé : les anciens motifs sont regroupés et comptés avec leur nouveau motif.</p>
+    ${proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Organiser la bibliothèque</h2>
+      <p>Proposition : ranger tes motifs en ${C.DOMAINES.length} domaines (${C.DOMAINES.map((d) => d.libelle).join(', ')}) selon d'où vient l'influence, et réunir ceux qui se ressemblent en ${plan.groupes.filter((g) => g.cible.parent === null).length} motifs courts et clairs, chacun avec une courte description. Rien n'est supprimé : les anciens motifs sont regroupés et comptés avec leur nouveau motif.</p>
       <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : ''}
     <form class="bloc" id="form-motif">
       <h2>Ajouter un motif</h2>
       <div class="champ"><label for="nouveau-motif">Libellé</label><input type="text" id="nouveau-motif" maxlength="120" required autocomplete="off"></div>
+      ${`<div class="champ"><label for="nouveau-motif-domaine">Domaine <small class="doux">(d'où vient l'influence ? la première réponse « oui » l'emporte)</small></label><select id="nouveau-motif-domaine" name="domaine"><option value="">— à choisir</option>${C.DOMAINES.map((d) => `<option value="${d.id}" ${'' === d.id ? 'selected' : ''}>${esc(d.libelle)} : ${esc(d.question)}</option>`).join('')}</select></div>`}
       <div class="champ"><label for="nouveau-motif-description">Courte description <small class="doux">(facultative : elle s'affiche quand tu coches le motif)</small></label><input type="text" id="nouveau-motif-description" maxlength="${C.LONGUEUR_DESCRIPTION_MOTIF}" autocomplete="off"></div>
       <fieldset class="champ"><legend class="visuellement-cache">Type</legend><div class="segmente">${C.POLARITES.map((p, i) => `<label><input type="radio" name="polarite" value="${p}" ${i === 0 ? 'checked' : ''}><span>${C.LIBELLE_POLARITE[p]}</span></label>`).join('')}</div></fieldset>
       <button class="bouton" type="submit">Ajouter</button>
@@ -1374,7 +1404,8 @@ function vueMotifs() {
     if (!libelle) return;
     if (etat.motifs.some((m) => C.normaliserLibelle(m.libelle) === C.normaliserLibelle(libelle))) { annoncer('Un motif portant ce libellé existe déjà.'); return; }
     const pol = e.target.querySelector('[name="polarite"]:checked').value;
-    await enregistrerMotif(C.creerMotif(libelle, pol, maintenant(), Math.max(0, ...etat.motifs.map((m) => m.ordre ?? 0)) + 1, document.getElementById('nouveau-motif-description').value));
+    const domaine = document.getElementById('nouveau-motif-domaine').value;
+    await enregistrerMotif({ ...C.creerMotif(libelle, pol, maintenant(), Math.max(0, ...etat.motifs.map((m) => m.ordre ?? 0)) + 1, document.getElementById('nouveau-motif-description').value), ...(domaine ? { domaine } : {}) });
     annoncer(`Motif « ${libelle} » ajouté.`);
     vueMotifs();
   });
@@ -1382,10 +1413,18 @@ function vueMotifs() {
 
 /** Aperçu de la simplification, puis application en un geste (copie de sécurité avant). */
 async function dialogueSimplification(plan) {
-  const groupes = plan.groupes.map((g) => `<li${g.cible.parent !== null ? ' class="sous-liste"' : ''}>${g.cible.parent !== null ? '<span class="doux">↳ sous-catégorie : </span>' : ''}<strong>${esc(g.cible.libelle)}</strong> <span class="doux">(${C.LIBELLE_POLARITE[g.cible.polarite].toLowerCase()})</span>
+  // Présentation par domaine (les sous-catégories suivent leur motif)
+  const rangDomaine = (i) => { const g = plan.groupes[i]; const d = plan.groupes[g.cible.parent ?? i].cible.domaine; const k = C.DOMAINES.findIndex((x) => x.id === d); return k < 0 ? 99 : k; };
+  const ordreGroupes = [...plan.groupes.keys()].sort((a, b) => rangDomaine(a) - rangDomaine(b) || a - b);
+  const vus = new Set();
+  const groupes = ordreGroupes.map((i) => plan.groupes[i]).map((g) => {
+    const d = g.cible.parent === null ? (g.cible.domaine || '') : null;
+    const titre = d !== null && !vus.has(d) ? (vus.add(d), `<li class="titre-domaine"><strong>${esc(C.libelleDomaine(d))}</strong> <span class="doux">– ${esc((C.DOMAINES.find((x) => x.id === d) || {}).question || '')}</span></li>`) : '';
+    return { g, titre };
+  }).map(({ g, titre }) => titre + `<li${g.cible.parent !== null ? ' class="sous-liste"' : ''}>${g.cible.parent !== null ? '<span class="doux">↳ sous-catégorie : </span>' : ''}<strong>${esc(g.cible.libelle)}</strong> <span class="doux">(${C.LIBELLE_POLARITE[g.cible.polarite].toLowerCase()})</span>
       <div class="doux" style="font-size:.9rem">${esc(g.cible.description)}</div>
       ${g.membres.length ? `<div style="font-size:.9rem">← ${g.membres.map((m) => esc(m.libelle)).join(' · ')}</div>` : '<div class="doux" style="font-size:.9rem">nouveau motif</div>'}</li>`).join('');
-  const r = await dialogue(`<h2 id="dialogue-titre">Simplifier les motifs</h2>
+  const r = await dialogue(`<h2 id="dialogue-titre">Organiser les motifs</h2>
     <p>Voici comment tes motifs seraient réunis. Les évaluations passées gardent exactement ce que tu avais coché ; dans les statistiques et le rapport, chaque ancien motif compte dans son nouveau motif. Une copie de sécurité est faite avant.</p>
     <ul class="liste-simplification">${groupes}</ul>
     ${plan.nonClasses.length ? `<p><strong>Restent tels quels</strong> (aucun groupe ne correspond) : ${plan.nonClasses.map((m) => esc(m.libelle)).join(' · ')}</p>` : ''}
@@ -1405,6 +1444,7 @@ async function actionMotif(action, id) {
   if (action === 'motif-modifier') {
     const r = await dialogue(`<h2 id="dialogue-titre">Modifier le motif</h2>
       <div class="champ"><label for="m-lib">Libellé</label><input type="text" id="m-lib" name="libelle" value="${esc(m.libelle)}" maxlength="120" required autofocus></div>
+      ${m.parentId ? '' : `<div class="champ"><label for="m-domaine">Domaine <small class="doux">(d'où vient l'influence ? la première réponse « oui » l'emporte)</small></label><select id="m-domaine" name="domaine"><option value="">— à choisir</option>${C.DOMAINES.map((d) => `<option value="${d.id}" ${m.domaine === d.id ? 'selected' : ''}>${esc(d.libelle)} : ${esc(d.question)}</option>`).join('')}</select></div>`}
       <div class="champ"><label for="m-desc">Courte description <small class="doux">(affichée quand tu coches le motif)</small></label><textarea id="m-desc" name="description" rows="2" maxlength="${C.LONGUEUR_DESCRIPTION_MOTIF}">${esc(m.description || '')}</textarea></div>
       <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Type</legend><div class="segmente">${C.POLARITES.map((p) => `<label><input type="radio" name="polarite" value="${p}" ${m.polarite === p ? 'checked' : ''}><span>${C.LIBELLE_POLARITE[p]}</span></label>`).join('')}</div></fieldset>
       ${etat.motifs.some((x) => x.parentId === m.id && x.actif && !x.regroupeDans) ? '' : `<div class="champ"><label for="m-parent">Sous-catégorie de <small class="doux">(elle s'affiche quand ce motif est coché)</small></label><select id="m-parent" name="parent"><option value="">— aucun (motif principal)</option>${motifsActifs().filter((x) => x.id !== m.id && !x.parentId).map((x) => `<option value="${esc(x.id)}" ${m.parentId === x.id ? 'selected' : ''}>${esc(x.libelle)} (${C.LIBELLE_POLARITE[x.polarite].toLowerCase()})</option>`).join('')}</select></div>`}
@@ -1414,10 +1454,11 @@ async function actionMotif(action, id) {
     const libelle = String(r.donnees.get('libelle') || '').trim();
     if (!libelle) return;
     const description = String(r.donnees.get('description') || '').replace(/\s+/g, ' ').trim().slice(0, C.LONGUEUR_DESCRIPTION_MOTIF);
-    const { description: _ancienne, parentId: _ancienParent, ...sansDescription } = m;
+    const { description: _ancienne, parentId: _ancienParent, domaine: _ancienDomaine, ...sansDescription } = m;
+    const domaineChoisi = r.donnees.has('domaine') ? String(r.donnees.get('domaine') || '') : (m.domaine || '');
     const parentChoisi = r.donnees.has('parent') ? String(r.donnees.get('parent') || '') : (m.parentId || '');
     const parentM = parentChoisi ? etat.motifs.find((x) => x.id === parentChoisi) : null;
-    await enregistrerMotif({ ...sansDescription, libelle, polarite: parentM ? parentM.polarite : r.donnees.get('polarite'), ...(description ? { description } : {}), ...(parentM ? { parentId: parentM.id } : {}), modifieLeUtc: le });
+    await enregistrerMotif({ ...sansDescription, libelle, polarite: parentM ? parentM.polarite : r.donnees.get('polarite'), ...(description ? { description } : {}), ...(parentM ? { parentId: parentM.id } : {}), ...(!parentM && domaineChoisi ? { domaine: domaineChoisi } : {}), modifieLeUtc: le });
   } else if (action === 'motif-desactiver' || action === 'motif-activer') {
     await enregistrerMotif({ ...m, actif: action === 'motif-activer', modifieLeUtc: le });
   } else if (action === 'motif-degrouper') {

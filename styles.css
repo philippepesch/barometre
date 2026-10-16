@@ -229,7 +229,7 @@ legend { padding: 0; }
 .puce input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .puce > span { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--filet-fort); background: var(--surface); font-size: .93rem; cursor: pointer; user-select: none; }
 .puce input:checked + span { background: var(--laiton-fond); border-color: var(--laiton); color: var(--encre); }
-.puce input:checked + span::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--laiton); }
+.puce input:checked + span::before { content: "✓"; color: var(--laiton); font-weight: 700; line-height: 1; }
 .puce input:focus-visible + span { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
 .puce-libre span { border-style: dashed; }
 .autre-motif { margin-top: 12px; padding: 14px; border-radius: var(--rayon-petit); background: var(--surface-2); border: 1px solid var(--filet); }
@@ -467,3 +467,22 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .sous-motifs-titre { flex-basis: 100%; font-size: .9rem; font-weight: 600; color: var(--encre-2); }
 .motif-ligne.sous { margin-left: 22px; border-left: 2px solid var(--filet-fort); padding-left: 10px; }
 .liste-simplification li.sous-liste { list-style: none; margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--laiton); }
+
+/* Questionnaire : raccourcis et domaines repliables */
+.raccourcis { margin: 0 0 12px; }
+.raccourcis-titre { font-size: .9rem; font-weight: 600; color: var(--encre-2); margin: 0 0 6px; }
+.puce-raccourci { font: inherit; font-size: .95rem; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--filet-fort); background: var(--surface); color: var(--encre); cursor: pointer; min-height: 40px; }
+.puce-raccourci[aria-pressed="true"] { background: var(--laiton-fond); border-color: var(--laiton); font-weight: 600; }
+.puce-raccourci:focus-visible { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
+details.domaine { border: 1px solid var(--filet); border-radius: var(--rayon-petit); margin: 0 0 8px; background: var(--surface); }
+details.domaine > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; min-height: 44px; font-weight: 600; }
+details.domaine > summary::-webkit-details-marker { display: none; }
+details.domaine > summary::after { content: '▸'; color: var(--doux); transition: transform .15s; }
+details.domaine[open] > summary::after { transform: rotate(90deg); }
+details.domaine > summary .domaine-nom { flex: 1; }
+details.domaine > summary .domaine-compte { font-size: .85rem; font-weight: 600; color: var(--laiton); }
+details.domaine > .puces { padding: 0 12px 12px; }
+.puce .pastille { margin-right: 6px; }
+.legende-polarite { font-size: .85rem; margin: 4px 0 0; display: flex; gap: 14px; }
+.liste-simplification li.titre-domaine { list-style: none; margin: 14px 0 6px -1.3em; padding-top: 8px; border-top: 1px solid var(--filet); }
+.puce-raccourci[aria-pressed="true"]::before { content: "✓"; color: var(--laiton); font-weight: 700; }

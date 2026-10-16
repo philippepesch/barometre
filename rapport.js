@@ -457,6 +457,43 @@ class Redacteur {
     this.y += 4;
   }
 
+  /**
+   * Barres opposées par domaine : facteurs défavorables à gauche, favorables à droite (nombre d'évaluations).
+   * lignes = [{ libelle, favorable, defavorable }]
+   */
+  barresDomaines(lignes, { total = 0 } = {}) {
+    const hLigne = 26, hBarre = 12;
+    const colLib = 108;
+    const x0 = MARGE + colLib, x1 = MARGE + LARGEUR;
+    const centre = (x0 + x1) / 2, demi = (x1 - x0) / 2 - 34;
+    const max = Math.max(1, ...lignes.flatMap((l) => [l.favorable, l.defavorable]));
+    this.place(lignes.length * hLigne + 40);
+    const DEF = '#57627C', FAV = '#5E97C6';
+    this.texte('Défavorable', centre - 8 - this.largeur('Défavorable', 8.5, 'gras'), this.y + 9, { taille: 8.5, police: 'gras', couleur: DEF });
+    this.texte('Favorable', centre + 8, this.y + 9, { taille: 8.5, police: 'gras', couleur: FAV });
+    this.y += 16;
+    const yHaut = this.y;
+    for (const l of lignes) {
+      const yc = this.y + hLigne / 2;
+      this.texte(l.libelle, MARGE, yc + 3.4, { taille: 9.5, police: 'gras' });
+      const wd = (l.defavorable / max) * demi, wf = (l.favorable / max) * demi;
+      if (l.defavorable) {
+        this.cadre(centre - 1 - wd, yc - hBarre / 2, wd, hBarre, { fond: DEF, rayon: 2 });
+        const t = String(l.defavorable);
+        this.texte(t, centre - 1 - wd - 4 - this.largeur(t, 9, 'gras'), yc + 3.2, { taille: 9, police: 'gras' });
+      }
+      if (l.favorable) {
+        this.cadre(centre + 1, yc - hBarre / 2, wf, hBarre, { fond: FAV, rayon: 2 });
+        this.texte(String(l.favorable), centre + 1 + wf + 4, yc + 3.2, { taille: 9, police: 'gras' });
+      }
+      if (!l.defavorable && !l.favorable) this.texte('—', centre + 6, yc + 3.2, { taille: 9, couleur: DOUX });
+      this.y += hLigne;
+    }
+    this.page.drawLine({ start: { x: centre, y: A4[1] - yHaut + 2 }, end: { x: centre, y: A4[1] - this.y }, thickness: 0.8, color: this.couleur('#9AA5AD') });
+    this.y += 6;
+    if (total) this.paragraphe(`Nombre d'évaluations (sur ${total}) où au moins un facteur du domaine a été coché, de chaque côté.`, { taille: 8.3, couleur: DOUX });
+  }
+
   /** Histogramme des notes de 0 à 10, avec pictogrammes. */
   histogramme(compte) {
     const h = 96, hTotal = h + 44;
@@ -508,7 +545,7 @@ class Redacteur {
     const chevauche = (a) => occupes.some((b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0);
     for (const { p, x, y, r } of etiquettes) {
       const t1 = p.nom, t2 = `${C.nombreFr(p.moyenne)}/10 · ${C.pluriel(p.nombre, 'éval.', 'éval.')}`;
-      const w = Math.max(this.largeur(t1, 8, 'gras'), this.largeur(t2, 7)) + 8;
+      const w = Math.max(this.largeur(t1, 8, 'gras'), this.largeur(t2, 7)) + 8 + 20;
       const essais = [[x + r + 3, y - 11], [x - r - 3 - w, y - 11], [x - w / 2, y - r - 25], [x - w / 2, y + r + 3],
         [x + r + 3, y - 30], [x + r + 3, y + 8], [x - r - 3 - w, y - 30], [x - r - 3 - w, y + 8]];
       const dans = ([a, b]) => [Math.max(MARGE + 2, Math.min(MARGE + l - w - 2, a)), Math.max(yH + 2, Math.min(yH + h - 24, b))];
@@ -520,8 +557,10 @@ class Redacteur {
       const [xe, ye] = pos;
       occupes.push({ x0: xe, y0: ye, x1: xe + w, y1: ye + 22 });
       this.cadre(xe, ye, w, 22, { fond: '#FFFFFF', bord: FILET, epaisseur: 0.4, rayon: 3 });
-      this.texte(t1, xe + 4, ye + 9, { taille: 8, police: 'gras' });
-      this.texte(t2, xe + 4, ye + 18.5, { taille: 7, couleur: DOUX });
+      // Pictogramme météo de l'humeur moyenne du lieu, en plus de la couleur du disque
+      this.meteo(Math.max(0, Math.min(10, Math.round(p.moyenne))), xe + 3, ye + 3, 16);
+      this.texte(t1, xe + 23, ye + 9, { taille: 8, police: 'gras' });
+      this.texte(t2, xe + 23, ye + 18.5, { taille: 7, couleur: DOUX });
     }
     // Échelle et attribution
     const lat = points.reduce((a, p) => a + p.lat, 0) / points.length;
@@ -718,7 +757,9 @@ export async function genererRapport(PDFLib, donnees, options) {
 
   // Sommaire (rempli à la fin, quand les numéros de page sont connus)
   const synthese = options.synthese && String(options.synthese.texte || '').trim() ? options.synthese : null;
-  const NB_SECTIONS = 12 + (synthese ? 1 : 0);
+  const domaines = C.frequenceDomaines(evals, donnees.motifs || []);
+  const avecDomaines = domaines.some((d) => d.favorable || d.defavorable);
+  const NB_SECTIONS = 12 + (synthese ? 1 : 0) + (avecDomaines ? 1 : 0);
   let numSection = 0;
   const hSommaire = NB_SECTIONS * 16 + 40;
   R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: 6 });
@@ -818,6 +859,11 @@ export async function genererRapport(PDFLib, donnees, options) {
     return true;
   };
   const rappelMotifs = 'Nombre de fois où chaque motif a été coché. Seuls les motifs explicitement cochés lors d\'une évaluation sont comptés ; les commentaires libres sont reproduits en annexe.';
+  if (avecDomaines) {
+    R.section(++numSection, 'Facteurs par domaine', 200);
+    R.paragraphe('Chaque motif est rangé selon la source de l\'influence : corps, relations, obligations, environnement, activités ou état d\'esprit.', { taille: 9, couleur: DOUX, apres: 6 });
+    R.barresDomaines(domaines, { total: evals.length });
+  }
   R.section(++numSection, 'Facteurs favorables mentionnés', 160);
   if (!barresFacteurs('favorable')) R.paragraphe('Aucun facteur favorable n\'a été coché sur la période.');
   R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
@@ -849,7 +895,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
         await R.carteLieux(carte.points, carte.cadre, options.fondCarte || null);
         const sansCoord = carte.sansCoordonnees > 1 ? ` ${carte.sansCoordonnees} lieux sans coordonnées (saisis librement, ou itinérance) n'apparaissent pas sur la carte.` : carte.sansCoordonnees ? ' Un lieu sans coordonnées (saisi librement, ou itinérance) n\'apparaît pas sur la carte.' : '';
-        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur : humeur moyenne, du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX });
+        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne, du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX });
       }
     } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
     if (parActivite.lignes.length) {
