@@ -1,8 +1,8 @@
 // Service worker : fonctionnement hors ligne et notifications.
 // Changer VERSION à chaque mise à jour des fichiers de l'application.
-const VERSION = 'barometre-humeur-1.11.0';
+const VERSION = 'barometre-humeur-1.12.0';
 const FICHIERS = [
-  './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'meteo.js', 'pdf-lib.min.js',
+  './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'meteo.js', 'carte.js', 'pdf-lib.min.js',
   'manifest.webmanifest', 'icone-32.png', 'icone-192.png', 'icone-512.png', 'icone-maskable-512.png',
   'apple-touch-icon.png', 'icone-badge.png',
 ];
@@ -48,6 +48,52 @@ function creneauSelonHeure() {
   return h >= 6 && h < 18 ? 'matin' : 'soir';
 }
 
+// ---------------------------------------------------------------------------
+// Évaluation manquée : au rappel de 18 h, on vérifie sur CET appareil si l'évaluation du matin existe ;
+// au rappel de 6 h, celle de la veille au soir. Aucune donnée ne quitte l'appareil.
+
+function lireBase() {
+  return new Promise((ok) => {
+    let req;
+    try { req = indexedDB.open('barometre-humeur', 1); } catch { ok(null); return; }
+    req.onupgradeneeded = () => { req.transaction.abort(); }; // pas de base : ne rien créer
+    req.onsuccess = () => ok(req.result);
+    req.onerror = () => ok(null);
+  });
+}
+const lireEnregistrement = (db, magasin, cle, index) => new Promise((ok) => {
+  try {
+    const st = db.transaction(magasin).objectStore(magasin);
+    const r = index ? st.index(index).get(cle) : st.get(cle);
+    r.onsuccess = () => ok(r.result || null);
+    r.onerror = () => ok(null);
+  } catch { ok(null); }
+});
+function jourPrecedent(date) {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+const dateLux = (t) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Luxembourg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(t);
+
+/** Créneau précédent non rempli (ou null) : { date, creneau, limite } */
+async function creneauManque(creneau, date) {
+  const db = await lireBase();
+  if (!db) return null;
+  try {
+    const actif = await lireEnregistrement(db, 'parametres', 'alerteManquee');
+    if (actif && actif.valeur === false) return null;
+    const debut = await lireEnregistrement(db, 'parametres', 'debutSuiviUtc');
+    const jour = date || dateLux(new Date());
+    const precedent = creneau === 'soir' ? { date: jour, creneau: 'matin' } : { date: jourPrecedent(jour), creneau: 'soir' };
+    // Fin du créneau précédent = maintenant (heure du rappel) ; s'il s'est terminé avant le début du suivi, rien à signaler
+    if (debut && debut.valeur && Date.parse(debut.valeur) > Date.now() - 60000) return null;
+    const ev = await lireEnregistrement(db, 'evaluations', `${precedent.date}_${precedent.creneau}`, 'creneauId');
+    if (ev) return null;
+    return { ...precedent, limite: precedent.creneau === 'matin' ? 'demain à 18:00' : 'ce soir à 18:00' };
+  } finally { db.close(); }
+}
+
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = {}; }
@@ -64,6 +110,19 @@ self.addEventListener('push', (e) => {
     data: { url: `./?creneau=${creneau}${date ? `&date=${date}` : ''}` },
   })];
   if (self.navigator && self.navigator.setAppBadge) taches.push(self.navigator.setAppBadge(1).catch(() => {}));
+  if (!d.titre) {
+    taches.push(creneauManque(creneau, date).then((m) => {
+      if (!m) return null;
+      const quand = m.creneau === 'matin' ? 'du matin' : 'd\'hier soir';
+      return self.registration.showNotification(discret ? 'Rappel à rattraper' : `Évaluation ${quand} à rattraper`, {
+        body: discret ? 'Touchez pour ouvrir.' : `Elle n'est pas encore remplie. Tu peux encore la saisir jusqu'à ${m.limite}.`,
+        tag: `barometre-manque-${m.date}-${m.creneau}`,
+        icon: 'icone-192.png',
+        badge: 'icone-badge.png',
+        data: { url: `./?creneau=${m.creneau}&date=${m.date}` },
+      });
+    }).catch(() => null));
+  }
   e.waitUntil(Promise.all(taches));
 });
 

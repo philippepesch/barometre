@@ -132,6 +132,7 @@ const ICONES_STATUT = {
   repondu_retard: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   omis: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
   en_attente: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3.5" fill="currentColor"/></svg>',
+  a_rattraper: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   a_venir: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
   non_renseigne: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
 };
@@ -360,7 +361,7 @@ function vueAccueil() {
 
   // Créneaux sans réponse sur les 7 derniers jours
   const grille7 = C.grilleCreneaux(C.ajouterJours(aujourdhui(), -6), aujourdhui(), etat.evaluations, t, etat.parametres.debutSuiviUtc);
-  const manquants = grille7.filter((s) => s.statut === 'omis').reverse();
+  const manquants = grille7.filter((s) => s.statut === 'a_rattraper').reverse();
 
   const triees = C.trierChrono(etat.evaluations);
   const derniere = triees[triees.length - 1];
@@ -384,9 +385,9 @@ function vueAccueil() {
     <div class="grille-2">
       <div>
         <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}</section>
-        ${manquants.length ? `<section class="bloc"><h2>Créneaux sans réponse</h2>
-          <p class="doux">Tu peux encore les renseigner : la saisie sera signalée comme rétrospective.</p>
-          <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('omis')}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
+        ${manquants.length ? `<section class="bloc"><h2>Créneaux à rattraper</h2>
+          <p class="doux">Tu peux encore les remplir pendant ${C.DELAI_RATTRAPAGE_H} heures après la fin du créneau : la saisie sera signalée en retard. Au-delà, le créneau est compté comme omis.</p>
+          <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('a_rattraper', `jusqu'au ${C.formatDateHeure(C.limiteSaisie(s.date, s.creneau))}`)}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
       </div>
       <section class="bloc" aria-label="Humeur actuelle"><h2>Humeur actuelle</h2>${blocHumeur}</section>
     </div>
@@ -753,6 +754,13 @@ function vueEvaluer(args) {
       <div class="rangee"><a class="bouton" href="#/evaluation/${esc(existante.id)}">Voir l'évaluation</a><a class="bouton-secondaire" href="#/modifier/${esc(existante.id)}">La modifier</a></div></section>`;
     return;
   }
+  if (C.peutRepondre(cible, t) && !C.peutSaisir(cible, t)) {
+    contenu.innerHTML = `<section class="colonne-centree"><h1>Délai de rattrapage dépassé</h1>
+      <p>L'évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'} du ${esc(C.formatDateLongue(cible.date))} pouvait encore être saisie jusqu'au ${C.formatDateHeure(C.limiteSaisie(cible.date, cible.creneau))} (${C.DELAI_RATTRAPAGE_H} heures après la fin du créneau). Elle est désormais comptée comme omise.</p>
+      <p class="doux">Les évaluations déjà enregistrées restent modifiables à tout moment.</p>
+      <p><a class="bouton-secondaire" href="#/">Retour à l'accueil</a></p></section>`;
+    return;
+  }
   if (!C.peutRepondre(cible, t)) {
     contenu.innerHTML = `<section class="colonne-centree"><h1>Ce créneau n'est pas encore ouvert</h1>
       <p>L'évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'} du ${esc(C.formatDateLongue(cible.date))} sera possible à partir de ${C.formatHeure(C.heurePrevue(cible.date, cible.creneau) - C.OUVERTURE_ANTICIPEE_MIN * 60000)}.</p>
@@ -774,13 +782,48 @@ function curseurHTML(id, valeur, libelle) {
     <div class="graduations" aria-hidden="true">${Array.from({ length: 11 }, (_, i) => `<span style="left:calc(15px + (100% - 30px) * ${i / 10})">${i}</span>`).join('')}</div>`;
 }
 
+/** Rappel de ce que recouvre chaque motif coché (pour être sûr d'avoir coché la bonne case). */
+function explicationsMotifs(motifs) {
+  const lignes = motifs.map((m) => ({ m, d: C.descriptionMotif(etat.motifs.find((x) => x.id === m.id) || m, etat.motifs) })).filter((x) => x.d);
+  return lignes.map(({ m, d }) => `<p><span class="coche" aria-hidden="true">✓</span> <strong>${esc(m.libelle)}</strong> : ${esc(d)}</p>`).join('');
+}
+
+/** Met à jour, sous chaque groupe, la description des motifs cochés. */
+function brancherExplicationsMotifs(racine) {
+  racine.addEventListener('change', (e) => {
+    const c = e.target;
+    if (c.type !== 'checkbox' || !/^motif(-prev)?$/.test(c.name)) return;
+    // Motif à sous-catégories : les ouvrir quand il est coché, les décocher quand il ne l'est plus
+    const sous = c.closest('.puces') && c.closest('.puces').querySelector(`.sous-motifs[data-sous-de="${CSS.escape(c.value)}"]`);
+    if (sous && !c.closest('.sous-motifs')) {
+      sous.hidden = !c.checked;
+      if (!c.checked) sous.querySelectorAll('input').forEach((x) => { x.checked = false; });
+    }
+    const groupe = c.closest('.motifs-groupe');
+    const zone = groupe && groupe.querySelector('[data-motifs-coches]');
+    if (!zone) return;
+    const coches = [...groupe.querySelectorAll(`[name="${c.name}"]:checked`)].map((x) => etat.motifs.find((m) => m.id === x.value) || { id: x.value, libelle: x.closest('label').textContent.trim() });
+    zone.innerHTML = explicationsMotifs(coches);
+  });
+}
+
 function pucesMotifs(nom, selection, extra = []) {
   const actifs = motifsActifs();
   const groupes = C.POLARITES.map((pol) => {
     const liste = [...actifs.filter((m) => m.polarite === pol), ...extra.filter((m) => m.polarite === pol)];
     if (!liste.length) return '';
     const titre = { favorable: 'Facteurs favorables', defavorable: 'Facteurs défavorables', mixte: 'Facteurs mixtes' }[pol];
-    return `<div class="motifs-groupe"><h3><span class="pastille ${pol}"></span>${titre}</h3><div class="puces">${liste.map((m) => `<label class="puce"><input type="checkbox" name="${nom}" value="${esc(m.id)}" ${selection.has(m.id) ? 'checked' : ''}><span>${esc(m.libelle)}</span></label>`).join('')}</div></div>`;
+    const desc = (m) => C.descriptionMotif(etat.motifs.find((x) => x.id === m.id) || m, etat.motifs);
+    const puce = (m, coche) => `<label class="puce"${desc(m) ? ` title="${esc(desc(m))}"` : ''}><input type="checkbox" name="${nom}" value="${esc(m.id)}" ${coche ? 'checked' : ''}><span>${esc(m.libelle)}</span></label>`;
+    // Sous-catégories : affichées sous leur motif quand il est coché (« Avec qui ? »)
+    const estSous = (m) => m.parentId && liste.some((p) => p.id === m.parentId);
+    const html = liste.filter((m) => !estSous(m)).map((m) => {
+      const sous = liste.filter((x) => x.parentId === m.id);
+      const ouvert = selection.has(m.id) || sous.some((x) => selection.has(x.id));
+      return puce(m, ouvert) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${ouvert ? '' : 'hidden'}><span class="sous-motifs-titre">Avec qui ? <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}</div>` : '');
+    }).join('');
+    return `<div class="motifs-groupe"><h3><span class="pastille ${pol}"></span>${titre}</h3><div class="puces">${html}</div>
+      <div class="motifs-coches" data-motifs-coches="${nom}" aria-live="polite">${explicationsMotifs(liste.filter((m) => selection.has(m.id)))}</div></div>`;
   }).join('');
   return groupes || '<p class="doux">Ta bibliothèque de motifs est vide : utilise « Autre » pour en créer.</p>';
 }
@@ -813,7 +856,7 @@ function formulaire(cible, ev) {
     <p class="doux" style="margin:0">${esc(C.majuscule(C.formatDateLongue(cible.date)))}</p>
     <h1>${ev ? `Modifier l'évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'}` : titre}</h1>
     ${ev ? `<div class="bandeau bandeau-laiton"><strong>Modification tracée</strong>L'heure de validation d'origine est conservée ; la modification et son heure sont ajoutées à l'historique de l'évaluation.</div>`
-    : retro ? `<div class="bandeau bandeau-laiton"><strong>Saisie rétrospective</strong>Ce créneau s'est terminé le ${C.formatDateHeure(exp)}. Ta réponse sera enregistrée avec l'heure réelle de validation et signalée comme saisie en retard.</div>`
+    : retro ? `<div class="bandeau bandeau-laiton"><strong>Saisie en retard</strong>Ce créneau s'est terminé le ${C.formatDateHeure(exp)}. Tu peux encore le remplir jusqu'au ${C.formatDateHeure(C.limiteSaisie(cible.date, cible.creneau))}. Ta réponse sera enregistrée avec l'heure réelle de validation et signalée comme saisie en retard.</div>`
     : `<p class="encre-2">Rappel prévu à ${C.formatHeure(C.heurePrevue(cible.date, cible.creneau))}. L'heure de ta réponse sera enregistrée automatiquement au moment de la validation.</p>`}
     <div id="erreurs" class="erreurs" hidden tabindex="-1"></div>
 
@@ -834,8 +877,8 @@ function formulaire(cible, ev) {
     <section class="question" aria-labelledby="q4">
       <p class="question-numero">Contexte</p>
       <h2 id="q4">Où as-tu été, et quelle est ta situation ?</h2>
-      <p class="doux">Indique les lieux où tu as été <strong>depuis ton évaluation précédente</strong>, soit environ les 12 dernières heures${cible.creneau === 'matin' ? ' (la soirée et la nuit)' : ' (la journée)'}. ${repris ? 'Le lieu est repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif : cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
-      ${L.champLieuxHTML(lieuxInitiaux, { activites: C.activitesConnues(etat.evaluations) })}
+      <p class="doux">Indique les lieux (3 au maximum) où tu as été <strong>depuis ton évaluation précédente</strong>, soit environ les 12 dernières heures${cible.creneau === 'matin' ? ' (la soirée et la nuit)' : ' (la journée)'}. ${repris ? 'Le lieu est repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif : cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
+      ${L.champLieuxHTML(lieuxInitiaux)}
       ${L.champSituationHTML('situation', situationInitiale)}
     </section>
 
@@ -882,8 +925,9 @@ function formulaire(cible, ev) {
   </form>`;
 
   const form = document.getElementById('form-eval');
-  const champLieux = L.brancherChampLieux(form, { initial: lieuxInitiaux, connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
+  const champLieux = L.brancherChampLieux(form, { initial: lieuxInitiaux, connus: C.lieuxConnus(etat.evaluations), activites: C.activitesConnues(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
   const champSituation = L.brancherChampSituation(form, 'situation');
+  brancherExplicationsMotifs(form);
   const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix, idIcone) => {
     const c = document.getElementById(idCurseur);
     const maj = () => {
@@ -956,9 +1000,49 @@ function formulaire(cible, ev) {
   document.getElementById('btn-autre-ajouter').addEventListener('click', ajouterAutre);
   document.getElementById('autre-libelle').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ajouterAutre(); } });
 
+  // Informations obligatoires (nouvelle évaluation) : message rouge tant qu'il manque quelque chose
+  const exigerTout = !ev && etat.parametres.saisieComplete !== false;
+  let verifierEnDirect = false;
+  const brouillon = () => ({
+    note: s.note,
+    lieux: champLieux.valeurs(),
+    situation: champSituation.valeur(),
+    motifs: [...form.querySelectorAll('[name="motif"]:checked')].map((c) => ({ id: c.value })),
+    autresMotifs: s.autres,
+    explication: document.getElementById('explication').value,
+    prevision: { note: s.prevNote },
+  });
+  const afficherManquants = () => {
+    const zone = document.getElementById('erreurs');
+    const manquants = C.informationsManquantes(brouillon());
+    form.querySelectorAll('section.question').forEach((q) => q.classList.toggle('manque', manquants.some((m) => q.getAttribute('aria-labelledby') === m.champ)));
+    if (!manquants.length) { zone.hidden = true; zone.classList.remove('erreurs-rouge'); zone.innerHTML = ''; return manquants; }
+    zone.hidden = false;
+    zone.classList.add('erreurs-rouge');
+    zone.innerHTML = `<strong>Le formulaire ne peut pas encore être validé : certaines informations manquent.</strong>
+      <ul>${manquants.map((m) => `<li><a href="#${m.champ}" data-aller="${m.champ}">${esc(C.majuscule(m.message))}</a></li>`).join('')}</ul>`;
+    return manquants;
+  };
+  if (exigerTout) {
+    const majDirect = () => { if (verifierEnDirect) setTimeout(afficherManquants, 0); };
+    form.addEventListener('input', majDirect);
+    form.addEventListener('change', majDirect);
+    form.addEventListener('click', majDirect);
+    document.getElementById('erreurs').addEventListener('click', (e) => {
+      const a = e.target.closest('[data-aller]');
+      if (!a) return;
+      e.preventDefault();
+      document.getElementById(a.dataset.aller).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const zoneErreurs = document.getElementById('erreurs');
+    if (exigerTout) {
+      verifierEnDirect = true;
+      if (afficherManquants().length) { zoneErreurs.scrollIntoView({ behavior: 'smooth', block: 'center' }); zoneErreurs.focus({ preventScroll: true }); return; }
+    }
     if (s.note === null) {
       zoneErreurs.hidden = false;
       zoneErreurs.textContent = 'Choisis d\'abord une note pour la question 1 : touche ou fais glisser le curseur.';
@@ -1194,11 +1278,11 @@ function vueCalendrier([mois]) {
   const caseCreneau = (s) => {
     const lettre = s.creneau === 'matin' ? 'M' : 'S';
     const lib = `${C.formatDateLongue(s.date)}, ${s.creneau} : ${s.evaluation ? C.libelleNote(s.evaluation.note) : C.STATUTS[s.statut]}`;
-    const inner = `<span class="lettre">${lettre}</span>${s.evaluation ? `<span class="cal-icone">${iconeMeteo(s.evaluation.note, { taille: 18 })}</span>` : ''}<span class="val">${s.evaluation ? s.evaluation.note : s.statut === 'omis' ? '×' : s.statut === 'en_attente' ? '•' : ''}</span>`;
+    const inner = `<span class="lettre">${lettre}</span>${s.evaluation ? `<span class="cal-icone">${iconeMeteo(s.evaluation.note, { taille: 18 })}</span>` : ''}<span class="val">${s.evaluation ? s.evaluation.note : s.statut === 'omis' ? '×' : s.statut === 'en_attente' ? '•' : s.statut === 'a_rattraper' ? '!' : ''}</span>`;
     const classe = `cal-creneau st-${s.statut}${s.evaluation ? ' a-note' : ''}`;
     const style = s.evaluation ? ` style="--ciel: var(--n${s.evaluation.note})"` : '';
     if (s.evaluation) return `<a class="${classe}"${style} href="#/evaluation/${esc(s.evaluation.id)}" aria-label="${esc(lib)}" title="${esc(lib)}">${inner}</a>`;
-    if (C.peutRepondre(s, t)) return `<a class="${classe}" href="#/evaluer/${s.date}/${s.creneau}" aria-label="${esc(lib)}, saisir" title="${esc(lib)}">${inner}</a>`;
+    if (C.peutSaisir(s, t)) return `<a class="${classe}" href="#/evaluer/${s.date}/${s.creneau}" aria-label="${esc(lib)}, saisir" title="${esc(lib)}">${inner}</a>`;
     return `<span class="${classe}" aria-label="${esc(lib)}" title="${esc(lib)}">${inner}</span>`;
   };
   let cases = '';
@@ -1224,12 +1308,13 @@ function vueCalendrier([mois]) {
       <span><i style="background:color-mix(in oklab,var(--n7) 30%,var(--surface));border-color:color-mix(in oklab,var(--n7) 60%,var(--surface))"></i>Répondu (note)</span>
       <span><i class="l-retard"></i>Répondu en retard</span>
       <span><i class="l-attente"></i>En attente (•)</span>
+      <span><i class="l-rattraper"></i>À rattraper sous 24 h (!)</span>
       <span><i class="l-omis"></i>Omis (×)</span>
       <span><i class="l-vide"></i>À venir ou non renseigné</span>
     </div>
     <p class="encre-2">Ce mois-ci : ${comptes.completees} complétée${comptes.completees > 1 ? 's' : ''} sur ${comptes.attendues} attendue${comptes.attendues > 1 ? 's' : ''}, ${comptes.omises} omise${comptes.omises > 1 ? 's' : ''}${comptes.enRetard ? `, dont ${comptes.enRetard} saisie${comptes.enRetard > 1 ? 's' : ''} en retard` : ''}.</p>
-    ${omis.length ? `<details class="repli"><summary>Liste des créneaux omis (${omis.length})</summary><ul class="liste-simple">${omis.map((s) => `<li><span>${esc(C.majuscule(C.formatDateLongue(s.date)))}, ${s.creneau}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></details>` : ''}
-    <p class="doux">Touche un créneau passé sans réponse pour le renseigner : la saisie sera signalée comme rétrospective.</p>
+    ${omis.length ? `<details class="repli"><summary>Liste des créneaux omis (${omis.length})</summary><ul class="liste-simple">${omis.map((s) => `<li><span>${esc(C.majuscule(C.formatDateLongue(s.date)))}, ${s.creneau}</span></li>`).join('')}</ul></details>` : ''}
+    <p class="doux">Un créneau sans réponse peut encore être rempli pendant ${C.DELAI_RATTRAPAGE_H} heures après sa fin (saisie signalée en retard) : touche-le dans le calendrier. Au-delà, il est compté comme omis. Une évaluation enregistrée reste modifiable à tout moment.</p>
   </section>`;
 }
 
@@ -1244,9 +1329,11 @@ function vueMotifs() {
   const parId = motifParId();
   const ligne = (m) => {
     const enfants = etat.motifs.filter((x) => x.regroupeDans === m.id);
-    return `<div class="motif-ligne">
+    const parent = m.parentId ? parId.get(m.parentId) : null;
+    return `<div class="motif-ligne${parent && m.actif && !m.regroupeDans ? ' sous' : ''}">
       <div><div class="motif-libelle"><span class="pastille ${m.polarite}"></span> ${esc(m.libelle)}</div>
-        <div class="motif-meta">${C.LIBELLE_POLARITE[m.polarite]}, utilisé ${usage.get(m.id) || 0} fois${enfants.length ? `, regroupe : ${enfants.map((x) => esc(x.libelle)).join(', ')}` : ''}${m.regroupeDans ? `, regroupé dans « ${esc(parId.get(m.regroupeDans)?.libelle || '?')} »` : ''}${!m.actif && !m.regroupeDans ? ', désactivé' : ''}</div></div>
+        ${m.description ? `<div class="motif-description">${esc(m.description)}</div>` : ''}
+        <div class="motif-meta">${parent ? `Sous-catégorie de « ${esc(parent.libelle)} », ` : ''}${C.LIBELLE_POLARITE[m.polarite]}, utilisé ${usage.get(m.id) || 0} fois${enfants.length ? `, regroupe : ${enfants.map((x) => esc(x.libelle)).join(', ')}` : ''}${m.regroupeDans ? `, regroupé dans « ${esc(parId.get(m.regroupeDans)?.libelle || '?')} »` : ''}${!m.actif && !m.regroupeDans ? ', désactivé' : ''}</div></div>
       <div class="actions">
         ${m.regroupeDans ? `<button type="button" class="bouton-discret" data-action="motif-degrouper" data-id="${esc(m.id)}">Dégrouper</button>`
     : `<button type="button" class="bouton-discret" data-action="motif-modifier" data-id="${esc(m.id)}">Modifier</button>
@@ -1256,31 +1343,59 @@ function vueMotifs() {
   };
   const actifs = motifsActifs();
   const inactifs = etat.motifs.filter((m) => !m.actif || m.regroupeDans).sort((a, b) => a.libelle.localeCompare(b.libelle, 'fr'));
+  const plan = C.planSimplification(etat.motifs, usage);
+  const proposerSimplification = plan.changements > 0 && plan.groupes.filter((g) => g.membres.length).length >= 5;
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Bibliothèque de motifs</h1>
     <p class="encre-2">Les motifs proposés à la question 2. Les modifier, les regrouper ou les supprimer ne change jamais les évaluations déjà enregistrées : chacune conserve les motifs tels qu'ils ont été cochés. Un motif regroupé est compté avec son motif principal dans les statistiques.</p>
+    ${proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Simplifier la bibliothèque</h2>
+      <p>${actifs.length} motifs actifs, dont plusieurs se ressemblent. Proposition : les réunir en ${plan.groupes.filter((g) => g.cible.parent === null).length} motifs plus courts et plus clairs (certains avec des sous-catégories), chacun avec une courte description. Rien n'est supprimé : les anciens motifs sont regroupés et comptés avec leur nouveau motif.</p>
+      <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : ''}
     <form class="bloc" id="form-motif">
       <h2>Ajouter un motif</h2>
       <div class="champ"><label for="nouveau-motif">Libellé</label><input type="text" id="nouveau-motif" maxlength="120" required autocomplete="off"></div>
+      <div class="champ"><label for="nouveau-motif-description">Courte description <small class="doux">(facultative : elle s'affiche quand tu coches le motif)</small></label><input type="text" id="nouveau-motif-description" maxlength="${C.LONGUEUR_DESCRIPTION_MOTIF}" autocomplete="off"></div>
       <fieldset class="champ"><legend class="visuellement-cache">Type</legend><div class="segmente">${C.POLARITES.map((p, i) => `<label><input type="radio" name="polarite" value="${p}" ${i === 0 ? 'checked' : ''}><span>${C.LIBELLE_POLARITE[p]}</span></label>`).join('')}</div></fieldset>
       <button class="bouton" type="submit">Ajouter</button>
     </form>
     ${C.POLARITES.map((pol) => {
-    const l = actifs.filter((m) => m.polarite === pol);
+    const l0 = actifs.filter((m) => m.polarite === pol);
+    const estSous = (m) => m.parentId && l0.some((p) => p.id === m.parentId);
+    const l = l0.filter((m) => !estSous(m)).flatMap((m) => [m, ...l0.filter((x) => x.parentId === m.id)]);
     return `<div class="bloc"><h2>${{ favorable: 'Facteurs favorables', defavorable: 'Facteurs défavorables', mixte: 'Facteurs mixtes' }[pol]} <span class="doux">(${l.length})</span></h2>${l.length ? l.map(ligne).join('') : '<p class="doux">Aucun motif.</p>'}</div>`;
   }).join('')}
     ${inactifs.length ? `<div class="bloc"><h2>Désactivés et regroupés <span class="doux">(${inactifs.length})</span></h2><p class="doux">Ils ne sont plus proposés dans le questionnaire.</p>${inactifs.map(ligne).join('')}</div>` : ''}
   </section>`;
+  const bSimplifier = document.getElementById('btn-simplifier');
+  if (bSimplifier) bSimplifier.addEventListener('click', () => dialogueSimplification(plan));
   document.getElementById('form-motif').addEventListener('submit', async (e) => {
     e.preventDefault();
     const libelle = document.getElementById('nouveau-motif').value.trim();
     if (!libelle) return;
     if (etat.motifs.some((m) => C.normaliserLibelle(m.libelle) === C.normaliserLibelle(libelle))) { annoncer('Un motif portant ce libellé existe déjà.'); return; }
     const pol = e.target.querySelector('[name="polarite"]:checked').value;
-    await enregistrerMotif(C.creerMotif(libelle, pol, maintenant(), Math.max(0, ...etat.motifs.map((m) => m.ordre ?? 0)) + 1));
+    await enregistrerMotif(C.creerMotif(libelle, pol, maintenant(), Math.max(0, ...etat.motifs.map((m) => m.ordre ?? 0)) + 1, document.getElementById('nouveau-motif-description').value));
     annoncer(`Motif « ${libelle} » ajouté.`);
     vueMotifs();
   });
+}
+
+/** Aperçu de la simplification, puis application en un geste (copie de sécurité avant). */
+async function dialogueSimplification(plan) {
+  const groupes = plan.groupes.map((g) => `<li${g.cible.parent !== null ? ' class="sous-liste"' : ''}>${g.cible.parent !== null ? '<span class="doux">↳ sous-catégorie : </span>' : ''}<strong>${esc(g.cible.libelle)}</strong> <span class="doux">(${C.LIBELLE_POLARITE[g.cible.polarite].toLowerCase()})</span>
+      <div class="doux" style="font-size:.9rem">${esc(g.cible.description)}</div>
+      ${g.membres.length ? `<div style="font-size:.9rem">← ${g.membres.map((m) => esc(m.libelle)).join(' · ')}</div>` : '<div class="doux" style="font-size:.9rem">nouveau motif</div>'}</li>`).join('');
+  const r = await dialogue(`<h2 id="dialogue-titre">Simplifier les motifs</h2>
+    <p>Voici comment tes motifs seraient réunis. Les évaluations passées gardent exactement ce que tu avais coché ; dans les statistiques et le rapport, chaque ancien motif compte dans son nouveau motif. Une copie de sécurité est faite avant.</p>
+    <ul class="liste-simplification">${groupes}</ul>
+    ${plan.nonClasses.length ? `<p><strong>Restent tels quels</strong> (aucun groupe ne correspond) : ${plan.nonClasses.map((m) => esc(m.libelle)).join(' · ')}</p>` : ''}
+    <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Appliquer</button></div>`);
+  if (r.valeur !== 'oui') return;
+  await prendreInstantane('Avant simplification des motifs');
+  const maj = C.appliquerSimplification(etat.motifs, plan, maintenant());
+  for (const m of maj) await enregistrerMotif(m);
+  annoncer(`Motifs simplifiés : ${C.pluriel(motifsActifs().length, 'motif actif', 'motifs actifs')}.`);
+  vueMotifs();
 }
 
 async function actionMotif(action, id) {
@@ -1290,13 +1405,19 @@ async function actionMotif(action, id) {
   if (action === 'motif-modifier') {
     const r = await dialogue(`<h2 id="dialogue-titre">Modifier le motif</h2>
       <div class="champ"><label for="m-lib">Libellé</label><input type="text" id="m-lib" name="libelle" value="${esc(m.libelle)}" maxlength="120" required autofocus></div>
+      <div class="champ"><label for="m-desc">Courte description <small class="doux">(affichée quand tu coches le motif)</small></label><textarea id="m-desc" name="description" rows="2" maxlength="${C.LONGUEUR_DESCRIPTION_MOTIF}">${esc(m.description || '')}</textarea></div>
       <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Type</legend><div class="segmente">${C.POLARITES.map((p) => `<label><input type="radio" name="polarite" value="${p}" ${m.polarite === p ? 'checked' : ''}><span>${C.LIBELLE_POLARITE[p]}</span></label>`).join('')}</div></fieldset>
+      ${etat.motifs.some((x) => x.parentId === m.id && x.actif && !x.regroupeDans) ? '' : `<div class="champ"><label for="m-parent">Sous-catégorie de <small class="doux">(elle s'affiche quand ce motif est coché)</small></label><select id="m-parent" name="parent"><option value="">— aucun (motif principal)</option>${motifsActifs().filter((x) => x.id !== m.id && !x.parentId).map((x) => `<option value="${esc(x.id)}" ${m.parentId === x.id ? 'selected' : ''}>${esc(x.libelle)} (${C.LIBELLE_POLARITE[x.polarite].toLowerCase()})</option>`).join('')}</select></div>`}
       <p class="doux">Les évaluations passées gardent le libellé d'origine.</p>
       <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
     if (r.valeur !== 'oui') return;
     const libelle = String(r.donnees.get('libelle') || '').trim();
     if (!libelle) return;
-    await enregistrerMotif({ ...m, libelle, polarite: r.donnees.get('polarite'), modifieLeUtc: le });
+    const description = String(r.donnees.get('description') || '').replace(/\s+/g, ' ').trim().slice(0, C.LONGUEUR_DESCRIPTION_MOTIF);
+    const { description: _ancienne, parentId: _ancienParent, ...sansDescription } = m;
+    const parentChoisi = r.donnees.has('parent') ? String(r.donnees.get('parent') || '') : (m.parentId || '');
+    const parentM = parentChoisi ? etat.motifs.find((x) => x.id === parentChoisi) : null;
+    await enregistrerMotif({ ...sansDescription, libelle, polarite: parentM ? parentM.polarite : r.donnees.get('polarite'), ...(description ? { description } : {}), ...(parentM ? { parentId: parentM.id } : {}), modifieLeUtc: le });
   } else if (action === 'motif-desactiver' || action === 'motif-activer') {
     await enregistrerMotif({ ...m, actif: action === 'motif-activer', modifieLeUtc: le });
   } else if (action === 'motif-degrouper') {
@@ -1331,7 +1452,6 @@ async function actionMotif(action, id) {
 // Textes pour le rapport : version corrigée, complète, traduite en français et professionnelle
 
 const aRelire = () => etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut !== 'validee' && C.aDesTextes(e)).length;
-const nbMots = (t) => (String(t || '').trim() ? String(t).trim().split(/\s+/).length : 0);
 const LIBELLES_TEXTES = { explication: 'Description (motifs et explication)', complement: 'Complément', prevision: 'Motif de la prévision' };
 
 /** Ce que le patient a saisi pour chaque champ (les motifs cochés font partie de la description). */
@@ -1372,6 +1492,14 @@ async function copierTexte(texte) {
   }
 }
 
+/** « 412 / 500 caractères » (en rouge au-delà de la limite). */
+function compteVersion(texte) {
+  const n = String(texte || '').length;
+  return n > C.LONGUEUR_VERSION
+    ? `<span class="erreur-texte">${n} / ${C.LONGUEUR_VERSION} caractères : raccourcis ce texte ou demande une nouvelle proposition.</span>`
+    : `${n} / ${C.LONGUEUR_VERSION} caractères`;
+}
+
 function vueTextes([idCible]) {
   const tous = C.trierChrono(etat.evaluations.filter(C.aDesTextes)).reverse();
   const aTraiter = tous.filter(C.aReformuler);
@@ -1393,9 +1521,9 @@ function vueTextes([idCible]) {
       <div class="rangee-espacee"><h3 style="margin:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${iconeMeteo(ev.note, { taille: 26 })}${esc(C.majuscule(C.formatDateLongue(ev.date)))}, ${ev.creneau} <span class="doux">– ${esc(C.libelleNote(ev.note))}</span></h3>${badgeReformulation(r)}</div>
       ${champs.map((k) => `<div class="champ" style="margin-top:14px">
         <label for="t-${esc(ev.id)}-${k}">${LIBELLES_TEXTES[k]} – version pour ${esc(dest)}</label>
-        <textarea id="t-${esc(ev.id)}-${k}" data-champ="${k}" rows="${Math.min(10, Math.max(3, Math.ceil((r && r[k] ? r[k] : t[k]).length / 70)))}" maxlength="10000" spellcheck="true" lang="fr" autocapitalize="sentences" placeholder="Pas encore de version corrigée">${esc(r ? r[k] : '')}</textarea>
+        <textarea id="t-${esc(ev.id)}-${k}" data-champ="${k}" rows="${Math.min(10, Math.max(3, Math.ceil((r && r[k] ? r[k] : t[k]).length / 70)))}" maxlength="${C.LONGUEUR_VERSION}" spellcheck="true" lang="fr" autocapitalize="sentences" placeholder="Pas encore de version corrigée">${esc(r ? r[k] : '')}</textarea>
         ${r && C.contientPremierePersonne(r[k]) ? '<p class="bandeau" style="margin:6px 0">Ce texte emploie encore la première personne (« je », « mon »…) : touche <strong>Nouvelle proposition</strong> ou corrige-le pour parler du « patient ».</p>' : ''}
-        <small class="doux" data-compte="${k}">${r && r[k] ? `${nbMots(r[k])} mots, ` : ''}original : ${nbMots(t[k])} mots</small>
+        <small class="doux compte-version" data-compte="${k}">${compteVersion(r ? r[k] : '')}</small>
         <details class="repli" ${cible ? 'open' : ''}><summary>Ton texte original</summary><p class="texte-libre encre-2">${esc(t[k])}</p></details>
       </div>`).join('')}
       <div class="rangee">
@@ -1427,7 +1555,7 @@ function vueTextes([idCible]) {
       <div class="bloc">
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
-          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (texte raccourci, motifs absents ou texte à la première personne). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
+          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
         ${aTraiter.length ? `<details class="repli" style="margin-top:14px"><summary>Ou par copier-coller dans un assistant</summary>
@@ -1489,7 +1617,7 @@ function vueTextes([idCible]) {
   if (bTout) bTout.addEventListener('click', async () => {
     if (!(await confirmer('Valider toutes les propositions ?', 'Vérifie d\'abord que chaque proposition respecte le sens de ton texte original. Tu pourras encore les modifier ensuite.', 'Tout valider'))) return;
     const instant = maintenant();
-    for (const ev of etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut === 'proposee')) {
+    for (const ev of etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut === 'proposee' && !C.versionTropLongue(e.reformulation))) {
       const maj = C.definirReformulation(ev, { ...ev.reformulation, statut: 'validee' }, 'Version pour le rapport validée', instant);
       if (maj) await enregistrerEvaluation(maj);
     }
@@ -1499,8 +1627,7 @@ function vueTextes([idCible]) {
   contenu.querySelectorAll('.carte-texte').forEach((carteEl) => {
     const id = carteEl.dataset.id;
     carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => ta.addEventListener('input', () => {
-      const ev = etat.evaluations.find((e) => e.id === id);
-      carteEl.querySelector(`[data-compte="${ta.dataset.champ}"]`).textContent = `${nbMots(ta.value)} mots, original : ${nbMots(originalPourChamp(ev, ta.dataset.champ))} mots`;
+      carteEl.querySelector(`[data-compte="${ta.dataset.champ}"]`).innerHTML = compteVersion(ta.value);
     }));
     carteEl.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-texte]');
@@ -1526,6 +1653,7 @@ function vueTextes([idCible]) {
         } else {
           const valeurs = {};
           carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => { valeurs[ta.dataset.champ] = ta.value; });
+          if (C.versionTropLongue(valeurs)) { annoncer(`Chaque texte doit compter au maximum ${C.LONGUEUR_VERSION} caractères : raccourcis-le avant de valider.`); return; }
           maj = C.definirReformulation(ev, { ...valeurs, statut: 'validee', source: ev.reformulation ? ev.reformulation.source : 'manuelle' }, 'Version pour le rapport validée', maintenant());
           if (!maj) { annoncer('Cette version était déjà validée.'); return; }
         }
@@ -1633,11 +1761,27 @@ function texteConfidentialite() {
   const points = [
     sy ? '<li><strong>Synchronisation active</strong> : une copie de tes données, chiffrée sur cet appareil avec ta phrase de synchronisation, est conservée par ton service en ligne pour ton autre appareil. Le service ne peut pas la lire.</li>' : '',
     push ? '<li><strong>Rappels actifs</strong> : le service connaît seulement l\'adresse technique de notification de cet appareil, sans aucune donnée de santé.</li>' : '',
+    p.fondCarte !== false ? '<li><strong>Carte des lieux du rapport</strong> : au moment de générer le PDF, les images de la zone à afficher sont téléchargées depuis OpenStreetMap (fondation britannique). Seules les coordonnées de cette zone sont demandées, sans nom, note ni autre donnée.</li>' : '',
     lieux ? '<li><strong>Recherche des lieux</strong> : pendant que tu tapes un lieu, les lettres tapées sont envoyées au service Photon (OpenStreetMap, komoot, Allemagne) pour te proposer des localités, sans aucune autre donnée. Le lieu choisi reste dans tes données.</li>' : '',
     ia ? `<li><strong>Version professionnelle automatique</strong> : le texte de tes commentaires (sans nom, notes ni dates) est envoyé à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementUtc)}.</li>` : '',
+    ia && p.ia.consentementSyntheseUtc ? `<li><strong>Synthèse du rapport</strong> : seulement quand tu la demandes, les données de la période (notes sans dates, moyennes, jours, situations, lieux, activités, motifs et textes validés, sans nom, adresse ni matricule) sont envoyées à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementSyntheseUtc)}.</li>` : '',
     '<li><strong>Envoi du rapport</strong> : seulement quand tu le demandes, depuis ta propre messagerie ou par la feuille de partage (WhatsApp, Mail…). Un e-mail ordinaire n\'est pas chiffré.</li>',
   ].filter(Boolean);
   return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia || lieux ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
+}
+
+/**
+ * Fond de carte OpenStreetMap pour le rapport (PNG), si le réglage est actif et la connexion disponible.
+ * Au plus 10 secondes ; en cas d'échec, le rapport contient la carte sans fond.
+ */
+async function fondCartePourRapport(carte) {
+  if (!carte || etat.parametres.fondCarte === false || !navigator.onLine || typeof OffscreenCanvas === 'undefined') return null;
+  try {
+    const { fondDeCarte } = await import('./carte.js');
+    const delai = new Promise((_, rejeter) => setTimeout(() => rejeter(new Error('délai dépassé')), 10000));
+    const blob = await Promise.race([fondDeCarte(carte.cadre), delai]);
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  } catch { return null; }
 }
 
 function majEtatSynchro() {
@@ -1859,6 +2003,7 @@ async function ouvrirPdf() {
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="textes" value="original"> <span>Texte original uniquement</span></label>
     </fieldset>
     ${(() => { const n = etat.evaluations.filter((e) => C.aDesTextes(e) && !(e.reformulation && e.reformulation.statut === 'validee')).length; return n ? `<p class="bandeau">${n > 1 ? `${n} commentaires n'ont` : 'Un commentaire n\'a'} pas encore de version corrigée validée. <a href="#/textes" data-fermer-dialogue>Préparer les textes pour le rapport</a></p>` : ''; })()}
+    <div class="bloc-synthese" id="pdf-synthese"></div>
     <div id="pdf-message" class="erreurs" hidden></div>
     <div id="pdf-resultat" hidden></div>
     <div class="dialogue-actions"><button type="button" class="bouton-secondaire" data-fermer>Fermer</button><button type="submit" class="bouton" id="pdf-generer">Générer le PDF</button></div>
@@ -1868,7 +2013,79 @@ async function ouvrirPdf() {
   form.querySelector('[data-fermer]').addEventListener('click', () => dlg.close());
   form.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
   const zoneEntre = document.getElementById('pdf-entre-zone');
-  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; };
+  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); };
+
+  // Synthèse de la période : rédigée par Claude (avec l'accord du patient) ou par le patient, puis validée
+  const zoneSynthese = document.getElementById('pdf-synthese');
+  let editionSynthese = false;
+  function periodeChoisie() { return { debut: document.getElementById('pdf-debut').value, fin: document.getElementById('pdf-fin').value }; }
+  function majSynthese() {
+    const { debut, fin } = periodeChoisie();
+    if (!C.estDateValide(debut) || !C.estDateValide(fin) || debut > fin) { zoneSynthese.innerHTML = ''; return; }
+    const sy = C.syntheseDe(etat.parametres, debut, fin, { valideeSeulement: false });
+    const accord = iaPrete() && etat.parametres.ia && etat.parametres.ia.consentementSyntheseUtc;
+    const titre = '<h3 style="margin:0 0 6px">Synthèse de la période <span class="doux" style="font-weight:400">(en tête du rapport, 1000 caractères au plus)</span></h3>';
+    if (sy && (editionSynthese || sy.statut !== 'validee')) {
+      zoneSynthese.innerHTML = `${titre}
+        ${sy.statut !== 'validee' ? '<p class="encre-2" style="margin:0 0 6px">Relis cette proposition, corrige-la si besoin, puis valide-la : seule une synthèse validée figure dans le rapport.</p>' : ''}
+        <textarea id="pdf-synthese-texte" rows="9" maxlength="${C.LONGUEUR_SYNTHESE}" lang="fr" spellcheck="true">${esc(sy.texte)}</textarea>
+        <small class="doux" id="pdf-synthese-compte"></small>
+        <div class="rangee" style="margin-top:8px"><button type="button" class="bouton" data-synthese="valider">Valider la synthèse</button>${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Nouvelle proposition</button>' : ''}<button type="button" class="bouton-discret" data-synthese="retirer">Retirer</button></div>`;
+      const ta = document.getElementById('pdf-synthese-texte');
+      const compter = () => { document.getElementById('pdf-synthese-compte').innerHTML = ta.value.length > C.LONGUEUR_SYNTHESE ? `<span class="erreur-texte">${ta.value.length} / ${C.LONGUEUR_SYNTHESE} caractères</span>` : `${ta.value.length} / ${C.LONGUEUR_SYNTHESE} caractères`; };
+      ta.addEventListener('input', compter); compter();
+    } else if (sy) {
+      zoneSynthese.innerHTML = `${titre}<label class="interrupteur"><input type="checkbox" id="pdf-avec-synthese" checked> <span><strong>Inclure la synthèse validée</strong> <span class="doux">(validée le ${C.formatDateHeure(sy.valideeLeUtc)})</span></span></label>
+        <details class="repli" style="margin-top:6px"><summary>Lire la synthèse</summary><p class="texte-libre encre-2">${esc(sy.texte)}</p></details>
+        <div class="rangee" style="margin-top:6px"><button type="button" class="bouton-discret" data-synthese="modifier">Modifier</button>${accord ? '<button type="button" class="bouton-discret" data-synthese="rediger">Nouvelle proposition</button>' : ''}</div>`;
+    } else {
+      zoneSynthese.innerHTML = `${titre}
+        <p class="encre-2" style="margin:0 0 6px">Un résumé de l'évolution sur la période et des points prioritaires, en langage professionnel et clair.</p>
+        <div class="rangee">${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Rédiger la synthèse avec Claude</button>' : ''}<button type="button" class="bouton-discret" data-synthese="ecrire">L'écrire moi-même</button></div>
+        ${accord ? '' : `<p class="doux" style="margin:6px 0 0">Pour qu'elle soit rédigée automatiquement, active la version professionnelle automatique et coche l'accord « Synthèse du rapport » dans <a href="#/reglages/ia" data-fermer-dialogue>Réglages</a>.</p>`}`;
+      zoneSynthese.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
+    }
+  }
+  const sauverSynthese = async (sy) => { await enregistrerParametres({ syntheses: C.enregistrerSynthese(etat.parametres, sy) }); };
+  zoneSynthese.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-synthese]');
+    if (!b) return;
+    const { debut, fin } = periodeChoisie();
+    const action = b.dataset.synthese;
+    const ancienne = C.syntheseDe(etat.parametres, debut, fin, { valideeSeulement: false });
+    if (action === 'rediger') {
+      b.disabled = true; b.textContent = 'Rédaction en cours…';
+      try {
+        const { redigerSynthese } = await import('./ia.js');
+        const texte = await redigerSynthese(etat.parametres, C.donneesSynthese(etat.evaluations, etat.motifs, { debut, fin, instant: maintenant(), debutSuiviUtc: etat.parametres.debutSuiviUtc }));
+        await sauverSynthese({ debut, fin, texte, statut: 'proposee', source: 'assistant', creeLeUtc: new Date(maintenant()).toISOString(), valideeLeUtc: null });
+        editionSynthese = true;
+        annoncer('Synthèse proposée : relis-la et valide-la.');
+      } catch (err) { annoncer(`La synthèse n'a pas pu être rédigée : ${err.message}`); }
+      majSynthese();
+      return;
+    }
+    if (action === 'ecrire') {
+      await sauverSynthese({ debut, fin, texte: '', statut: 'proposee', source: 'manuelle', creeLeUtc: new Date(maintenant()).toISOString(), valideeLeUtc: null });
+      editionSynthese = true; majSynthese(); document.getElementById('pdf-synthese-texte').focus(); return;
+    }
+    if (action === 'modifier') { editionSynthese = true; majSynthese(); return; }
+    if (action === 'retirer') {
+      await enregistrerParametres({ syntheses: (etat.parametres.syntheses || []).filter((x) => !(x.debut === debut && x.fin === fin)) });
+      editionSynthese = false; majSynthese(); return;
+    }
+    if (action === 'valider') {
+      const texte = document.getElementById('pdf-synthese-texte').value.trim();
+      if (!texte) { annoncer('La synthèse est vide.'); return; }
+      if (texte.length > C.LONGUEUR_SYNTHESE) { annoncer(`La synthèse doit compter au maximum ${C.LONGUEUR_SYNTHESE} caractères : raccourcis-la.`); return; }
+      await sauverSynthese({ ...(ancienne || { debut, fin, source: 'manuelle', creeLeUtc: new Date(maintenant()).toISOString() }), texte, statut: 'validee', valideeLeUtc: new Date(maintenant()).toISOString() });
+      editionSynthese = false;
+      annoncer('Synthèse validée : elle figurera en tête du rapport.');
+      majSynthese();
+    }
+  });
+  ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', () => { editionSynthese = false; majSynthese(); }));
+  majSynthese();
   form.querySelectorAll('[name="pdf-periode"]').forEach((r) => r.addEventListener('change', () => {
     if (zoneEntre) zoneEntre.hidden = r.value !== 'entre';
     if (r.value === 'perso') { document.getElementById('pdf-debut').focus(); return; }
@@ -1894,8 +2111,11 @@ async function ouvrirPdf() {
     bouton.disabled = true; bouton.textContent = 'Génération…';
     try {
       const PDFLib = await chargerPdfLib();
-      const { genererRapport, nomFichierRapport } = await import('./rapport.js');
-      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked) });
+      const { genererRapport, nomFichierRapport, preparationCarte } = await import('./rapport.js');
+      const fondCarte = await fondCartePourRapport(preparationCarte(C.dansPeriode(etat.evaluations, debut, finChoisie)));
+      const caseSynthese = document.getElementById('pdf-avec-synthese');
+      const synthese = caseSynthese && caseSynthese.checked ? C.syntheseDe(etat.parametres, debut, finChoisie) : null;
+      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
       const nbPages = (new TextDecoder('latin1').decode(octets).match(/\/Type\s*\/Page[^s]/g) || []).length;
@@ -2076,7 +2296,7 @@ async function majBadge() {
   try {
     const t = maintenant();
     const grille = C.grilleCreneaux(C.ajouterJours(aujourdhui(), -1), aujourdhui(), etat.evaluations, t, etat.parametres.debutSuiviUtc);
-    const n = grille.filter((s) => s.statut === 'en_attente').length;
+    const n = grille.filter((s) => s.statut === 'en_attente' || s.statut === 'a_rattraper').length;
     if (n) await navigator.setAppBadge(n); else await navigator.clearAppBadge();
   } catch { /* non pris en charge */ }
 }
@@ -2201,8 +2421,12 @@ async function vueReglages([section] = []) {
   })()}
     </div>
 
+    <div class="bloc" id="questionnaire"><h2>Questionnaire</h2>
+      <label class="interrupteur"><input type="checkbox" id="saisie-complete" ${p.saisieComplete !== false ? 'checked' : ''}> <span>Exiger toutes les informations avant de valider une nouvelle évaluation <span class="doux">(note, au moins un lieu, situation professionnelle, au moins un motif ou une explication, note prévue ; sinon un message rouge indique ce qui manque. Les corrections d'évaluations passées restent toujours possibles.)</span></span></label>
+    </div>
     <div class="bloc" id="lieux"><h2>Lieu et situation</h2>
       <p>Chaque évaluation peut indiquer le lieu où tu te trouves et ta situation professionnelle. Le tableau de bord et le rapport PDF montrent ensuite ton humeur selon ces deux informations.</p>
+      <label class="interrupteur" style="margin-bottom:10px"><input type="checkbox" id="fond-carte" ${p.fondCarte !== false ? 'checked' : ''}> <span>Fond de carte dans le rapport PDF <span class="doux">(images d'OpenStreetMap téléchargées au moment du rapport : seules les coordonnées de la zone affichée sont demandées ; désactivé, la carte montre les lieux sans fond)</span></span></label>
       <label class="interrupteur"><input type="checkbox" id="recherche-lieux" ${p.rechercheLieux !== false ? 'checked' : ''}> <span>Recherche mondiale des lieux pendant la saisie <span class="doux">(service Photon d'OpenStreetMap, exploité par komoot en Allemagne : seules les lettres tapées sont envoyées, sans ton nom, tes notes ni aucune autre donnée ; désactivée, seuls tes lieux habituels sont proposés)</span></span></label>
       <p style="margin:14px 0 0"><a class="bouton-secondaire" href="#/contexte">Compléter les évaluations passées</a></p>
     </div>
@@ -2218,6 +2442,7 @@ async function vueReglages([section] = []) {
         <button type="button" class="bouton" data-action="serveur-activer">${serv.actif ? 'Réactiver sur cet appareil' : 'Activer les rappels sur cet appareil'}</button>
         ${serv.actif ? '<button type="button" class="bouton-secondaire" data-action="serveur-tester">Envoyer une notification de test</button><button type="button" class="bouton-discret" data-action="serveur-desactiver">Désactiver</button>' : ''}
       </div>
+      <label class="interrupteur" style="margin-top:14px"><input type="checkbox" id="alerte-manquee" ${p.alerteManquee !== false ? 'checked' : ''}> <span>Signaler une évaluation manquée <span class="doux">(au rappel de 18:00, si celle du matin n'est pas remplie ; à 06:00, si celle de la veille au soir ne l'est pas. Chaque appareil vérifie ses propres données : rien n'est envoyé.)</span></span></label>
       <label class="interrupteur" style="margin-top:14px"><input type="checkbox" id="rappel-discret" ${p.titreRappelDiscret ? 'checked' : ''}> <span>Texte de notification discret <span class="doux">(« Rappel du matin » au lieu de « Évaluation du matin »)</span></span></label>
       <div id="synchro">
         <h3 style="margin-top:22px">Synchronisation entre appareils</h3>
@@ -2301,6 +2526,19 @@ async function vueReglages([section] = []) {
       annoncer('Identités enregistrées.');
     } catch (err) { annoncer(err.message); document.getElementById('patient-cns').focus(); }
   });
+  const caseAlerte = document.getElementById('alerte-manquee');
+  if (caseAlerte) caseAlerte.addEventListener('change', async (e) => {
+    await enregistrerParametres({ alerteManquee: e.target.checked });
+    annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
+  });
+  document.getElementById('saisie-complete').addEventListener('change', async (e) => {
+    await enregistrerParametres({ saisieComplete: e.target.checked });
+    annoncer(e.target.checked ? 'Toutes les informations seront demandées avant de valider.' : 'Seule la note sera obligatoire.');
+  });
+  document.getElementById('fond-carte').addEventListener('change', async (e) => {
+    await enregistrerParametres({ fondCarte: e.target.checked });
+    annoncer(e.target.checked ? 'Fond de carte activé pour le rapport.' : 'Fond de carte désactivé : la carte du rapport montrera les lieux sans fond.');
+  });
   document.getElementById('recherche-lieux').addEventListener('change', async (e) => {
     await enregistrerParametres({ rechercheLieux: e.target.checked });
     annoncer(e.target.checked ? 'Recherche mondiale des lieux activée.' : 'Recherche mondiale désactivée : seuls tes lieux habituels seront proposés.');
@@ -2341,7 +2579,8 @@ function blocIA() {
     <p class="encre-2">Style : toujours à la troisième personne (« Le patient… »), en français soigné.</p>
     <label class="interrupteur"><input type="checkbox" id="ia-auto" ${ia.automatique ? 'checked' : ''}> <span>Préparer automatiquement après chaque évaluation</span></label>
     <div class="bandeau" style="margin-top:14px"><strong>Ton accord</strong>
-      <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires et mes motifs cochés soient envoyés au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mon adresse, ni mon matricule, ni mes notes, ni les dates, ni mes lieux ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label></div>
+      <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires et mes motifs cochés soient envoyés au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mon adresse, ni mon matricule, ni mes notes, ni les dates, ni mes lieux ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label>
+      <label class="interrupteur" style="margin-top:10px"><input type="checkbox" id="ia-accord-synthese" ${ia.consentementSyntheseUtc ? 'checked' : ''}> <span><strong>Synthèse du rapport</strong> : j'accepte aussi que, <em>seulement quand je demande une synthèse</em> dans la fenêtre du rapport, les données de la période soient envoyées à ce service : mes notes (jours numérotés, sans dates), les moyennes et tendances, les jours de la semaine, mes situations, lieux et activités, mes motifs cochés et mes textes déjà validés. Jamais mon nom, mon adresse ni mon matricule. Je peux retirer cet accord à tout moment.</span></label></div>
     <div class="rangee">
       <button type="submit" class="bouton">Enregistrer et tester</button>
       ${pret ? '<button type="button" class="bouton-discret" id="ia-desactiver">Désactiver et retirer mon accord</button>' : ''}
@@ -2358,9 +2597,13 @@ function brancherIA() {
   }));
   const bDes = document.getElementById('ia-desactiver');
   if (bDes) bDes.addEventListener('click', async () => {
-    await enregistrerParametres({ ia: { ...etat.parametres.ia, actif: false, consentementUtc: null, consentementFournisseur: '' } });
+    await enregistrerParametres({ ia: { ...etat.parametres.ia, actif: false, consentementUtc: null, consentementFournisseur: '', consentementSyntheseUtc: null } });
     annoncer('Préparation automatique désactivée : plus aucun texte ne sera envoyé.');
     vueReglages(['ia']);
+  });
+  document.getElementById('ia-accord-synthese').addEventListener('change', async (e) => {
+    await enregistrerParametres({ ia: { ...C.parametresParDefaut().ia, ...etat.parametres.ia, consentementSyntheseUtc: e.target.checked ? new Date(maintenant()).toISOString() : null } });
+    annoncer(e.target.checked ? 'Accord pour la synthèse enregistré : elle ne sera rédigée que lorsque tu la demandes.' : 'Accord pour la synthèse retiré : aucune donnée ne sera envoyée pour la synthèse.');
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

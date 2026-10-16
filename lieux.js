@@ -33,7 +33,10 @@ export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', ac
     <p class="doux combo-etat" id="${id}-etat" aria-live="polite"></p>
     ${activite ? `<div class="champ-activite">
       <label for="${id}-activite">Ce que tu y as fait <small class="doux">(facultatif)</small></label>
-      <input type="text" id="${id}-activite" list="liste-activites" autocomplete="off" autocapitalize="sentences" maxlength="${C.LONGUEUR_ACTIVITE}" placeholder="Courses, restaurant, visite familiale…" value="${esc(lieu && lieu.activite ? lieu.activite : '')}">
+      <div class="combo">
+        <input type="text" id="${id}-activite" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-activite-liste" autocomplete="off" autocapitalize="sentences" maxlength="${C.LONGUEUR_ACTIVITE}" placeholder="Tape les premières lettres : courses, restaurant…" value="${esc(lieu && lieu.activite ? lieu.activite : '')}">
+        <ul class="combo-liste" id="${id}-activite-liste" role="listbox" aria-label="Activités proposées" hidden></ul>
+      </div>
     </div>` : ''}
   </div>`;
 }
@@ -200,7 +203,7 @@ const NB_PROPOSES = C.MAX_LIEUX;
 const idLieu = (i) => (i === 0 ? 'lieu' : `lieu-${i + 1}`);
 const ordinal = (i) => (i === 0 ? '1er lieu' : `${i + 1}e lieu`);
 
-export function champLieuxHTML(lieux, { activites = [] } = {}) {
+export function champLieuxHTML(lieux) {
   const n = Math.max(1, Math.min(NB_PROPOSES, (lieux || []).length || 1));
   return `<div class="champ-lieux" id="zone-lieux">
     <fieldset class="champ nombre-lieux">
@@ -209,7 +212,6 @@ export function champLieuxHTML(lieux, { activites = [] } = {}) {
       <p class="doux aide-lieux" ${n > 1 ? '' : 'hidden'}>Indique-les dans l'ordre où tu y es allé.</p>
     </fieldset>
     <div id="liste-lieux">${champsHTML(lieux, n)}</div>
-    <datalist id="liste-activites">${activites.map((a) => `<option value="${esc(a)}"></option>`).join('')}</datalist>
   </div>`;
 }
 
@@ -218,7 +220,7 @@ function champsHTML(lieux, n) {
 }
 
 /** Branche le choix du nombre de lieux et les champs ; retourne { valeurs() } → liste ordonnée (cases vides ignorées). */
-export function brancherChampLieux(racine, { initial = [], connus = [], enLigne = true, fetch: f } = {}) {
+export function brancherChampLieux(racine, { initial = [], connus = [], activites = [], enLigne = true, fetch: f } = {}) {
   const zone = racine.querySelector('#zone-lieux');
   const liste = zone.querySelector('#liste-lieux');
   const aide = zone.querySelector('.aide-lieux');
@@ -240,6 +242,7 @@ export function brancherChampLieux(racine, { initial = [], connus = [], enLigne 
         document.getElementById(`${id}-activite`).focus();
       });
       const activite = document.getElementById(`${id}-activite`);
+      brancherComboActivite(activite, activites);
       return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); return l ? C.normaliserLieu({ ...l, activite: a }) : null; } };
     });
   };
@@ -259,4 +262,48 @@ export function brancherChampLieux(racine, { initial = [], connus = [], enLigne 
     if (vide >= 0) document.getElementById(idLieu(vide)).focus();
   });
   return { valeurs: () => champs.map((c) => c.valeur()).filter(Boolean) };
+}
+
+/**
+ * Saisie semi-automatique des activités : dès la première lettre, propose les activités déjà saisies
+ * (les plus fréquentes d'abord) puis les suggestions de départ. Tout reste local à l'appareil.
+ */
+export function brancherComboActivite(input, activites) {
+  const liste = document.getElementById(`${input.id}-liste`);
+  let options = [];
+  let actif = -1;
+  const fermer = () => { liste.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); actif = -1; };
+  const ouvrir = () => {
+    options = C.filtrerActivites(activites, input.value, 8);
+    if (!options.length || document.activeElement !== input) { fermer(); return; }
+    liste.innerHTML = options.map((a, i) => `<li role="option" id="${input.id}-opt-${i}" data-i="${i}" aria-selected="false">${esc(a)}</li>`).join('');
+    liste.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    actif = -1;
+  };
+  const marquer = (i) => {
+    const items = liste.querySelectorAll('[role="option"]');
+    items.forEach((li) => li.setAttribute('aria-selected', 'false'));
+    if (i < 0 || i >= items.length) { actif = -1; return; }
+    actif = i;
+    items[i].setAttribute('aria-selected', 'true');
+    input.setAttribute('aria-activedescendant', items[i].id);
+    items[i].scrollIntoView({ block: 'nearest' });
+  };
+  const choisir = (a) => { input.value = a; fermer(); };
+  input.addEventListener('input', ouvrir);
+  input.addEventListener('focus', () => { if (input.value) ouvrir(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); if (liste.hidden) ouvrir(); else marquer(Math.min(options.length - 1, actif + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); marquer(Math.max(0, actif - 1)); }
+    else if (e.key === 'Enter' && !liste.hidden) { e.preventDefault(); if (actif >= 0) choisir(options[actif]); else fermer(); }
+    else if (e.key === 'Escape' && !liste.hidden) { e.preventDefault(); fermer(); }
+  });
+  input.addEventListener('blur', () => setTimeout(fermer, 150));
+  liste.addEventListener('pointerdown', (e) => {
+    const li = e.target.closest('[role="option"]');
+    if (!li) return;
+    e.preventDefault();
+    choisir(options[Number(li.dataset.i)]);
+  });
 }

@@ -80,10 +80,15 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
       : await appelerAnthropic(cfg, systeme, entrees, f);
     const r = C.lireReponseReformulation(texte, lot);
     // Contrôle : une proposition encore à la première personne est redemandée une fois, avec un rappel
-    const aCorriger = r.propositions.filter((p) => ['explication', 'complement', 'prevision'].some((k) => C.contientPremierePersonne(p[k])));
+    // (et une proposition trop longue)
+    const premiere = (p) => ['explication', 'complement', 'prevision'].some((k) => C.contientPremierePersonne(p[k]));
+    const aCorriger = r.propositions.filter((p) => premiere(p) || C.versionTropLongue(p));
     if (aCorriger.length) {
       const lot2 = lot.filter((e) => aCorriger.some((p) => p.id === e.id));
-      const rappel = `${systeme}\n\nATTENTION : ta réponse précédente employait la première personne. Réécris ces entrées en parlant uniquement du « patient », sans aucun « je », « me », « mon », « ma », « mes ».`;
+      const consignes = [];
+      if (aCorriger.some(premiere)) consignes.push('ta réponse précédente employait la première personne. Réécris ces entrées en parlant uniquement du « patient », sans aucun « je », « me », « mon », « ma », « mes »');
+      if (aCorriger.some((p) => C.versionTropLongue(p))) consignes.push(`certains textes dépassaient ${C.LONGUEUR_VERSION} caractères. Chaque texte doit compter au maximum ${C.LONGUEUR_VERSION} caractères, espaces compris : condense en gardant l'essentiel`);
+      const rappel = `${systeme}\n\nATTENTION : ${consignes.join(' ; de plus, ')}.`;
       try {
         const texte2 = cfg.fournisseur === 'serveur'
           ? await appelerServeur(cfg, parametres.serveurRappels, rappel, C.entreesReformulation(lot2), f)
@@ -109,4 +114,27 @@ export async function trouverModele(cle, { fetch: f = globalThis.fetch.bind(glob
   const d = await rep.json();
   const ids = (d.data || []).map((m) => m.id);
   return ids.find((id) => /opus/i.test(id)) || ids.find((id) => /sonnet/i.test(id)) || ids[0] || null;
+}
+
+/**
+ * Synthèse de la période (1000 caractères au plus), avec l'accord spécifique du patient.
+ * donnees = C.donneesSynthese(...) : statistiques agrégées et textes déjà validés, sans identité ni dates.
+ */
+export async function redigerSynthese(parametres, donnees, { fetch: f = globalThis.fetch.bind(globalThis) } = {}) {
+  const cfg = parametres.ia || {};
+  if (!cfg.actif || !cfg.consentementUtc || cfg.consentementFournisseur !== cfg.fournisseur) throw new Error('La préparation automatique n\'est pas activée (Réglages).');
+  if (!cfg.consentementSyntheseUtc) throw new Error('Donne d\'abord ton accord pour la synthèse (Réglages, Version professionnelle automatique).');
+  if (cfg.fournisseur === 'anthropic' && !cfg.cle) throw new Error('Clé d\'accès manquante (Réglages).');
+  const appeler = (systeme) => (cfg.fournisseur === 'serveur'
+    ? appelerServeur(cfg, parametres.serveurRappels, systeme, donnees, f)
+    : appelerAnthropic(cfg, systeme, donnees, f));
+  const systeme = C.instructionsSynthese();
+  let texte = C.lireReponseSynthese(await appeler(systeme));
+  if (texte.length > C.LONGUEUR_SYNTHESE) {
+    try {
+      const t2 = C.lireReponseSynthese(await appeler(`${systeme}\n\nATTENTION : ta réponse précédente comptait ${texte.length} caractères. Elle doit en compter au maximum ${C.LONGUEUR_SYNTHESE}, espaces compris : condense en gardant l'essentiel.`));
+      if (t2.length < texte.length) texte = t2;
+    } catch { /* on garde la première version : le patient peut la raccourcir */ }
+  }
+  return texte;
 }

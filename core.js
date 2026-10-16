@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.11.0';
+export const VERSION_APP = '1.12.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -22,6 +22,7 @@ export const LIBELLE_POLARITE = { favorable: 'Favorable', defavorable: 'Défavor
 export const STATUTS = {
   a_venir: 'À venir',
   en_attente: 'En attente',
+  a_rattraper: 'À rattraper',
   repondu: 'Répondu',
   repondu_retard: 'Répondu en retard',
   omis: 'Omis',
@@ -166,6 +167,16 @@ export function expiration(date, creneau) {
   return heurePrevue(s.date, s.creneau);
 }
 
+/** Après la fin du créneau, une évaluation oubliée peut encore être saisie pendant ce délai (en heures). */
+export const DELAI_RATTRAPAGE_H = 24;
+export function limiteSaisie(date, creneau) {
+  return expiration(date, creneau) + DELAI_RATTRAPAGE_H * 3600000;
+}
+/** Une NOUVELLE évaluation peut être saisie pour ce créneau (les modifications restent toujours possibles). */
+export function peutSaisir(creneau, instant) {
+  return peutRepondre(creneau, instant) && instant < limiteSaisie(creneau.date, creneau.creneau);
+}
+
 function minutesDuJour(hhmm) { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; }
 
 /** Créneau dont la fenêtre de réponse contient l'instant donné. */
@@ -195,6 +206,7 @@ export function statutCreneau({ date, creneau }, evaluation, instant, debutSuivi
   const debut = debutSuiviUtc ? Date.parse(debutSuiviUtc) : null;
   if (debut !== null && exp <= debut) return 'non_renseigne';
   if (instant < exp) return 'en_attente';
+  if (instant < exp + DELAI_RATTRAPAGE_H * 3600000) return 'a_rattraper';
   return 'omis';
 }
 
@@ -223,7 +235,7 @@ export function grilleCreneaux(debut, fin, evaluations, instant, debutSuiviUtc) 
 }
 
 export function comptesCreneaux(grille) {
-  const c = { attendues: 0, completees: 0, aLHeure: 0, enRetard: 0, omises: 0, enAttente: 0, aVenir: 0, nonRenseignees: 0, heureInconnue: 0 };
+  const c = { attendues: 0, completees: 0, aLHeure: 0, enRetard: 0, omises: 0, enAttente: 0, aRattraper: 0, aVenir: 0, nonRenseignees: 0, heureInconnue: 0 };
   for (const s of grille) {
     switch (s.statut) {
       case 'repondu':
@@ -233,12 +245,13 @@ export function comptesCreneaux(grille) {
       case 'repondu_retard': c.completees++; c.enRetard++; break;
       case 'omis': c.omises++; break;
       case 'en_attente': c.enAttente++; break;
+      case 'a_rattraper': c.aRattraper++; break;
       case 'a_venir': c.aVenir++; break;
       case 'non_renseigne': c.nonRenseignees++; break;
       default: break;
     }
   }
-  c.attendues = c.completees + c.omises + c.enAttente;
+  c.attendues = c.completees + c.omises + c.enAttente + c.aRattraper;
   return c;
 }
 
@@ -275,11 +288,126 @@ export function verificationSecurite(note, textes) {
 
 export function normaliserLibelle(s) { return normaliserTexte(s).trim(); }
 
-export function creerMotif(libelle, polarite, instant = Date.now(), ordre = 0) {
+export const LONGUEUR_DESCRIPTION_MOTIF = 200;
+
+export function creerMotif(libelle, polarite, instant = Date.now(), ordre = 0, description = '') {
   const l = String(libelle || '').trim();
   if (!l) throw new Error('Le libellé du motif est vide.');
   if (!POLARITES.includes(polarite)) throw new Error('Polarité inconnue.');
-  return { id: nouvelId(), libelle: l, polarite, actif: true, regroupeDans: null, ordre, creeLeUtc: new Date(instant).toISOString(), modifieLeUtc: null };
+  const d = String(description || '').replace(/\s+/g, ' ').trim().slice(0, LONGUEUR_DESCRIPTION_MOTIF);
+  return { id: nouvelId(), libelle: l, polarite, actif: true, regroupeDans: null, ordre, ...(d ? { description: d } : {}), creeLeUtc: new Date(instant).toISOString(), modifieLeUtc: null };
+}
+
+/**
+ * Courte description d'un motif, affichée quand on le coche : celle saisie, sinon la liste des motifs
+ * qui y sont regroupés. Chaîne vide s'il n'y a rien à dire.
+ */
+export function descriptionMotif(m, bibliotheque = []) {
+  if (!m) return '';
+  if (m.description) return m.description;
+  const enfants = bibliotheque.filter((x) => x.regroupeDans === m.id).map((x) => x.libelle);
+  return enfants.length ? `Comprend : ${enfants.join(', ')}.` : '';
+}
+
+// Simplification proposée de la bibliothèque (octobre 2026) : motifs proches réunis sous un libellé court.
+// L'ordre compte : un motif est rangé dans le premier groupe dont un mot-clé correspond (sans accents ni casse).
+export const PLAN_MOTIFS = [
+  { libelle: 'Calme et solitude', polarite: 'favorable', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.' },
+  { libelle: 'Liberté, sans contraintes', polarite: 'favorable', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
+  { libelle: 'Réussite ou retour positif', polarite: 'favorable', cles: [/retour positif/, /application/, /reussite/], description: 'Un travail abouti ou reconnu : retour positif sur les recherches, application créée, finalisée ou améliorée…' },
+  { libelle: 'Projets personnels (recherches, photo…)', polarite: 'favorable', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…' },
+  { libelle: 'Journée utile et occupée', polarite: 'favorable', cles: [/occupe/, /utile/], description: 'Sentiment d\'avoir été occupé de manière constructive, journée utile.' },
+  { libelle: 'Activité physique, promenade', polarite: 'favorable', cles: [/promenade/, /activite physique/, /sport/], description: 'Promenade, sport ou toute activité physique, même avec peu de motivation.' },
+  { libelle: 'Fanclub du KSC', polarite: 'favorable', cles: [/fanclub/, /karlsruher/, /\bksc\b/], description: 'Activités liées au fanclub du Karlsruher SC.' },
+  { libelle: 'Moments avec mes proches', polarite: 'favorable', cles: [/enfant/, /(^|\s)ami/, /proches/, /famill/], description: 'Moments partagés avec les enfants, la famille ou des amis.' },
+  { libelle: 'Santé : soin ou bonne nouvelle', polarite: 'favorable', cles: [/diagnostic/, /pedicure/, /medecin/, /sante/, /soin/], description: 'Soin reçu ou bonne nouvelle médicale : diagnostic clair, pédicure médicale…' },
+  { libelle: 'Bon sommeil', polarite: 'favorable', cles: [/sommeil/, /dormi/], description: 'Nuit réparatrice, bien dormi.' },
+  { libelle: 'Peur du retour au travail', polarite: 'defavorable', cles: [/bureau/, /retour (potentiel )?(au|a) (travail|bureau)/, /retour au travail/], description: 'Appréhension d\'un retour possible au bureau.' },
+  { libelle: 'Contraintes familiales (organisation)', polarite: 'defavorable', cles: [/contraintes? famil/, /logisti/, /organisation famil/], description: 'Stress d\'organisation dans la famille : rendez-vous, horaires, logistique (sans conflit).' },
+  {
+    libelle: 'Conflits personnels', polarite: 'defavorable', cles: [/conflit/, /dispute/, /streit/, /couple/], description: 'Dispute ou tension avec une personne proche. Précise avec qui (facultatif).',
+    sous: [
+      { libelle: 'Conflit dans le couple', cles: [/couple/, /conjoint/, /partenaire/, /compagne/, /epouse/, /\bfemme\b/], description: 'Avec ma femme.' },
+      { libelle: 'Conflit avec mes enfants', cles: [/\bfils\b/, /\bfille\b/, /enfant/], description: 'Avec mon fils ou mes enfants.' },
+      { libelle: 'Conflit avec mes parents ou ma famille', cles: [/\bmere\b/, /maman/, /\bpere\b/, /papa/, /parents/, /\bsoeur\b/, /\bfrere\b/, /oncle/, /tante/], description: 'Avec ma mère, mon père ou un autre membre de la famille.' },
+      { libelle: 'Conflit avec un ami ou un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Avec un bon ami ou un collègue proche.' },
+      { libelle: 'Conflit avec une autre personne', cles: [/autre personne/, /quelqu.un/], description: 'Avec quelqu\'un d\'autre, sans préciser.' },
+    ],
+  },
+  { libelle: 'Mes enfants (manque, culpabilité)', polarite: 'defavorable', cles: [/enfant/, /culpabilit/], description: 'Les enfants manquent, ou culpabilité de ne pas assez s\'investir auprès d\'eux.' },
+  { libelle: 'Bruit et désordre au domicile', polarite: 'defavorable', cles: [/bruit/, /travaux/, /domicile/, /desordre/], description: 'Bruit, travaux, stress ou désordre visuel au domicile.' },
+  { libelle: 'Soucis financiers ou administratifs', polarite: 'defavorable', cles: [/financ/, /courrier/, /administrat/, /facture/], description: 'Préoccupations d\'argent, courrier désagréable (rétention, pénalité, facture, résultats d\'analyses).' },
+  { libelle: 'Fatigue, mauvais repos', polarite: 'defavorable', cles: [/fatigue/, /repos/, /recuper/], description: 'Fatigue, difficulté à se reposer et à récupérer.' },
+  { libelle: 'Trop d\'écran', polarite: 'defavorable', cles: [/ecran/], description: 'Temps excessif passé devant un écran.' },
+  { libelle: 'Santé : douleurs, peur de la maladie', polarite: 'defavorable', cles: [/douleur/, /cancer/, /maladie/], description: 'Douleurs physiques, peur du cancer ou de la maladie.' },
+  { libelle: 'Manque d\'organisation ou de motivation', polarite: 'defavorable', cles: [/organis/, /motiv/, /equilibre/], description: 'Difficulté à s\'organiser, à se motiver (activité physique) ou à trouver un équilibre de vie sain.' },
+  { libelle: 'Surcharge mentale', polarite: 'defavorable', cles: [/stimul/, /court.?circuit/, /surcharge/], description: 'Trop de sollicitations en même temps, sensation de court-circuit mental.' },
+  { libelle: 'Contrariétés du quotidien', polarite: 'defavorable', cles: [/flash/, /trop vite/, /performance/, /\bksc\b/, /contrariet/], description: 'Petits événements contrariants : excès de vitesse flashé, mauvais résultats du KSC…' },
+  { libelle: 'Anxiété, préoccupations', polarite: 'defavorable', cles: [/anxi/, /preoccup/, /angoiss/], description: 'Anxiété diffuse, préoccupations personnelles.' },
+];
+
+/**
+ * Proposition de simplification : pour chaque groupe du plan, les motifs actifs qui s'y rangent,
+ * le motif conservé (celui qui porte déjà le nouveau libellé, sinon le plus utilisé), et les motifs non classés.
+ */
+export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS) {
+  const actifs = motifs.filter((m) => m.actif && !m.regroupeDans);
+  // Liste à plat : les sous-motifs suivent leur motif parent (champ « parent » = index du parent)
+  const cibles = [];
+  for (const g of plan) {
+    const ip = cibles.push({ ...g, parent: null }) - 1;
+    for (const sm of g.sous || []) cibles.push({ ...sm, polarite: g.polarite, parent: ip });
+  }
+  const groupes = cibles.map((g) => ({ cible: g, membres: [], principal: null }));
+  const nonClasses = [];
+  for (const m of actifs) {
+    const n = normaliserLibelle(m.libelle);
+    let i = cibles.findIndex((g) => g.polarite === m.polarite && normaliserLibelle(g.libelle) === n);
+    if (i < 0) {
+      i = cibles.findIndex((g) => g.parent === null && g.polarite === m.polarite && g.cles.some((r) => r.test(n)));
+      // Dans un motif à sous-catégories, la sous-catégorie qui correspond (sinon le motif lui-même)
+      if (i >= 0) {
+        const sous = cibles.findIndex((g) => g.parent === i && g.cles.some((r) => r.test(n)));
+        if (sous >= 0) i = sous;
+      }
+    }
+    if (i < 0) nonClasses.push(m); else groupes[i].membres.push(m);
+  }
+  let changements = 0;
+  for (const g of groupes) {
+    const k = normaliserLibelle(g.cible.libelle);
+    g.principal = g.membres.find((m) => normaliserLibelle(m.libelle) === k)
+      || [...g.membres].sort((a, b) => (usage.get(b.id) || 0) - (usage.get(a.id) || 0) || (a.ordre ?? 0) - (b.ordre ?? 0))[0] || null;
+    g.aCreer = !g.principal;
+    const p = g.principal;
+    const parent = g.cible.parent === null ? null : groupes[g.cible.parent].principal;
+    if (!p || p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (g.cible.parent !== null && (!parent || p.parentId !== parent.id))) changements++;
+    changements += g.membres.filter((m) => m !== p).length;
+  }
+  return { groupes, nonClasses, changements };
+}
+
+/** Motifs à enregistrer pour appliquer la simplification (renommés, regroupés, créés, rattachés). Rien n'est supprimé. */
+export function appliquerSimplification(motifs, plan, instant = Date.now()) {
+  const le = new Date(instant).toISOString();
+  const sortie = [];
+  const finaux = [];
+  let ordre = Math.max(0, ...motifs.map((m) => m.ordre ?? 0));
+  plan.groupes.forEach((g, i) => {
+    const parent = g.cible.parent === null ? null : finaux[g.cible.parent];
+    let p = g.principal;
+    if (!p) {
+      p = { ...creerMotif(g.cible.libelle, g.cible.polarite, instant, ++ordre, g.cible.description), ...(parent ? { parentId: parent.id } : {}) };
+      sortie.push(p);
+    } else if (p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (parent ? p.parentId !== parent.id : !!p.parentId)) {
+      const { parentId: _ancien, ...sansParent } = p;
+      p = { ...sansParent, libelle: g.cible.libelle, description: g.cible.description, ordre: i, ...(parent ? { parentId: parent.id } : {}), modifieLeUtc: le };
+      sortie.push(p);
+    }
+    finaux[i] = p;
+    for (const m of g.membres) if (m.id !== p.id) sortie.push({ ...m, regroupeDans: p.id, actif: false, modifieLeUtc: le });
+  });
+  return sortie;
 }
 
 export function racineMotif(id, bibliotheque) {
@@ -294,6 +422,11 @@ export function racineMotif(id, bibliotheque) {
 }
 
 export function instantaneMotif(m) { return { id: m.id, libelle: m.libelle, polarite: m.polarite }; }
+
+/** Sous-motifs actifs d'un motif (affichés quand le motif est coché). */
+export function sousMotifs(m, bibliotheque) {
+  return bibliotheque.filter((x) => x.parentId === m.id && x.actif && !x.regroupeDans);
+}
 
 // ---------------------------------------------------------------------------
 // Contexte de chaque évaluation : lieu de séjour et situation professionnelle
@@ -357,7 +490,7 @@ export function libelleLieu(l, { complet = false } = {}) {
   return details.length ? `${l.nom} (${details.join(', ')})` : l.nom;
 }
 
-export const MAX_LIEUX = 8;
+export const MAX_LIEUX = 3; // par période d'environ 12 heures
 
 /** Liste ordonnée de lieux normalisés (lieux vides ignorés, au plus MAX_LIEUX). */
 export function normaliserLieux(liste) {
@@ -401,6 +534,17 @@ export function activitesConnues(evaluations) {
   const saisies = [...compte.values()].sort((a, b) => b.nombre - a.nombre || a.libelle.localeCompare(b.libelle, 'fr')).map((c) => c.libelle);
   const vus = new Set(compte.keys());
   return [...saisies, ...ACTIVITES_PROPOSEES.filter((a) => !vus.has(normaliserLibelle(a)))];
+}
+
+/** Activités dont un mot commence par le texte tapé (sans accents ni casse), début de libellé d'abord. */
+export function filtrerActivites(activites, texte, max = 8) {
+  const q = normaliserLibelle(texte);
+  if (!q) return activites.slice(0, max);
+  return activites
+    .map((a, i) => { const n = normaliserLibelle(a); return { a, i, rang: n.startsWith(q) ? 0 : n.split(/[\s'’\-(]+/).some((m) => m.startsWith(q)) ? 1 : n.includes(q) ? 2 : 9 }; })
+    .filter((x) => x.rang < 9 && normaliserLibelle(x.a) !== q)
+    .sort((x, y) => x.rang - y.rang || x.i - y.i)
+    .slice(0, max).map((x) => x.a);
 }
 
 export function humeurParActivite(evaluations) {
@@ -522,6 +666,21 @@ export function humeurParLieu(evaluations) {
   return humeurParCategorie(evaluations, lieuxDe, cleLieu, (l) => libelleLieu(l, { complet: true }));
 }
 
+export const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+/** Humeur par jour de la semaine, du lundi au dimanche (jours sans évaluation inclus, nombre 0). */
+export function humeurParJourSemaine(evaluations) {
+  const jour = (d) => (new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7;
+  const r = humeurParCategorie(evaluations, (e) => String(jour(e.date)), (k) => k, (k) => JOURS_SEMAINE[Number(k)]);
+  return JOURS_SEMAINE.map((nom, i) => r.lignes.find((l) => l.cle === String(i)) || { cle: String(i), libelle: nom, valeur: String(i), nombre: 0, moyenne: null, min: null, max: null });
+}
+
+/** Répartition des notes de 0 à 10. */
+export function repartitionNotes(evaluations) {
+  const n = Array(11).fill(0);
+  for (const e of evaluations) if (Number.isInteger(e.note)) n[e.note]++;
+  return n;
+}
+
 export function humeurParSituation(evaluations) {
   const r = humeurParCategorie(evaluations, (e) => e.situation, cleSituation, libelleSituation);
   const ordre = (x) => ORDRE_SITUATIONS.indexOf(x.valeur.statut) * 3 + (x.valeur.modalite === 'sur_site' ? 2 : x.valeur.modalite ? 1 : 0);
@@ -568,6 +727,24 @@ export function appliquerCompletion(evaluations, options, instant = Date.now()) 
 // Évaluations
 
 const LIMITE_TEXTE = 10000;
+
+/**
+ * Informations encore manquantes pour qu'une NOUVELLE évaluation soit complète :
+ * note, au moins un lieu, situation professionnelle (et modalité si besoin), au moins un motif ou un texte, note prévue.
+ * Retourne [{ champ, message }] (vide si tout est rempli).
+ */
+export function informationsManquantes(s) {
+  const m = [];
+  if (!Number.isInteger(s.note)) m.push({ champ: 'q1', message: 'la note actuelle (question 1)' });
+  if (!normaliserLieux(s.lieux !== undefined ? s.lieux : [s.lieu]).length) m.push({ champ: 'q4', message: 'au moins un lieu (Contexte)' });
+  const sit = s.situation;
+  if (!sit || !SITUATIONS[sit.statut]) m.push({ champ: 'q4', message: 'ta situation professionnelle (Contexte)' });
+  else if (SITUATIONS_AVEC_MODALITE.includes(sit.statut) && !MODALITES[sit.modalite]) m.push({ champ: 'q4', message: 'télétravail ou sur site (Contexte)' });
+  const motifs = (s.motifs || []).length + (s.autresMotifs || []).length;
+  if (!motifs && !String(s.explication || '').trim()) m.push({ champ: 'q2', message: 'au moins un motif coché ou une explication (question 2)' });
+  if (!s.prevision || !Number.isInteger(s.prevision.note)) m.push({ champ: 'q3', message: 'la note prévue (question 3)' });
+  return m;
+}
 
 export function validerSaisie(s) {
   const erreurs = [];
@@ -728,8 +905,17 @@ export function textesOriginaux(ev) {
   return { explication: ev.explication || '', complement: ev.complement || '', prevision: (ev.prevision && ev.prevision.motif) || '' };
 }
 
-/** Méthode de rédaction des versions pour le thérapeute (3 : complète, motifs intégrés, traduite, toujours « le patient »). */
-export const METHODE_VERSION = 3;
+/**
+ * Méthode de rédaction des versions pour le thérapeute : 3 = complète, motifs intégrés, traduite, toujours « le patient » ;
+ * 4 = idem, 500 caractères au plus par texte, sans redite quand des motifs se ressemblent.
+ */
+export const METHODE_VERSION = 4;
+export const LONGUEUR_VERSION = 500;
+
+/** Un texte de la version dépasse la longueur permise. */
+export function versionTropLongue(r) {
+  return !!r && ['explication', 'complement', 'prevision'].some((k) => String(r[k] || '').length > LONGUEUR_VERSION);
+}
 
 /** Champs qui peuvent recevoir une version : l'explication intègre aussi les motifs cochés. */
 export function champsVersion(ev) {
@@ -748,7 +934,7 @@ export function aDesTextes(ev) {
 /** Version préparée avec une méthode antérieure (à refaire pour bénéficier de la nouvelle rédaction). */
 export function versionAncienneMethode(ev) {
   const r = ev.reformulation;
-  return !!(r && (r.methode || 1) < METHODE_VERSION);
+  return !!(r && ((r.methode || 1) < 3 || versionTropLongue(r)));
 }
 
 /**
@@ -832,7 +1018,8 @@ Règles impératives :
 - Écris exclusivement à la troisième personne : jamais « je », « j' », « me », « moi », « mon », « ma », « mes », « nous ». Même si le patient écrit « je », transpose systématiquement (« je suis fatigué » devient « Le patient se dit fatigué » ou « Le patient est fatigué »). Chaque texte commence par « Le patient » ou « Il ».
 - Si un texte est rédigé en allemand, en anglais, en luxembourgeois ou dans un mélange de langues, traduis-le fidèlement en français.
 - Corrige toutes les fautes d'orthographe, de grammaire, de conjugaison, d'accord et de ponctuation.
-- Ne résume pas et ne raccourcis pas : conserve l'intégralité du contenu, chaque fait, émotion, nuance, cause évoquée, projet, difficulté, chiffre, nom propre et lieu. Tu peux réorganiser les phrases pour la clarté, mais rien ne doit être omis.
+- Longueur : chaque texte (« explication », « complement », « prevision ») compte au maximum ${LONGUEUR_VERSION} caractères, espaces compris. Si le contenu tient dans cette limite, conserve-le en entier (faits, émotions, causes évoquées, projets, difficultés, chiffres, noms propres, lieux). Sinon, condense en gardant l'essentiel et chaque élément important, sans rien inventer.
+- Aucune redite : si plusieurs motifs ou passages expriment la même idée (par exemple « Calme et tranquillité » et « Absence de bruit », ou un motif coché que le texte répète), ne l'écris qu'une seule fois, en une formulation qui les réunit.
 - N'ajoute aucune information absente des entrées, aucune interprétation, aucune hypothèse, aucun vocabulaire clinique ni diagnostic.
 - Présente les motifs comme des éléments mentionnés par le patient, sans en tirer de conclusion.
 - Conserve exactement chaque « id ».
@@ -847,6 +1034,91 @@ export function demandeReformulation(evaluations, options = {}) {
 Entrées :
 ${JSON.stringify(entreesReformulation(evaluations), null, 2)}
 `;
+}
+
+// ---------------------------------------------------------------------------
+// Synthèse de la période (1000 caractères au plus), rédigée par un assistant avec l'accord du patient,
+// puis relue et validée par lui. Seules des données agrégées et les textes déjà validés sont transmis :
+// jamais le nom, l'adresse, le matricule, ni les dates du calendrier (les jours sont numérotés).
+
+export const LONGUEUR_SYNTHESE = 1000;
+
+export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Date.now(), debutSuiviUtc = null }) {
+  const evals = trierChrono(dansPeriode(evaluations, debut, fin));
+  const grille = grilleCreneaux(debut, fin, evaluations, instant, debutSuiviUtc);
+  const comptes = comptesCreneaux(grille);
+  const st = statistiques(evals);
+  const prev = comparaisonsPrevisions(evals, evaluations);
+  const arrondi = (x) => (x === null || x === undefined ? null : Math.round(x * 10) / 10);
+  const cat = (r) => r.lignes.map((l) => ({ libelle: l.libelle, evaluations: l.nombre, moyenne: arrondi(l.moyenne), min: l.min, max: l.max }));
+  const freq = frequenceMotifs(evals, motifs);
+  const textes = evals.map((e) => {
+    const t = textesPourRapport(e, 'reformule');
+    return t.reformule ? [t.explication, t.complement].filter(Boolean).join(' ') : '';
+  });
+  return {
+    periode: { jours: joursEntre(debut, fin) + 1 },
+    evaluations: { attendues: comptes.attendues, completees: comptes.completees, omises: comptes.omises, en_retard: comptes.enRetard },
+    moyennes: { generale: arrondi(st.moyenne), matin: arrondi(st.moyenneMatin), soir: arrondi(st.moyenneSoir), min: st.nombre ? st.min : null, max: st.nombre ? st.max : null },
+    echelle: NIVEAUX.map((n, i) => `${i} = ${n}`).join(' ; '),
+    serie: evals.map((e, i) => ({ jour: joursEntre(debut, e.date) + 1, jour_semaine: JOURS_SEMAINE[(new Date(`${e.date}T12:00:00Z`).getUTCDay() + 6) % 7], creneau: e.creneau, note: e.note, ...(textes[i] ? { texte_valide: textes[i] } : {}) })),
+    tendances: tendancesDescriptives(evals),
+    par_jour_semaine: humeurParJourSemaine(evals).filter((l) => l.nombre).map((l) => ({ jour: l.libelle, evaluations: l.nombre, moyenne: arrondi(l.moyenne) })),
+    par_situation: cat(humeurParSituation(evals)),
+    par_lieu: cat(humeurParLieu(evals)),
+    par_activite: cat(humeurParActivite(evals)),
+    motifs_favorables: freq.filter((f) => f.polarite === 'favorable').map((f) => ({ motif: f.libelle, fois: f.nombre })),
+    motifs_defavorables: freq.filter((f) => f.polarite === 'defavorable').map((f) => ({ motif: f.libelle, fois: f.nombre })),
+    previsions: { comparees: prev.nombreComparees, identiques: prev.exactes, realite_superieure: prev.realiteSuperieure, realite_inferieure: prev.realiteInferieure, ecart_moyen: arrondi(prev.ecartMoyen) },
+    verifications_securite: evals.filter((e) => e.securite && e.securite.declenchee).length,
+  };
+}
+
+export function instructionsSynthese() {
+  return `Tu es un rédacteur francophone de très haut niveau. Tu reçois les données agrégées d'un journal d'humeur tenu deux fois par jour par un patient (note de 0 à 10, voir « echelle »), pour une période donnée, ainsi que ses commentaires déjà relus et validés (« texte_valide »). Le texte est destiné à son psychothérapeute ; le patient le relira et le validera.
+
+Rédige une synthèse en français, à la troisième personne (« le patient »), dans un langage professionnel mais clair, neutre et factuel, en deux parties :
+Évolution : quelques phrases sur l'évolution de l'humeur pendant la période (niveau général, tendance, variations, moments, jours, situations, lieux ou activités associés aux notes les plus basses ou les plus hautes).
+Points prioritaires : deux à quatre points, chacun sur une ligne commençant par « – », qui méritent l'attention en priorité selon les données (par exemple un jour, une situation ou un lieu nettement plus difficile, des motifs défavorables récurrents, des notes très basses, un écart entre prévisions et réalité, des évaluations omises).
+
+Règles impératives :
+- ${LONGUEUR_SYNTHESE} caractères au maximum au total, espaces compris.
+- N'utilise que les données fournies : aucune information inventée, aucune hypothèse, aucun diagnostic, aucun vocabulaire clinique, aucun conseil de traitement.
+- Présente les liens comme des constats (« les notes les plus basses sont relevées le lundi »), jamais comme des causes.
+- Ne considère jamais qu'une note supérieure à zéro exclut un risque ; si une vérification de sécurité a eu lieu, mentionne-le sobrement.
+- Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement.
+- Aucune redite : chaque idée n'est écrite qu'une fois.
+- Pas de dates du calendrier (les jours sont numérotés) ; tu peux citer les jours de la semaine.
+
+Réponds uniquement avec du JSON valide, sans texte autour : {"synthese": "Évolution : …\\nPoints prioritaires :\\n– …\\n– …"}`;
+}
+
+/** Lit la synthèse renvoyée par l'assistant (JSON, éventuellement entouré de texte ou de balises de code). */
+export function lireReponseSynthese(texte) {
+  const brut = String(texte || '');
+  const debutJson = brut.indexOf('{');
+  const finJson = brut.lastIndexOf('}');
+  if (debutJson >= 0 && finJson > debutJson) {
+    try {
+      const d = JSON.parse(brut.slice(debutJson, finJson + 1));
+      if (d && typeof d.synthese === 'string' && d.synthese.trim()) return d.synthese.trim();
+    } catch { /* texte brut ci-dessous */ }
+  }
+  const t = brut.replace(/^```\w*|```$/g, '').trim();
+  if (!t) throw new Error('Réponse vide de l\'assistant.');
+  return t;
+}
+
+/** Synthèse enregistrée (et validée) pour exactement cette période, ou null. */
+export function syntheseDe(parametres, debut, fin, { valideeSeulement = true } = {}) {
+  const l = (parametres && parametres.syntheses) || [];
+  return l.find((x) => x.debut === debut && x.fin === fin && (!valideeSeulement || x.statut === 'validee')) || null;
+}
+
+/** Ajoute ou remplace la synthèse d'une période (10 dernières conservées). */
+export function enregistrerSynthese(parametres, synthese) {
+  const autres = ((parametres && parametres.syntheses) || []).filter((x) => !(x.debut === synthese.debut && x.fin === synthese.fin));
+  return [synthese, ...autres].slice(0, 10);
 }
 
 /** Évaluations dont la version pour le rapport reste à préparer. */
@@ -1048,6 +1320,9 @@ export function parametresParDefaut(instant = Date.now()) {
     destinataire: '',
     emailTherapeute: '',
     rechercheLieux: true,
+    fondCarte: true,
+    saisieComplete: true,
+    alerteManquee: true,
     debutSuiviUtc: new Date(instant).toISOString(),
     contactConfiance: { nom: '', telephone: '' },
     rappelsDansApplication: false,
@@ -1265,7 +1540,7 @@ const COLONNES_EVAL = [
   'source', 'note_origine', 'cree_le_utc', 'modifie_le_utc', 'version', 'motifs_json', 'autres_motifs_json', 'prevision_json',
   'securite_json', 'reformulation_json', 'historique_json', 'lieu', 'situation', 'lieu_json', 'situation_json', 'lieux_json',
 ];
-const COLONNES_MOTIF = ['id', 'libelle', 'polarite', 'actif', 'regroupe_dans', 'ordre', 'origine', 'cree_le_utc', 'modifie_le_utc'];
+const COLONNES_MOTIF = ['id', 'libelle', 'polarite', 'actif', 'regroupe_dans', 'ordre', 'origine', 'cree_le_utc', 'modifie_le_utc', 'description', 'parent_id'];
 
 function celluleCSV(v) {
   if (v === null || v === undefined) return '';
@@ -1306,7 +1581,7 @@ export function exporterCSVEvaluations(evaluations) {
 export function exporterCSVMotifs(motifs) {
   const lignes = [COLONNES_MOTIF.join(';')];
   for (const m of motifs) {
-    const v = { id: m.id, libelle: m.libelle, polarite: m.polarite, actif: m.actif ? 'oui' : 'non', regroupe_dans: m.regroupeDans || '', ordre: m.ordre ?? 0, origine: m.origine || '', cree_le_utc: m.creeLeUtc || '', modifie_le_utc: m.modifieLeUtc || '' };
+    const v = { id: m.id, libelle: m.libelle, polarite: m.polarite, actif: m.actif ? 'oui' : 'non', regroupe_dans: m.regroupeDans || '', ordre: m.ordre ?? 0, origine: m.origine || '', cree_le_utc: m.creeLeUtc || '', modifie_le_utc: m.modifieLeUtc || '', description: m.description || '', parent_id: m.parentId || '' };
     lignes.push(COLONNES_MOTIF.map((c) => celluleCSV(v[c])).join(';'));
   }
   return '\uFEFF' + lignes.join('\r\n') + '\r\n';
@@ -1365,7 +1640,7 @@ export function lireCSV(texte) {
   if (cles.includes('libelle') && cles.includes('polarite')) {
     const motifs = rangees.map((r) => verifierMotif({
       id: r.id || nouvelId(), libelle: r.libelle, polarite: r.polarite, actif: r.actif !== 'non',
-      regroupeDans: r.regroupe_dans || null, ordre: Number.parseInt(r.ordre, 10) || 0, ...(r.origine ? { origine: r.origine } : {}),
+      regroupeDans: r.regroupe_dans || null, ordre: Number.parseInt(r.ordre, 10) || 0, ...(r.origine ? { origine: r.origine } : {}), ...(r.description ? { description: r.description } : {}), ...(r.parent_id ? { parentId: r.parent_id } : {}),
       creeLeUtc: r.cree_le_utc || null, modifieLeUtc: r.modifie_le_utc || null,
     }));
     return { type: 'motifs', evaluations: [], motifs };
@@ -1547,7 +1822,7 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
 
 function empreinteTexte(s) {
   let h = 5381;
