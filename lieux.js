@@ -29,12 +29,33 @@ function champRessentiHTML(id, valeur) {
       <div class="ressenti-echelle" role="radiogroup" aria-label="Ressenti à ce lieu, de 0 à 10">${C.NIVEAUX.map((nom, i) => `<button type="button" role="radio" aria-checked="${v === i}" data-v="${i}" title="${i} – ${esc(nom)}" aria-label="${i} – ${esc(nom)}" style="--c: var(--n${i})">${iconeMeteo(i, { taille: 22 })}<span>${i}</span></button>`).join('')}</div>
     </div>`;
 }
+/** Moyen de déplacement pour « En route » : facultatif, un appui ; un 2e appui efface. */
+function champTransportHTML(id, valeur, visible) {
+  const v = C.TRANSPORTS[valeur] ? valeur : '';
+  return `<div class="champ-transport" id="${id}-transport" data-valeur="${v}" ${visible ? '' : 'hidden'}>
+      <p class="ressenti-tete"><span>Comment ? <small class="doux">(facultatif)</small></span></p>
+      <div class="puces-transport" role="radiogroup" aria-label="Moyen de déplacement">${C.ORDRE_TRANSPORTS.map((t) => `<button type="button" class="puce-action" role="radio" aria-pressed="${t === v}" aria-checked="${t === v}" data-t="${t}">${esc(C.LIBELLE_COURT_TRANSPORT[t])}</button>`).join('')}</div>
+    </div>`;
+}
+
+function brancherTransport(zone) {
+  if (!zone) return null;
+  zone.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-t]');
+    if (!b) return;
+    const v = zone.dataset.valeur === b.dataset.t ? '' : b.dataset.t;
+    zone.dataset.valeur = v;
+    zone.querySelectorAll('[data-t]').forEach((x) => { x.setAttribute('aria-pressed', String(x.dataset.t === v)); x.setAttribute('aria-checked', String(x.dataset.t === v)); });
+  });
+  return () => zone.dataset.valeur || null;
+}
+
 const etatRessenti = (v) => (v === null ? 'comme la note de la période' : esc(C.libelleNote(v)));
 
 export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', activite = false, itinerance = false, ressenti = false } = {}) {
   const itin = C.estItinerance(lieu);
   return `<div class="champ champ-lieu${itin ? ' est-itinerance' : ''}">
-    ${itinerance ? `<div class="tete-lieu"><label for="${id}">${esc(libelle)}</label><button type="button" class="puce-action" id="${id}-itinerance" aria-pressed="${itin}" title="Pas de lieu fixe : randonnée, tour à vélo, balade…">Itinérance</button></div>` : `<label for="${id}">${esc(libelle)}</label>`}
+    ${itinerance ? `<div class="tete-lieu"><label for="${id}">${esc(libelle)}</label><button type="button" class="puce-action" id="${id}-itinerance" aria-pressed="${itin}" title="Déplacement : à pied, vélo, voiture, bus, train, avion, bateau…">En route</button></div>` : `<label for="${id}">${esc(libelle)}</label>`}
     <div class="combo">
       <input type="text" id="${id}" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${id}-liste" autocomplete="off" autocapitalize="words" spellcheck="false" maxlength="120"
         placeholder="Tape les premières lettres : Arsdorf, Luxembourg, Lisbonne…" value="${esc(C.libelleLieu(lieu, { complet: true }))}">
@@ -42,6 +63,7 @@ export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', ac
       <ul class="combo-liste" id="${id}-liste" role="listbox" aria-label="Lieux proposés" hidden></ul>
     </div>
     <p class="doux combo-etat" id="${id}-etat" aria-live="polite"></p>
+    ${itinerance ? champTransportHTML(id, itin ? lieu.transport : null, itin) : ''}
     ${activite ? `<div class="champ-activite">
       <label for="${id}-activite">Ce que tu y as fait <small class="doux">(facultatif)</small></label>
       <div class="combo">
@@ -163,7 +185,7 @@ export function brancherChampLieu(id, { initial = null, connus = [], enLigne = t
     if (!t) return null;
     if (choisi && (t === C.libelleLieu(choisi, { complet: true }) || t === choisi.nom)) return choisi;
     const k = C.normaliserLibelle(t);
-    if (k.startsWith('itinerance')) return { ...C.LIEU_ITINERANCE };
+    if (k.startsWith('itinerance') || k.startsWith('en route')) return { ...C.LIEU_ITINERANCE };
     const connu = connus.find((c) => C.normaliserLibelle(c.lieu.nom) === k || C.normaliserLibelle(C.libelleLieu(c.lieu, { complet: true })) === k);
     if (connu) return connu.lieu;
     return C.normaliserLieu({ nom: t, source: 'libre' });
@@ -211,16 +233,18 @@ export function brancherChampSituation(racine, nom, { surChangement = () => {} }
 // ---------------------------------------------------------------------------
 // Plusieurs lieux pour une même évaluation, dans l'ordre (par ex. Arsdorf → Schouweiler → Leudelange → Arsdorf)
 
-const NB_PROPOSES = C.MAX_LIEUX;
+// Nombre de cases proposées : 3, ou davantage pour une ancienne évaluation qui en a plus (versions 1.12-1.13)
+const nbProposes = (lieux) => Math.min(C.MAX_LIEUX_ANCIENS, Math.max(C.MAX_LIEUX, (lieux || []).length));
 const idLieu = (i) => (i === 0 ? 'lieu' : `lieu-${i + 1}`);
 const ordinal = (i) => (i === 0 ? '1er lieu' : `${i + 1}e lieu`);
 
 export function champLieuxHTML(lieux) {
-  const n = Math.max(1, Math.min(NB_PROPOSES, (lieux || []).length || 1));
+  const max = nbProposes(lieux);
+  const n = Math.max(1, Math.min(max, (lieux || []).length || 1));
   return `<div class="champ-lieux" id="zone-lieux">
     <fieldset class="champ nombre-lieux">
       <legend>Nombre de lieux</legend>
-      <div class="segmente">${Array.from({ length: NB_PROPOSES }, (_, i) => `<label><input type="radio" name="nb-lieux" value="${i + 1}" ${i + 1 === n ? 'checked' : ''}><span>${i + 1}</span></label>`).join('')}</div>
+      <div class="segmente">${Array.from({ length: max }, (_, i) => `<label><input type="radio" name="nb-lieux" value="${i + 1}" ${i + 1 === n ? 'checked' : ''}><span>${i + 1}</span></label>`).join('')}</div>
       <p class="doux aide-lieux" ${n > 1 ? '' : 'hidden'}>Indique-les dans l'ordre où tu y es allé. Si ton humeur a été différente selon le lieu, touche la météo ressentie sur place ; sinon, la note de la période s'applique.</p>
     </fieldset>
     <div id="liste-lieux">${champsHTML(lieux, n)}</div>
@@ -241,22 +265,24 @@ export function brancherChampLieux(racine, { initial = [], connus = [], activite
     champs = valeurs.map((v, i) => {
       const id = idLieu(i);
       const boutonItin = document.getElementById(`${id}-itinerance`);
+      const zoneTransport = document.getElementById(`${id}-transport`);
+      const transport = brancherTransport(zoneTransport);
       const marquer = (l) => {
         const itin = C.estItinerance(l);
         boutonItin.setAttribute('aria-pressed', String(itin));
         boutonItin.closest('.champ-lieu').classList.toggle('est-itinerance', itin);
+        zoneTransport.hidden = !itin;
       };
       const champ = brancherChampLieu(id, { initial: v ? C.lieuSansActivite(v) : null, connus, enLigne, fetch: f, surChangement: marquer });
       boutonItin.addEventListener('click', () => {
         if (C.estItinerance(champ.valeur())) { champ.definir(null); marquer(null); document.getElementById(id).focus(); return; }
         champ.definir({ ...C.LIEU_ITINERANCE });
         marquer(C.LIEU_ITINERANCE);
-        document.getElementById(`${id}-activite`).focus();
       });
       const activite = document.getElementById(`${id}-activite`);
       brancherComboActivite(activite, activites);
       const ressenti = brancherRessenti(document.getElementById(`${id}-ressenti`));
-      return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); const r = ressenti ? ressenti() : (v ? v.ressenti : null); return l ? C.normaliserLieu({ ...l, activite: a, ressenti: r }) : null; } };
+      return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); const r = ressenti ? ressenti() : (v ? v.ressenti : null); return l ? C.normaliserLieu({ ...l, activite: a, ressenti: r, transport: transport() }) : null; } };
     });
   };
   brancher(Array.from({ length: Math.max(1, initial.length) }, (_, i) => initial[i] || null));

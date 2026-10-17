@@ -904,7 +904,7 @@ function formulaire(cible, ev) {
     <section class="question" aria-labelledby="q4">
       <p class="question-numero">Contexte</p>
       <h2 id="q4">Où as-tu été, et quelle est ta situation ?</h2>
-      <p class="doux">Indique les lieux (3 au maximum) où tu as été <strong>depuis ton évaluation précédente</strong>, soit environ les 12 dernières heures${cible.creneau === 'matin' ? ' (la soirée et la nuit)' : ' (la journée)'}. ${repris ? 'Le lieu est repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif : cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
+      <p class="doux">Indique les lieux (5 au maximum, « En route » pour un déplacement) où tu as été <strong>depuis ton évaluation précédente</strong>, soit environ les 12 dernières heures${cible.creneau === 'matin' ? ' (la soirée et la nuit)' : ' (la journée)'}. ${repris ? 'Le lieu est repris de ta dernière évaluation : vérifie et modifie si quelque chose a changé.' : 'Facultatif : cela permet de voir dans les graphiques si le lieu ou le travail influencent ton humeur.'}</p>
       ${L.champLieuxHTML(lieuxInitiaux)}
       ${L.champSituationHTML('situation', situationInitiale)}
     </section>

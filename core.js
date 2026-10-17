@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.15.0';
+export const VERSION_APP = '1.16.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -515,9 +515,18 @@ export const MODALITES = { teletravail: 'Télétravail', sur_site: 'Sur site' };
 
 const nombreOuNull = (v, min, max) => (typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? Math.round(v * 1e5) / 1e5 : null);
 
-/** Pas de lieu fixe sur la période : randonnée, tour à vélo, balade… */
-export const LIEU_ITINERANCE = Object.freeze({ nom: 'Itinérance', region: '', pays: '', codePays: '', lat: null, lon: null, source: 'itinerance' });
+/**
+ * « En route » : un déplacement, quel que soit le moyen (à pied d'un point à un autre, vélo, voiture,
+ * bus, train, avion, bateau…). Source « itinerance » conservée pour la compatibilité des données.
+ */
+export const LIEU_ITINERANCE = Object.freeze({ nom: 'En route', region: '', pays: '', codePays: '', lat: null, lon: null, source: 'itinerance' });
 export const estItinerance = (l) => !!l && l.source === 'itinerance';
+export const TRANSPORTS = {
+  pied: 'à pied', velo: 'à vélo', voiture: 'en voiture', bus: 'en bus / tram', train: 'en train', avion: 'en avion', bateau: 'en bateau', autre: 'autre moyen',
+};
+export const ORDRE_TRANSPORTS = ['pied', 'velo', 'voiture', 'bus', 'train', 'avion', 'bateau', 'autre'];
+/** Libellé court pour les boutons : « À pied », « Vélo », « Voiture »… */
+export const LIBELLE_COURT_TRANSPORT = { pied: 'À pied', velo: 'Vélo', voiture: 'Voiture', bus: 'Bus / tram', train: 'Train', avion: 'Avion', bateau: 'Bateau', autre: 'Autre' };
 export const LONGUEUR_ACTIVITE = 80;
 
 /** Ressenti sur place (0 à 10, même échelle que la note) ou null s'il n'est pas indiqué. */
@@ -532,7 +541,7 @@ export function normaliserLieu(l) {
   const activite = txt(l.activite, LONGUEUR_ACTIVITE);
   const ressenti = ressentiValide(l.ressenti);
   const extras = { ...(activite ? { activite } : {}), ...(ressenti !== null ? { ressenti } : {}) };
-  if (l.source === 'itinerance') return { ...LIEU_ITINERANCE, ...extras };
+  if (l.source === 'itinerance') return { ...LIEU_ITINERANCE, ...(TRANSPORTS[l.transport] ? { transport: l.transport } : {}), ...extras };
   const nom = txt(l.nom);
   if (!nom) return null;
   const code = txt(l.codePays, 3).toUpperCase();
@@ -551,31 +560,36 @@ export function normaliserLieu(l) {
 /** Le lieu seul, sans l'activité ni le ressenti (pour le proposer à nouveau). */
 export function lieuSansActivite(l) {
   if (!l) return null;
-  const { activite, ressenti, ...reste } = l;
+  const { activite, ressenti, transport, ...reste } = l;
   return reste;
 }
 
 /** Clé de regroupement : même nom (sans accents ni casse) et même pays. */
 export function cleLieu(l) {
-  return l ? `${normaliserLibelle(l.nom)}|${(l.codePays || '').toLowerCase()}` : '';
+  if (!l) return '';
+  // « En route » (anciennement « Itinérance ») : regroupé par moyen de déplacement
+  if (estItinerance(l)) return `en route|${TRANSPORTS[l.transport] ? l.transport : ''}`;
+  return `${normaliserLibelle(l.nom)}|${(l.codePays || '').toLowerCase()}`;
 }
 
 export function libelleLieu(l, { complet = false } = {}) {
   if (!l) return '';
-  if (estItinerance(l)) return complet ? 'Itinérance (randonnée, vélo, balade…)' : 'Itinérance';
+  if (estItinerance(l)) return TRANSPORTS[l.transport] ? `En route ${TRANSPORTS[l.transport]}`.replace('En route autre moyen', 'En route (autre moyen)') : complet ? 'En route (déplacement)' : 'En route';
   if (!complet) return l.nom;
   const details = [l.region && normaliserLibelle(l.region) !== normaliserLibelle(l.nom) ? l.region : '', l.pays].filter(Boolean);
   return details.length ? `${l.nom} (${details.join(', ')})` : l.nom;
 }
 
-export const MAX_LIEUX = 3; // par période d'environ 12 heures
+export const MAX_LIEUX = 5; // par période d'environ 12 heures
+// Les versions 1.12 et 1.13 acceptaient jusqu'à 8 lieux (5 depuis la 1.16) : ces évaluations restent modifiables sans perte.
+export const MAX_LIEUX_ANCIENS = 8;
 
 /**
  * Liste ordonnée de lieux normalisés (lieux vides ignorés, au plus MAX_LIEUX).
  * Le ressenti sur place n'a de sens qu'avec plusieurs lieux : avec un seul, la note de la période suffit.
  */
 export function normaliserLieux(liste) {
-  const lieux = (Array.isArray(liste) ? liste : [liste]).map(normaliserLieu).filter(Boolean).slice(0, MAX_LIEUX);
+  const lieux = (Array.isArray(liste) ? liste : [liste]).map(normaliserLieu).filter(Boolean).slice(0, MAX_LIEUX_ANCIENS);
   return lieux.length > 1 ? lieux : lieux.map(({ ressenti, ...l }) => l);
 }
 
@@ -845,7 +859,7 @@ export function informationsManquantes(s) {
   return m;
 }
 
-export function validerSaisie(s) {
+export function validerSaisie(s, { maxLieux = MAX_LIEUX } = {}) {
   const erreurs = [];
   if (!Number.isInteger(s.note) || s.note < 0 || s.note > 10) erreurs.push('Choisissez une note entière entre 0 et 10 pour la question 1.');
   if (s.prevision && s.prevision.note !== null && s.prevision.note !== undefined) {
@@ -866,7 +880,7 @@ export function validerSaisie(s) {
   if (lieuxSaisis.some((l) => l && String(l.nom || '').length > 120)) erreurs.push('Nom de lieu trop long (120 caractères maximum).');
   if (lieuxSaisis.some((l) => l && String(l.activite || '').trim().length > LONGUEUR_ACTIVITE)) erreurs.push(`Activité trop longue (${LONGUEUR_ACTIVITE} caractères maximum).`);
   if (lieuxSaisis.some((l) => l && l.ressenti != null && ressentiValide(l.ressenti) === null)) erreurs.push('Ressenti sur place invalide (nombre entier de 0 à 10).');
-  if (lieuxSaisis.filter(Boolean).length > MAX_LIEUX) erreurs.push(`${MAX_LIEUX} lieux au maximum par évaluation.`);
+  if (lieuxSaisis.filter(Boolean).length > maxLieux) erreurs.push(`${maxLieux} lieux au maximum par évaluation.`);
   return erreurs;
 }
 
@@ -955,7 +969,8 @@ export function modifierEvaluation(ev, saisie, raison, instant = Date.now()) {
     lieux: saisie.lieux !== undefined ? saisie.lieux : saisie.lieu !== undefined ? [].concat(saisie.lieu || []) : lieuxDe(ev),
     situation: saisie.situation === undefined ? ev.situation : saisie.situation,
   };
-  const erreurs = validerSaisie(fusion);
+  // Une ancienne évaluation peut garder ses lieux (jusqu'à 8), sans en ajouter au-delà de ce nombre
+  const erreurs = validerSaisie(fusion, { maxLieux: Math.min(MAX_LIEUX_ANCIENS, Math.max(MAX_LIEUX, lieuxDe(ev).length)) });
   if (erreurs.length) throw new Error(erreurs.join(' '));
   const nouveau = {
     note: fusion.note,

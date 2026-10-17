@@ -421,6 +421,9 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .champ-activite { margin-top: 10px; }
 .champ-activite label { display: block; font-weight: 500; font-size: .95rem; margin-bottom: 4px; }
 .champ-ressenti { margin-top: 12px; }
+.champ-transport { margin-top: 10px; }
+.puces-transport { display: flex; flex-wrap: wrap; gap: 6px; }
+.puces-transport .puce-action { padding: 6px 12px; }
 .ressenti-fiche { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: .9em; color: var(--encre-2); }
 .ressenti-fiche svg { vertical-align: middle; }
 .ressenti-tete { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; font-weight: 500; font-size: .95rem; }
