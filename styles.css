@@ -499,3 +499,13 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .legende-polarite { font-size: .85rem; margin: 4px 0 0; display: flex; gap: 14px; }
 .liste-simplification li.titre-domaine { list-style: none; margin: 14px 0 6px -1.3em; padding-top: 8px; border-top: 1px solid var(--filet); }
 .puce-raccourci[aria-pressed="true"]::before { content: "✓"; color: var(--laiton); font-weight: 700; }
+
+/* Événements marquants */
+.lien-evenements { margin: 12px 0 0; }
+.liste-evenements { list-style: none; margin: 0; padding: 0; }
+.evenement-carte { padding: 12px 0 12px 14px; border-left: 3px solid var(--laiton); margin-bottom: 10px; }
+.evenement-carte + .evenement-carte { border-top: 0; }
+.evenement-carte .repli { margin-top: 6px; }
+.evenement-tete { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.evenement-tete > div { flex: 1; min-width: 0; }
+.evenement-tete > a { flex: none; }

@@ -184,6 +184,29 @@ class Redacteur {
     this.y += 4;
   }
 
+  /** Un événement marquant : pastille numérotée, moment et titre, puis faits et vécu séparés. */
+  evenement(numero, x) {
+    const R0 = 26;
+    this.place(70);
+    const num = String(numero);
+    this.page.drawCircle({ x: MARGE + 9, y: A4[1] - (this.y + 7.5), size: 9, color: this.couleur(LAITON) });
+    this.texte(num, MARGE + 9 - this.largeur(num, 9, 'gras') / 2, this.y + 10.7, { taille: 9, police: 'gras', couleur: '#FFFFFF' });
+    this.riche([[C.majuscule(C.libelleMomentEvenement(x)), 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : [])], { taille: 10.5, retrait: R0, apres: 3 });
+    const bloc = (etiquette, texte, couleur) => {
+      if (!texte) return;
+      this.place(30);
+      this.texte(etiquette.toUpperCase(), MARGE + R0, this.y + 7.5, { taille: 7.2, police: 'gras', couleur: DOUX });
+      this.y += 11;
+      for (const para of texte.split(/\n+/).map((t) => t.trim()).filter(Boolean)) this.paragraphe(para, { taille: 9.6, retrait: R0, couleur, apres: 3 });
+      this.y += 2;
+    };
+    bloc('Ce qui s\'est passé', x.faits, ENCRE);
+    bloc('Vécu du patient', x.vecu, '#3B4550');
+    this.place(8);
+    this.page.drawLine({ start: { x: MARGE + R0, y: A4[1] - this.y - 2 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 2 }, thickness: 0.5, color: this.couleur(FILET) });
+    this.y += 12;
+  }
+
   section(numero, titre, besoin = 90, { nouvellePage = false } = {}) {
     if (nouvellePage && this.y > HAUT_CONTENU + 1) this.nouvellePage();
     else if (!this.place(50 + besoin)) this.y += 16;
@@ -254,7 +277,8 @@ class Redacteur {
     const legende = 22;
     const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
     const hBandes = avecBandes ? 52 : 0;
-    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0));
+    const marques = (contexte && contexte.evenements) || [];
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 : 0));
     // À gauche : note et pictogramme météo de chaque niveau ; à droite : nom du niveau
     const gauche = MARGE + 36, droite = MARGE + LARGEUR - 60;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
@@ -308,6 +332,21 @@ class Redacteur {
       }
     });
     this.y = bas + 26;
+    // Événements marquants : pastilles numérotées sous les dates, à la position du créneau concerné
+    if (marques.length) {
+      const parIndex = new Map();
+      for (const m of marques) { const i = indexParId.get(m.creneauId); if (i === undefined) continue; parIndex.set(i, [...(parIndex.get(i) || []), m.numero]); }
+      const yM = this.y + 2;
+      for (const [i, nums] of parIndex) {
+        const lib = nums.join(',');
+        const w = Math.max(11, this.largeur(lib, 7, 'gras') + 6);
+        const x = xDe(i);
+        this.page.drawLine({ start: P(x, bas), end: P(x, yM), thickness: 0.5, color: this.couleur(LAITON), dashArray: [1.5, 1.5] });
+        this.cadre(x - w / 2, yM, w, 11, { fond: LAITON, rayon: 5.5 });
+        this.texte(lib, x - this.largeur(lib, 7, 'gras') / 2, yM + 8, { taille: 7, police: 'gras', couleur: '#FFFFFF' });
+      }
+      this.y += 18;
+    }
     // Bandes « Lieu » et « Situation » : un segment par suite de créneaux identiques
     if (avecBandes) {
       const demi = n > 1 ? (xDe(1) - xDe(0)) / 2 : 6;
@@ -759,7 +798,11 @@ export async function genererRapport(PDFLib, donnees, options) {
   const synthese = options.synthese && String(options.synthese.texte || '').trim() ? options.synthese : null;
   const domaines = C.frequenceDomaines(evals, donnees.motifs || []);
   const avecDomaines = domaines.some((d) => d.favorable || d.defavorable);
-  const NB_SECTIONS = 12 + (synthese ? 1 : 0) + (avecDomaines ? 1 : 0);
+  // Contexte et événements marquants (notes du patient, jamais transmises à l'assistant)
+  const evenements = Array.isArray(options.evenements) ? C.evenementsActifs(options.evenements, { debut, fin, rapportSeulement: true }) : [];
+  const contexte = options.contexte ? C.normaliserContexte(options.contexte) : null;
+  const avecEvenements = !!(evenements.length || contexte);
+  const NB_SECTIONS = 12 + (synthese ? 1 : 0) + (avecDomaines ? 1 : 0) + (avecEvenements ? 1 : 0);
   let numSection = 0;
   const hSommaire = NB_SECTIONS * 16 + 40;
   R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: 6 });
@@ -793,7 +836,21 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.paragraphe(`Synthèse rédigée ${synthese.source === 'assistant' ? 'avec l\'aide d\'un assistant (Claude, Anthropic) ' : ''}à partir des données de la période, relue et validée par le patient${synthese.valideeLeUtc ? ` le ${C.formatDateHeure(synthese.valideeLeUtc)}` : ''}. Elle décrit des constats et ne constitue pas une évaluation clinique.`, { taille: 8.3, police: 'italique', couleur: DOUX });
   }
 
-  R.section(++numSection, 'Évaluations attendues, complétées et omises', 90, { nouvellePage: !synthese });
+  if (avecEvenements) {
+    R.section(++numSection, evenements.length ? (contexte ? 'Contexte et événements marquants' : 'Événements marquants') : 'Contexte', 120, { nouvellePage: !synthese });
+    if (contexte) {
+      if (evenements.length) R.sousTitre('Contexte indiqué par le patient');
+      for (const para of contexte.texte.split(/\n+/).map((t) => t.trim()).filter(Boolean)) R.paragraphe(para, { taille: 10, apres: 4 });
+      if (contexte.modifieLeUtc) R.paragraphe(`Mis à jour le ${C.formatDateHeure(contexte.modifieLeUtc)}.`, { taille: 8.3, couleur: DOUX });
+    }
+    if (evenements.length) {
+      if (contexte) R.sousTitre('Événements de la période');
+      evenements.forEach((x, i) => R.evenement(i + 1, x));
+      R.paragraphe('Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s\'est passé de ce qu\'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique.', { taille: 8.3, police: 'italique', couleur: DOUX });
+    }
+  }
+
+  R.section(++numSection, 'Évaluations attendues, complétées et omises', 90, { nouvellePage: !synthese && !avecEvenements });
   R.chiffres([
     { valeur: String(comptes.attendues), libelle: 'attendues' },
     { valeur: String(comptes.completees), libelle: 'complétées' },
@@ -840,8 +897,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (grille.length > 2 * 400) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
-    R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations });
-    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}`, { taille: 8.5, couleur: DOUX });
+    R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x) })) });
+    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur le créneau qui les suit (l\'évaluation du soir porte sur la journée, celle du matin sur la soirée et la nuit).' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
   // 5. Tendances

@@ -251,7 +251,7 @@ async function verificationSecurite(ev) {
 
 const VUES = {
   '': vueAccueil, accueil: vueAccueil, evaluer: vueEvaluer, modifier: vueModifier, evaluation: vueFiche,
-  calendrier: vueCalendrier, motifs: vueMotifs, reglages: vueReglages, textes: vueTextes, contexte: vueContexte,
+  calendrier: vueCalendrier, motifs: vueMotifs, reglages: vueReglages, textes: vueTextes, contexte: vueContexte, evenements: vueEvenements,
 };
 
 /** Incrémenté à chaque changement d'écran : une vue lente (asynchrone) ne doit pas recouvrir l'écran demandé ensuite. */
@@ -264,7 +264,7 @@ function router() {
   document.body.classList.toggle('sans-navigation', !etat.parametres);
   if (!etat.parametres) { vueBienvenue(); marquerOnglet(''); return; }
   const vue = VUES[route] || vueAccueil;
-  marquerOnglet(['modifier', 'evaluation', 'textes', 'contexte'].includes(route) ? '' : route);
+  marquerOnglet(['modifier', 'evaluation', 'textes', 'contexte', 'evenements'].includes(route) ? '' : route);
   try { vue(args); } catch (e) { console.error(e); contenu.innerHTML = `<div class="erreurs"><p>Une erreur est survenue : ${esc(e.message)}</p><p><a href="#/">Retour à l'accueil</a></p></div>`; }
   contenu.focus({ preventScroll: true });
   window.scrollTo(0, 0);
@@ -384,7 +384,7 @@ function vueAccueil() {
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
-        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}</section>
+        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}<p class="lien-evenements"><a class="bouton-discret" href="#/evenements">Noter un événement marquant</a>${(() => { const n = C.evenementsActifs(etat.parametres.evenements).length; return n ? ` <span class="doux">(${C.pluriel(n, 'événement noté', 'événements notés')})</span>` : ''; })()}</p></section>
         ${manquants.length ? `<section class="bloc"><h2>Créneaux à rattraper</h2>
           <p class="doux">Tu peux encore les remplir pendant ${C.DELAI_RATTRAPAGE_H} heures après la fin du créneau : la saisie sera signalée en retard. Au-delà, le créneau est compté comme omis.</p>
           <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('a_rattraper', `jusqu'au ${C.formatDateHeure(C.limiteSaisie(s.date, s.creneau))}`)}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
@@ -1201,6 +1201,103 @@ async function retirerEvaluation(id) {
 // ---------------------------------------------------------------------------
 // Lieu et situation : complétion des évaluations passées
 
+// ---------------------------------------------------------------------------
+// Événements marquants et contexte (section à part du rapport ; jamais envoyés à un assistant)
+
+function vueEvenements(args = []) {
+  const liste = C.evenementsActifs(etat.parametres.evenements);
+  const ctx = C.normaliserContexte(etat.parametres.contexteRapport);
+  const edite = args[0] === 'nouveau' ? {} : args[0] ? liste.find((x) => x.id === args[0]) : null;
+  const carte = (x) => `<li class="evenement-carte">
+      <div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}</div>
+        <a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
+      ${x.faits ? `<details class="repli"><summary>Ce qui s'est passé${x.vecu ? ' · ce que j\'ai ressenti' : ''}</summary><p class="texte-libre encre-2"><strong>Ce qui s'est passé :</strong> ${esc(x.faits)}</p>${x.vecu ? `<p class="texte-libre encre-2"><strong>Ce que j'ai ressenti :</strong> ${esc(x.vecu)}</p>` : ''}</details>` : ''}
+      ${x.rapport ? '' : '<p class="doux" style="margin:4px 0 0">Non inclus dans le rapport.</p>'}
+    </li>`;
+  const formulaire = (x) => `<form class="bloc" id="form-evenement" novalidate>
+      <h2>${x.id ? 'Modifier l\'événement' : 'Nouvel événement'}</h2>
+      <div class="rangee" style="align-items:flex-start">
+        <div class="champ" style="flex:2;min-width:150px"><label for="ev-date">Date</label><input type="date" id="ev-date" value="${esc(x.date || aujourdhui())}" max="${aujourdhui()}" required></div>
+        <div class="champ" style="flex:1;min-width:110px"><label for="ev-heure">Heure <small class="doux">(facultatif)</small></label><input type="time" id="ev-heure" value="${esc(x.heure || '')}"></div>
+      </div>
+      <label class="interrupteur" style="margin:-4px 0 12px"><input type="checkbox" id="ev-approx" ${x.heureApprox ? 'checked' : ''}> <span>Heure approximative</span></label>
+      <div class="champ"><label for="ev-titre">En quelques mots</label><input type="text" id="ev-titre" maxlength="${C.LONGUEUR_TITRE_EVENEMENT}" value="${esc(x.titre || '')}" placeholder="Ex. : appel difficile, dispute, bonne nouvelle…"></div>
+      <div class="champ"><label for="ev-faits">Ce qui s'est passé <small class="doux">(les faits)</small></label><textarea id="ev-faits" rows="5" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr" spellcheck="true">${esc(x.faits || '')}</textarea></div>
+      <div class="champ"><label for="ev-vecu">Ce que j'ai ressenti <small class="doux">(facultatif)</small></label><textarea id="ev-vecu" rows="4" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr" spellcheck="true">${esc(x.vecu || '')}</textarea></div>
+      <label class="interrupteur" style="margin-bottom:12px"><input type="checkbox" id="ev-rapport" ${x.rapport === false ? '' : 'checked'}> <span>Inclure dans le rapport</span></label>
+      <div class="rangee"><button type="submit" class="bouton">Enregistrer</button><a class="bouton-discret" href="#/evenements">Annuler</a>${x.id ? '<button type="button" class="bouton-discret" id="ev-supprimer">Supprimer…</button>' : ''}</div>
+    </form>`;
+  contenu.innerHTML = `<section class="colonne-centree">
+    <p><a class="bouton-discret" href="#/">‹ Aujourd'hui</a></p>
+    <h1>Événements marquants</h1>
+    <p class="encre-2">Note ce qui s'est passé de marquant (un appel, une dispute, une nouvelle, un rendez-vous…), avec la date et, si tu la connais, l'heure. Sépare <strong>ce qui s'est passé</strong> de <strong>ce que tu as ressenti</strong>. Ces notes forment une section à part du rapport et sont signalées par des pastilles numérotées sur le graphique. Elles ne sont jamais envoyées à un assistant.</p>
+    ${edite ? formulaire(edite) : `<p class="rangee"><a class="bouton" href="#/evenements/nouveau">Ajouter un événement</a><label class="bouton-secondaire" for="ev-fichier">Importer un fichier</label><input type="file" id="ev-fichier" accept=".json,application/json" class="visuellement-cache"></p>`}
+    ${edite ? '' : `<div class="bloc"><h2>Contexte à connaître</h2>
+      <p class="doux">Ce qui aide à comprendre la période : situation personnelle, traitement en cours, arrêt de travail… Apparaît en tête de la section du rapport.</p>
+      <textarea id="ctx-texte" rows="6" maxlength="${C.LONGUEUR_CONTEXTE}" lang="fr" spellcheck="true">${esc(ctx ? ctx.texte : '')}</textarea>
+      <small class="doux" id="ctx-compte"></small>
+      <label class="interrupteur" style="margin:8px 0"><input type="checkbox" id="ctx-rapport" ${ctx && !ctx.rapport ? '' : 'checked'}> <span>Inclure dans le rapport</span></label>
+      <div class="rangee"><button type="button" class="bouton-secondaire" id="ctx-enregistrer">Enregistrer le contexte</button>${ctx && ctx.modifieLeUtc ? `<span class="doux">Mis à jour le ${C.formatDateHeure(ctx.modifieLeUtc)}</span>` : ''}</div></div>
+    <div class="bloc"><h2>${liste.length ? C.pluriel(liste.length, 'événement noté', 'événements notés') : 'Aucun événement noté'}</h2>
+      ${liste.length ? `<ul class="liste-evenements">${[...liste].reverse().map(carte).join('')}</ul>` : '<p class="doux">Les événements que tu notes apparaîtront ici, du plus récent au plus ancien.</p>'}</div>`}
+  </section>`;
+  const sauver = (evenements) => enregistrerParametres({ evenements });
+  const form = document.getElementById('form-evenement');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const v = (id) => document.getElementById(id).value;
+      try {
+        const evenements = C.enregistrerEvenement(etat.parametres.evenements, { id: edite.id, date: v('ev-date'), heure: v('ev-heure'), heureApprox: document.getElementById('ev-approx').checked, titre: v('ev-titre'), faits: v('ev-faits'), vecu: v('ev-vecu'), rapport: document.getElementById('ev-rapport').checked }, maintenant());
+        await sauver(evenements);
+        annoncer('Événement enregistré.');
+        aller('#/evenements');
+      } catch (err) { annoncer(err.message); }
+    });
+    const sup = document.getElementById('ev-supprimer');
+    if (sup) sup.addEventListener('click', async () => {
+      if (!(await confirmer('Supprimer cet événement ?', 'Il disparaîtra de l\'application et des prochains rapports, sur tous tes appareils synchronisés.', 'Supprimer'))) return;
+      await sauver(C.supprimerEvenement(etat.parametres.evenements, edite.id, maintenant()));
+      annoncer('Événement supprimé.');
+      aller('#/evenements');
+    });
+    return;
+  }
+  const ta = document.getElementById('ctx-texte');
+  const compter = () => { document.getElementById('ctx-compte').textContent = `${ta.value.length} / ${C.LONGUEUR_CONTEXTE} caractères`; };
+  ta.addEventListener('input', compter); compter();
+  document.getElementById('ctx-enregistrer').addEventListener('click', async () => {
+    const texte = ta.value.trim();
+    await enregistrerParametres({ contexteRapport: texte ? { texte, rapport: document.getElementById('ctx-rapport').checked, modifieLeUtc: new Date(maintenant()).toISOString() } : null });
+    annoncer(texte ? 'Contexte enregistré.' : 'Contexte effacé.');
+    vueEvenements();
+  });
+  document.getElementById('ev-fichier').addEventListener('change', async (e) => {
+    const fichier = e.target.files[0];
+    e.target.value = '';
+    if (!fichier) return;
+    try {
+      const lu = C.lireFichierEvenements(await fichier.text(), maintenant());
+      const existants = new Set(C.evenementsActifs(etat.parametres.evenements).map((x) => x.id));
+      const nouveaux = lu.evenements.filter((x) => !existants.has(x.id));
+      const deja = lu.evenements.length - nouveaux.length;
+      const r = await dialogue(`<h2 id="dialogue-titre">Importer des événements</h2>
+        ${nouveaux.length ? `<p>${C.pluriel(nouveaux.length, 'événement', 'événements')} à ajouter :</p><ul class="liste-puces">${nouveaux.map((x) => `<li><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? ` – ${esc(x.titre)}` : ''}</li>`).join('')}</ul>` : '<p>Tous les événements de ce fichier sont déjà enregistrés.</p>'}
+        ${deja && nouveaux.length ? `<p class="doux">${C.pluriel(deja, 'événement déjà enregistré est ignoré', 'événements déjà enregistrés sont ignorés')}.</p>` : ''}
+        ${lu.contexte ? `<label class="interrupteur"><input type="checkbox" name="contexte" checked> <span>Remplacer aussi le « contexte à connaître »${ctx ? ' actuel' : ''}</span></label><details class="repli"><summary>Lire le contexte</summary><p class="texte-libre encre-2">${esc(lu.contexte.texte)}</p></details>` : ''}
+        <p class="doux">Relis-les après l'import : tu peux modifier ou supprimer chacun d'eux.</p>
+        <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui" ${nouveaux.length || lu.contexte ? '' : 'disabled'}>Importer</button></div>`);
+      if (r.valeur !== 'oui') return;
+      const modifs = {};
+      if (nouveaux.length) modifs.evenements = [...nouveaux, ...(etat.parametres.evenements || []).filter((x) => !nouveaux.some((n) => n.id === x.id))];
+      if (lu.contexte && r.donnees.get('contexte')) modifs.contexteRapport = lu.contexte;
+      if (Object.keys(modifs).length) await enregistrerParametres(modifs);
+      annoncer(`${nouveaux.length ? C.pluriel(nouveaux.length, 'événement importé', 'événements importés') : 'Aucun événement ajouté'}${modifs.contexteRapport ? ', contexte mis à jour' : ''}.`);
+      vueEvenements();
+    } catch (err) { annoncer(err.message); }
+  });
+}
+
 function vueContexte() {
   const toutes = C.trierChrono(etat.evaluations);
   const sansLieu = toutes.filter((e) => !e.lieu).length;
@@ -1804,6 +1901,7 @@ function texteConfidentialite() {
     lieux ? '<li><strong>Recherche des lieux</strong> : pendant que tu tapes un lieu, les lettres tapées sont envoyées au service Photon (OpenStreetMap, komoot, Allemagne) pour te proposer des localités, sans aucune autre donnée. Le lieu choisi reste dans tes données.</li>' : '',
     ia ? `<li><strong>Version professionnelle automatique</strong> : le texte de tes commentaires (sans nom, notes ni dates) est envoyé à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementUtc)}.</li>` : '',
     ia && p.ia.consentementSyntheseUtc ? `<li><strong>Synthèse du rapport</strong> : seulement quand tu la demandes, les données de la période (notes sans dates, moyennes, jours, situations, lieux, activités, motifs et textes validés, sans nom, adresse ni matricule) sont envoyées à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementSyntheseUtc)}.</li>` : '',
+    '<li><strong>Événements marquants et contexte</strong> : ces notes restent sur tes appareils (et dans la copie de synchronisation chiffrée, si elle est active) ; elles figurent dans le rapport seulement si tu le choisis, et ne sont jamais envoyées à un assistant.</li>',
     '<li><strong>Envoi du rapport</strong> : seulement quand tu le demandes, depuis ta propre messagerie ou par la feuille de partage (WhatsApp, Mail…). Un e-mail ordinaire n\'est pas chiffré.</li>',
   ].filter(Boolean);
   return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia || lieux ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
@@ -2043,6 +2141,7 @@ async function ouvrirPdf() {
     </fieldset>
     ${(() => { const n = etat.evaluations.filter((e) => C.aDesTextes(e) && !(e.reformulation && e.reformulation.statut === 'validee')).length; return n ? `<p class="bandeau">${n > 1 ? `${n} commentaires n'ont` : 'Un commentaire n\'a'} pas encore de version corrigée validée. <a href="#/textes" data-fermer-dialogue>Préparer les textes pour le rapport</a></p>` : ''; })()}
     <div class="bloc-synthese" id="pdf-synthese"></div>
+    <div class="bloc-synthese" id="pdf-evenements"></div>
     <div id="pdf-message" class="erreurs" hidden></div>
     <div id="pdf-resultat" hidden></div>
     <div class="dialogue-actions"><button type="button" class="bouton-secondaire" data-fermer>Fermer</button><button type="submit" class="bouton" id="pdf-generer">Générer le PDF</button></div>
@@ -2052,7 +2151,7 @@ async function ouvrirPdf() {
   form.querySelector('[data-fermer]').addEventListener('click', () => dlg.close());
   form.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
   const zoneEntre = document.getElementById('pdf-entre-zone');
-  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); };
+  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); majEvenements(); };
 
   // Synthèse de la période : rédigée par Claude (avec l'accord du patient) ou par le patient, puis validée
   const zoneSynthese = document.getElementById('pdf-synthese');
@@ -2125,6 +2224,21 @@ async function ouvrirPdf() {
   });
   ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', () => { editionSynthese = false; majSynthese(); }));
   majSynthese();
+  // Contexte et événements marquants de la période
+  const zoneEvenements = document.getElementById('pdf-evenements');
+  function majEvenements() {
+    const { debut, fin } = periodeChoisie();
+    if (!C.estDateValide(debut) || !C.estDateValide(fin) || debut > fin) { zoneEvenements.innerHTML = ''; return; }
+    const n = C.evenementsActifs(etat.parametres.evenements, { debut, fin, rapportSeulement: true }).length;
+    const ctx = C.normaliserContexte(etat.parametres.contexteRapport);
+    const avecCtx = !!(ctx && ctx.rapport);
+    zoneEvenements.innerHTML = `<h3 style="margin:0 0 6px">Contexte et événements marquants</h3>
+      ${n || avecCtx ? `<label class="interrupteur"><input type="checkbox" id="pdf-avec-evenements" checked> <span><strong>Inclure dans le rapport</strong> <span class="doux">(${[n ? C.pluriel(n, 'événement', 'événements') + ' sur la période' : '', avecCtx ? 'contexte' : ''].filter(Boolean).join(' et ')})</span></span></label>` : '<p class="doux" style="margin:0 0 6px">Aucun événement marquant noté sur cette période.</p>'}
+      <p style="margin:6px 0 0"><a class="bouton-discret" href="#/evenements" data-fermer-dialogue>Voir ou ajouter des événements</a></p>`;
+    zoneEvenements.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
+  }
+  ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', majEvenements));
+  majEvenements();
   form.querySelectorAll('[name="pdf-periode"]').forEach((r) => r.addEventListener('change', () => {
     if (zoneEntre) zoneEntre.hidden = r.value !== 'entre';
     if (r.value === 'perso') { document.getElementById('pdf-debut').focus(); return; }
@@ -2154,7 +2268,10 @@ async function ouvrirPdf() {
       const fondCarte = await fondCartePourRapport(preparationCarte(C.dansPeriode(etat.evaluations, debut, finChoisie)));
       const caseSynthese = document.getElementById('pdf-avec-synthese');
       const synthese = caseSynthese && caseSynthese.checked ? C.syntheseDe(etat.parametres, debut, finChoisie) : null;
-      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese });
+      const caseEvenements = document.getElementById('pdf-avec-evenements');
+      const avecEvenements = !!(caseEvenements && caseEvenements.checked);
+      const ctxRapport = C.normaliserContexte(etat.parametres.contexteRapport);
+      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
       const nbPages = (new TextDecoder('latin1').decode(octets).match(/\/Type\s*\/Page[^s]/g) || []).length;

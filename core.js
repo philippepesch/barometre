@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.16.0';
+export const VERSION_APP = '1.17.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1238,6 +1238,119 @@ export function enregistrerSynthese(parametres, synthese) {
   return [synthese, ...autres].slice(0, 10);
 }
 
+// ---------------------------------------------------------------------------
+// Événements marquants et contexte : notes du patient, datées, qui figurent dans une section à part
+// du rapport. Ce qui s'est passé (« faits ») et ce que le patient a ressenti (« vécu ») restent séparés.
+// Ces notes ne sont jamais envoyées à l'assistant (ni reformulation, ni synthèse).
+
+export const LONGUEUR_TITRE_EVENEMENT = 120;
+export const LONGUEUR_TEXTE_EVENEMENT = 2000;
+export const LONGUEUR_CONTEXTE = 2000;
+
+const heureValide = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(h || ''));
+const texteBorne = (v, n) => String(v || '').replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, n);
+
+/** Événement normalisé, ou null s'il est invalide. Un événement supprimé reste comme trace (« supprime »). */
+export function normaliserEvenement(x) {
+  if (!x || typeof x.id !== 'string' || !x.id) return null;
+  const modifie = x.modifieLeUtc && !Number.isNaN(Date.parse(x.modifieLeUtc)) ? new Date(x.modifieLeUtc).toISOString() : null;
+  if (x.supprime) return { id: x.id, supprime: true, modifieLeUtc: modifie };
+  if (!estDateValide(x.date)) return null;
+  const faits = texteBorne(x.faits, LONGUEUR_TEXTE_EVENEMENT);
+  const titre = texteBorne(x.titre, LONGUEUR_TITRE_EVENEMENT).replace(/\n/g, ' ');
+  if (!faits && !titre) return null;
+  return {
+    id: x.id, date: x.date, heure: heureValide(x.heure) ? x.heure : '', heureApprox: !!(heureValide(x.heure) && x.heureApprox),
+    titre, faits, vecu: texteBorne(x.vecu, LONGUEUR_TEXTE_EVENEMENT), rapport: x.rapport !== false,
+    creeLeUtc: x.creeLeUtc && !Number.isNaN(Date.parse(x.creeLeUtc)) ? new Date(x.creeLeUtc).toISOString() : modifie, modifieLeUtc: modifie,
+  };
+}
+
+export function validerEvenement(s) {
+  const e = [];
+  if (!estDateValide(s.date)) e.push('Indique la date de l\'événement.');
+  if (s.heure && !heureValide(s.heure)) e.push('Heure invalide (format HH:MM).');
+  if (!String(s.titre || '').trim() && !String(s.faits || '').trim()) e.push('Décris en quelques mots ce qui s\'est passé.');
+  if (String(s.titre || '').trim().length > LONGUEUR_TITRE_EVENEMENT) e.push(`Titre trop long (${LONGUEUR_TITRE_EVENEMENT} caractères maximum).`);
+  for (const [k, lib] of [['faits', 'Ce qui s\'est passé'], ['vecu', 'Ce que tu as ressenti']]) if (String(s[k] || '').trim().length > LONGUEUR_TEXTE_EVENEMENT) e.push(`« ${lib} » : ${LONGUEUR_TEXTE_EVENEMENT} caractères maximum.`);
+  return e;
+}
+
+/** Crée ou modifie un événement (même identifiant = modification). */
+export function enregistrerEvenement(liste, saisie, instant = Date.now()) {
+  const erreurs = validerEvenement(saisie);
+  if (erreurs.length) throw new Error(erreurs.join(' '));
+  const le = new Date(instant).toISOString();
+  const ex = (liste || []).find((x) => x.id === saisie.id && !x.supprime);
+  const ev = normaliserEvenement({ ...saisie, id: saisie.id || nouvelId(), creeLeUtc: ex ? ex.creeLeUtc : le, modifieLeUtc: le });
+  return [ev, ...(liste || []).filter((x) => x.id !== ev.id)];
+}
+
+export function supprimerEvenement(liste, id, instant = Date.now()) {
+  return (liste || []).map((x) => (x.id === id ? { id, supprime: true, modifieLeUtc: new Date(instant).toISOString() } : x));
+}
+
+// Sans heure : en tête de sa journée (les événements à heure précise suivent)
+const cleTriEvenement = (x) => `${x.date} ${x.heure || '00:00'} ${x.heure ? 1 : 0} ${x.creeLeUtc || ''}`;
+
+/** Événements actifs (non supprimés), du plus ancien au plus récent ; optionnellement limités à une période. */
+export function evenementsActifs(liste, { debut = null, fin = null, rapportSeulement = false } = {}) {
+  return (liste || []).map(normaliserEvenement).filter((x) => x && !x.supprime)
+    .filter((x) => (!debut || x.date >= debut) && (!fin || x.date <= fin) && (!rapportSeulement || x.rapport))
+    .sort((a, b) => (cleTriEvenement(a) < cleTriEvenement(b) ? -1 : 1));
+}
+
+/**
+ * Créneau d'évaluation auquel se rattache un événement : l'évaluation du soir (18 h) porte sur la journée,
+ * celle du matin (6 h) sur la soirée et la nuit. Sans heure : la journée (soir).
+ */
+export function creneauEvenement(x) {
+  if (!x.heure) return idCreneau(x.date, 'soir');
+  if (x.heure < HEURES_RAPPEL.matin) return idCreneau(x.date, 'matin');
+  if (x.heure < HEURES_RAPPEL.soir) return idCreneau(x.date, 'soir');
+  return idCreneau(ajouterJours(x.date, 1), 'matin');
+}
+
+export function libelleMomentEvenement(x) {
+  return `${formatDateCourte(x.date)}${x.heure ? ` à ${x.heure.replace(':', ' h ')}${x.heureApprox ? ' (heure approximative)' : ''}` : ''}`;
+}
+
+/** Fusion de deux listes (appareils différents) : par identifiant, la modification la plus récente l'emporte. */
+export function fusionnerEvenements(a, b) {
+  const parId = new Map();
+  for (const x of [...(a || []), ...(b || [])].map(normaliserEvenement).filter(Boolean)) {
+    const ex = parId.get(x.id);
+    const t = (y) => Date.parse(y.modifieLeUtc || 0) || 0;
+    if (!ex || t(x) > t(ex) || (t(x) === t(ex) && stable(x) > stable(ex))) parId.set(x.id, x);
+  }
+  return [...parId.values()].sort((x, y) => (x.id < y.id ? -1 : 1));
+}
+
+/** Contexte à connaître (texte libre, daté). */
+export function normaliserContexte(c) {
+  if (!c || !String(c.texte || '').trim()) return null;
+  return { texte: texteBorne(c.texte, LONGUEUR_CONTEXTE), modifieLeUtc: c.modifieLeUtc || null, rapport: c.rapport !== false };
+}
+
+/**
+ * Fichier d'événements à importer : { format: 'barometre-humeur', type: 'evenements', contexte?, evenements: [...] }.
+ * Retourne { evenements, contexte } normalisés ; lève une erreur si le fichier ne convient pas.
+ */
+export function lireFichierEvenements(texte, instant = Date.now()) {
+  let d;
+  try { d = JSON.parse(String(texte || '').replace(/^﻿/, '')); } catch { throw new Error('Ce fichier n\'est pas un fichier d\'événements valide.'); }
+  if (!d || d.format !== FORMAT_DONNEES || d.type !== 'evenements' || !Array.isArray(d.evenements)) throw new Error('Ce fichier n\'est pas un fichier d\'événements du Baromètre de l\'humeur.');
+  const le = new Date(instant).toISOString();
+  const evenements = [];
+  for (const x of d.evenements) {
+    const err = validerEvenement(x || {});
+    if (err.length) throw new Error(`Événement du ${x && x.date ? x.date : '?'} : ${err.join(' ')}`);
+    evenements.push(normaliserEvenement({ ...x, id: typeof x.id === 'string' && x.id ? x.id : nouvelId(), creeLeUtc: le, modifieLeUtc: le }));
+  }
+  const contexte = d.contexte ? normaliserContexte({ texte: d.contexte, modifieLeUtc: le }) : null;
+  return { evenements, contexte };
+}
+
 /** Évaluations dont la version pour le rapport reste à préparer. */
 export function aReformuler(ev) {
   return aDesTextes(ev) && (!ev.reformulation || ev.reformulation.statut === 'a_revoir');
@@ -1946,7 +2059,7 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport'];
 
 function empreinteTexte(s) {
   let h = 5381;
@@ -2083,6 +2196,13 @@ export function fusionnerSynchro(local, distant) {
   const debuts = [lp.debutSuiviUtc, dp.debutSuiviUtc].filter(Boolean).sort();
   if (debuts.length) parametres.debutSuiviUtc = debuts[0];
   parametres.motifsSupprimes = [...supprimes.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+  // Événements : fusion élément par élément (ajouts sur deux appareils conservés) ; contexte : le plus récent
+  if (valL('evenements') !== undefined || dp.evenements !== undefined) parametres.evenements = fusionnerEvenements(valL('evenements'), dp.evenements);
+  const cl = valL('contexteRapport'), cd = dp.contexteRapport;
+  if (cl !== undefined || cd !== undefined) {
+    const t = (c) => (c ? Date.parse(c.modifieLeUtc || 0) || 0 : -1);
+    parametres.contexteRapport = t(cd) > t(cl) ? cd : t(cl) > t(cd) ? cl : (stable(cd ?? null) > stable(cl ?? null) ? cd : cl) ?? null;
+  }
   // La clé d'IA locale n'est jamais effacée par une version distante vide
   if (lp.ia && lp.ia.cle && parametres.ia && !parametres.ia.cle) parametres.ia = { ...parametres.ia, cle: lp.ia.cle };
   return {
