@@ -656,7 +656,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   // Plusieurs lieux : noms courts dans l'ordre (la flèche n'existe pas dans les polices PDF standard)
   const libLieux = (e, complet = false) => {
     const l = C.lieuxDe(e);
-    const act = (x) => (x.activite ? ` (${x.activite})` : '');
+    const act = (x) => C.precisionsLieu(x);
     return l.length > 1 ? l.map((x) => `${x.nom}${act(x)}`).join(' › ') : `${C.libelleLieu(l[0], { complet: complet && !C.estItinerance(l[0]) })}${act(l[0])}`;
   };
   const parActivite = C.humeurParActivite(evals);
@@ -895,7 +895,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
         await R.carteLieux(carte.points, carte.cadre, options.fondCarte || null);
         const sansCoord = carte.sansCoordonnees > 1 ? ` ${carte.sansCoordonnees} lieux sans coordonnées (saisis librement, ou itinérance) n'apparaissent pas sur la carte.` : carte.sansCoordonnees ? ' Un lieu sans coordonnées (saisi librement, ou itinérance) n\'apparaît pas sur la carte.' : '';
-        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne, du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX });
+        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne (ressenti sur place quand il est indiqué), du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX });
       }
     } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
     if (parActivite.lignes.length) {
@@ -903,7 +903,9 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.barres(enBarres(parActivite.lignes.slice(0, 12)));
     }
     const multi = evals.some((e) => C.lieuxDe(e).length > 1);
-    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « Itinérance » désigne une période sans lieu fixe (randonnée, vélo, balade).' : ''}`, { taille: 8.3, couleur: DOUX });
+    const surPlace = evals.reduce((t, e) => t + C.lieuxDe(e).filter((l) => C.ressentiValide(l.ressenti) !== null).length, 0);
+    const texteRessenti = surPlace ? ` Pour les lieux et les activités, la moyenne utilise le « ressenti sur place » quand le patient l'a indiqué (${C.pluriel(surPlace, 'lieu')} de la période), sinon la note de la période : c'est le cas lorsqu'il s'est rendu à plusieurs endroits et que son humeur y a été différente.` : '';
+    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « Itinérance » désigne une période sans lieu fixe (randonnée, vélo, balade).' : ''}${texteRessenti}`, { taille: 8.3, couleur: DOUX });
   }
 
   // 10. Prévisions et réalité

@@ -2,6 +2,7 @@
 // Recherche mondiale : service Photon (OpenStreetMap, komoot, Allemagne), seulement si le réglage
 // « rechercheLieux » est actif. Seules les lettres tapées sont envoyées, sans aucune autre donnée.
 import * as C from './core.js';
+import { iconeMeteo } from './meteo.js';
 
 const PHOTON = 'https://photon.komoot.io/api/';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,7 +21,17 @@ export async function rechercherEnLigne(texte, { signal, fetch: f = globalThis.f
   throw new Error(`service de recherche indisponible (${derniere})`);
 }
 
-export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', activite = false, itinerance = false } = {}) {
+/** Ressenti sur place : une rangée de 11 pictogrammes (0 à 10), facultative ; un 2e appui efface. */
+function champRessentiHTML(id, valeur) {
+  const v = C.ressentiValide(valeur);
+  return `<div class="champ-ressenti" id="${id}-ressenti" data-valeur="${v ?? ''}">
+      <p class="ressenti-tete"><span>Ressenti ici <small class="doux">(facultatif)</small></span><span class="ressenti-etat doux" id="${id}-ressenti-etat" aria-live="polite">${etatRessenti(v)}</span></p>
+      <div class="ressenti-echelle" role="radiogroup" aria-label="Ressenti à ce lieu, de 0 à 10">${C.NIVEAUX.map((nom, i) => `<button type="button" role="radio" aria-checked="${v === i}" data-v="${i}" title="${i} – ${esc(nom)}" aria-label="${i} – ${esc(nom)}" style="--c: var(--n${i})">${iconeMeteo(i, { taille: 22 })}<span>${i}</span></button>`).join('')}</div>
+    </div>`;
+}
+const etatRessenti = (v) => (v === null ? 'comme la note de la période' : esc(C.libelleNote(v)));
+
+export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', activite = false, itinerance = false, ressenti = false } = {}) {
   const itin = C.estItinerance(lieu);
   return `<div class="champ champ-lieu${itin ? ' est-itinerance' : ''}">
     ${itinerance ? `<div class="tete-lieu"><label for="${id}">${esc(libelle)}</label><button type="button" class="puce-action" id="${id}-itinerance" aria-pressed="${itin}" title="Pas de lieu fixe : randonnée, tour à vélo, balade…">Itinérance</button></div>` : `<label for="${id}">${esc(libelle)}</label>`}
@@ -38,6 +49,7 @@ export function champLieuHTML(id, lieu, { libelle = 'Lieu où tu te trouves', ac
         <ul class="combo-liste" id="${id}-activite-liste" role="listbox" aria-label="Activités proposées" hidden></ul>
       </div>
     </div>` : ''}
+    ${ressenti ? champRessentiHTML(id, lieu ? lieu.ressenti : null) : ''}
   </div>`;
 }
 
@@ -209,14 +221,14 @@ export function champLieuxHTML(lieux) {
     <fieldset class="champ nombre-lieux">
       <legend>Nombre de lieux</legend>
       <div class="segmente">${Array.from({ length: NB_PROPOSES }, (_, i) => `<label><input type="radio" name="nb-lieux" value="${i + 1}" ${i + 1 === n ? 'checked' : ''}><span>${i + 1}</span></label>`).join('')}</div>
-      <p class="doux aide-lieux" ${n > 1 ? '' : 'hidden'}>Indique-les dans l'ordre où tu y es allé.</p>
+      <p class="doux aide-lieux" ${n > 1 ? '' : 'hidden'}>Indique-les dans l'ordre où tu y es allé. Si ton humeur a été différente selon le lieu, touche la météo ressentie sur place ; sinon, la note de la période s'applique.</p>
     </fieldset>
     <div id="liste-lieux">${champsHTML(lieux, n)}</div>
   </div>`;
 }
 
 function champsHTML(lieux, n) {
-  return Array.from({ length: n }, (_, i) => champLieuHTML(idLieu(i), (lieux || [])[i] || null, { libelle: n === 1 ? 'Lieu' : ordinal(i), activite: true, itinerance: true })).join('');
+  return Array.from({ length: n }, (_, i) => champLieuHTML(idLieu(i), (lieux || [])[i] || null, { libelle: n === 1 ? 'Lieu' : ordinal(i), activite: true, itinerance: true, ressenti: n > 1 })).join('');
 }
 
 /** Branche le choix du nombre de lieux et les champs ; retourne { valeurs() } → liste ordonnée (cases vides ignorées). */
@@ -243,7 +255,8 @@ export function brancherChampLieux(racine, { initial = [], connus = [], activite
       });
       const activite = document.getElementById(`${id}-activite`);
       brancherComboActivite(activite, activites);
-      return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); return l ? C.normaliserLieu({ ...l, activite: a }) : null; } };
+      const ressenti = brancherRessenti(document.getElementById(`${id}-ressenti`));
+      return { valeur: () => { const l = champ.valeur(); const a = activite.value.trim(); const r = ressenti ? ressenti() : (v ? v.ressenti : null); return l ? C.normaliserLieu({ ...l, activite: a, ressenti: r }) : null; } };
     });
   };
   brancher(Array.from({ length: Math.max(1, initial.length) }, (_, i) => initial[i] || null));
@@ -262,6 +275,31 @@ export function brancherChampLieux(racine, { initial = [], connus = [], activite
     if (vide >= 0) document.getElementById(idLieu(vide)).focus();
   });
   return { valeurs: () => champs.map((c) => c.valeur()).filter(Boolean) };
+}
+
+/** Branche la rangée de ressenti ; retourne une fonction de lecture (null si non indiqué), ou null sans rangée. */
+function brancherRessenti(zone) {
+  if (!zone) return null;
+  const lire = () => C.ressentiValide(zone.dataset.valeur === '' ? null : Number(zone.dataset.valeur));
+  const definir = (v) => {
+    zone.dataset.valeur = v ?? '';
+    zone.querySelectorAll('[data-v]').forEach((b) => b.setAttribute('aria-checked', String(Number(b.dataset.v) === v)));
+    zone.querySelector('.ressenti-etat').innerHTML = etatRessenti(v);
+  };
+  zone.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    const v = Number(b.dataset.v);
+    definir(lire() === v ? null : v);
+  });
+  zone.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    e.preventDefault();
+    const v = Math.max(0, Math.min(10, (lire() ?? 5) + (e.key === 'ArrowRight' ? 1 : -1)));
+    definir(v);
+    zone.querySelector(`[data-v="${v}"]`).focus();
+  });
+  return lire;
 }
 
 /**

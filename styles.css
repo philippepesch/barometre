@@ -420,6 +420,16 @@ dialog#dialogue::backdrop { background: rgba(16, 22, 27, .45); }
 .puce-action:focus-visible { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
 .champ-activite { margin-top: 10px; }
 .champ-activite label { display: block; font-weight: 500; font-size: .95rem; margin-bottom: 4px; }
+.champ-ressenti { margin-top: 12px; }
+.ressenti-fiche { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: .9em; color: var(--encre-2); }
+.ressenti-fiche svg { vertical-align: middle; }
+.ressenti-tete { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; font-weight: 500; font-size: .95rem; }
+.ressenti-etat { font-weight: 400; font-size: .88rem; }
+.ressenti-echelle { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 3px; }
+.ressenti-echelle button { display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; padding: 4px 0 3px; font: inherit; font-size: .78rem; font-variant-numeric: tabular-nums; color: var(--encre); background: var(--surface); border: 1px solid var(--filet); border-bottom: 3px solid var(--c); border-radius: 8px; cursor: pointer; }
+.ressenti-echelle button svg { width: 100%; max-width: 22px; height: auto; }
+.ressenti-echelle button[aria-checked="true"] { background: var(--c); color: #fff; font-weight: 700; border-color: var(--laiton); box-shadow: 0 0 0 2px var(--laiton); }
+.ressenti-echelle button:focus-visible { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
 .champ-situation legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
 
 /* Bandes de contexte sous la courbe */

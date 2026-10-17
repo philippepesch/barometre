@@ -553,7 +553,7 @@ function blocContexte(evals) {
     if (!r.lignes.length) return `<div><h3>${titre}</h3><p class="doux">Rien d'indiqué sur la période.</p></div>`;
     return `<div><h3>${titre}</h3><div class="defile"><table class="donnees"><thead><tr><th>${titre}</th><th class="nombre">Évaluations</th><th class="nombre">Moyenne</th><th class="nombre">Min – max</th></tr></thead><tbody>
       ${r.lignes.map((l) => `<tr><td><i class="pastille-cat" style="background:${couleur(l.valeur)};margin-right:8px"></i>${esc(l.libelle)}</td><td class="nombre">${l.nombre}</td>
-        <td class="nombre" style="white-space:nowrap">${C.nombreFr(l.moyenne)}<span class="moyenne-barre" aria-hidden="true"><i style="width:${l.moyenne * 10}%;background:var(--n${Math.round(l.moyenne)})"></i></span></td><td class="nombre">${l.min} – ${l.max}</td></tr>`).join('')}
+        <td class="nombre" style="white-space:nowrap">${C.nombreFr(l.moyenne)}<span class="moyenne-barre" aria-hidden="true"><i style="width:${l.moyenne * 10}%;background:var(--n${Math.round(l.moyenne)})"></i></span></td><td class="nombre">${C.nombreFr(l.min)} – ${C.nombreFr(l.max)}</td></tr>`).join('')}
       </tbody></table></div>
       ${r.sansValeur ? `<p class="doux" style="margin-top:6px">${C.pluriel(r.sansValeur, 'évaluation')} sans cette information.</p>` : ''}</div>`;
   };
@@ -561,8 +561,9 @@ function blocContexte(evals) {
   const ps = C.humeurParSituation(evals);
   const pa = C.humeurParActivite(evals);
   const peu = [...pl.lignes, ...ps.lignes].some((l) => l.nombre < 4);
+  const surPlace = pl.lignes.reduce((t, l) => t + (l.surPlace || 0), 0);
   return `<section class="bloc" aria-labelledby="titre-contexte"><h2 id="titre-contexte">Humeur selon le lieu et la situation</h2>
-    <p class="doux">Moyenne de tes notes pour chaque lieu et chaque situation de la période. Ce sont des constats, pas des causes : d'autres facteurs peuvent jouer.${peu ? ' Avec moins de 4 évaluations, une moyenne est peu représentative.' : ''}</p>
+    <p class="doux">Moyenne de tes notes pour chaque lieu et chaque situation de la période. Ce sont des constats, pas des causes : d'autres facteurs peuvent jouer.${peu ? ' Avec moins de 4 évaluations, une moyenne est peu représentative.' : ''}${surPlace ? ` Pour les lieux et les activités, ton ressenti sur place est utilisé quand tu l'as indiqué (${C.pluriel(surPlace, 'fois', 'fois')}), sinon la note de la période.` : ''}</p>
     <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu)}${table('Situation', ps, coul.situation)}${pa.lignes.length ? table('Activité', { ...pa, sansValeur: 0 }, () => 'var(--filet-fort)') : ''}</div>
     ${lienCompleter}</section>`;
 }
@@ -1159,7 +1160,7 @@ function vueFiche([id]) {
       <dt>Validation</dt><dd>${ev.validationConnue ? C.formatDateHeure(ev.valideLeUtc) : 'Heure réelle inconnue (donnée historique)'}${ev.saisieRetrospective ? ' — saisie rétrospective, après la fin du créneau' : ''}</dd>
       ${ev.modifieLeUtc ? `<dt>Dernière modification</dt><dd>${C.formatDateHeure(ev.modifieLeUtc)}</dd>` : ''}
       ${ev.noteOrigine ? `<dt>Origine</dt><dd>${esc(ev.noteOrigine)}</dd>` : ''}
-      <dt>${C.lieuxDe(ev).length > 1 ? 'Lieux' : 'Lieu'}</dt><dd>${C.lieuxDe(ev).length ? C.lieuxDe(ev).map((l) => `${esc(C.libelleLieu(l, { complet: !C.estItinerance(l) }))}${l.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}${l.activite ? ` : <em>${esc(l.activite)}</em>` : ''}`).join(' <span class="doux">→</span> ') : '<span class="doux">non indiqué</span>'}</dd>
+      <dt>${C.lieuxDe(ev).length > 1 ? 'Lieux' : 'Lieu'}</dt><dd>${C.lieuxDe(ev).length ? C.lieuxDe(ev).map((l) => `${esc(C.libelleLieu(l, { complet: !C.estItinerance(l) }))}${l.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}${l.activite ? ` : <em>${esc(l.activite)}</em>` : ''}${C.ressentiValide(l.ressenti) !== null ? ` <span class="ressenti-fiche">${iconeMeteo(l.ressenti, { taille: 18 })}ressenti ${l.ressenti}/10</span>` : ''}`).join(' <span class="doux">→</span> ') : '<span class="doux">non indiqué</span>'}</dd>
       <dt>Situation</dt><dd>${ev.situation ? esc(C.libelleSituation(ev.situation)) : '<span class="doux">non indiquée</span>'}</dd>
       <dt>Motifs</dt><dd><div class="puces">${libM([...ev.motifs, ...ev.autresMotifs])}</div></dd>
       ${ev.explication ? `<dt>Explication</dt><dd class="texte-libre">${esc(ev.explication)}</dd>` : ''}

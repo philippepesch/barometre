@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.14.2';
+export const VERSION_APP = '1.15.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -520,12 +520,19 @@ export const LIEU_ITINERANCE = Object.freeze({ nom: 'Itinérance', region: '', p
 export const estItinerance = (l) => !!l && l.source === 'itinerance';
 export const LONGUEUR_ACTIVITE = 80;
 
-/** Lieu normalisé { nom, region, pays, codePays, lat, lon, source, activite? } ou null. */
+/** Ressenti sur place (0 à 10, même échelle que la note) ou null s'il n'est pas indiqué. */
+export function ressentiValide(v) {
+  return Number.isInteger(v) && v >= 0 && v <= 10 ? v : null;
+}
+
+/** Lieu normalisé { nom, region, pays, codePays, lat, lon, source, activite?, ressenti? } ou null. */
 export function normaliserLieu(l) {
   if (!l) return null;
   const txt = (v, n = 120) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, n);
   const activite = txt(l.activite, LONGUEUR_ACTIVITE);
-  if (l.source === 'itinerance') return { ...LIEU_ITINERANCE, ...(activite ? { activite } : {}) };
+  const ressenti = ressentiValide(l.ressenti);
+  const extras = { ...(activite ? { activite } : {}), ...(ressenti !== null ? { ressenti } : {}) };
+  if (l.source === 'itinerance') return { ...LIEU_ITINERANCE, ...extras };
   const nom = txt(l.nom);
   if (!nom) return null;
   const code = txt(l.codePays, 3).toUpperCase();
@@ -537,14 +544,14 @@ export function normaliserLieu(l) {
     lat: nombreOuNull(l.lat, -90, 90),
     lon: nombreOuNull(l.lon, -180, 180),
     source: l.source === 'carte' ? 'carte' : 'libre',
-    ...(activite ? { activite } : {}),
+    ...extras,
   };
 }
 
-/** Le lieu seul, sans l'activité (pour le proposer à nouveau). */
+/** Le lieu seul, sans l'activité ni le ressenti (pour le proposer à nouveau). */
 export function lieuSansActivite(l) {
   if (!l) return null;
-  const { activite, ...reste } = l;
+  const { activite, ressenti, ...reste } = l;
   return reste;
 }
 
@@ -563,9 +570,13 @@ export function libelleLieu(l, { complet = false } = {}) {
 
 export const MAX_LIEUX = 3; // par période d'environ 12 heures
 
-/** Liste ordonnée de lieux normalisés (lieux vides ignorés, au plus MAX_LIEUX). */
+/**
+ * Liste ordonnée de lieux normalisés (lieux vides ignorés, au plus MAX_LIEUX).
+ * Le ressenti sur place n'a de sens qu'avec plusieurs lieux : avec un seul, la note de la période suffit.
+ */
 export function normaliserLieux(liste) {
-  return (Array.isArray(liste) ? liste : [liste]).map(normaliserLieu).filter(Boolean).slice(0, MAX_LIEUX);
+  const lieux = (Array.isArray(liste) ? liste : [liste]).map(normaliserLieu).filter(Boolean).slice(0, MAX_LIEUX);
+  return lieux.length > 1 ? lieux : lieux.map(({ ressenti, ...l }) => l);
 }
 
 /**
@@ -578,9 +589,15 @@ export function lieuxDe(e) {
   return e.lieu ? [e.lieu] : [];
 }
 
-/** « Arsdorf → Schouweiler (pédicure médicale) → Leudelange → Arsdorf » */
-export function libelleLieux(liste, { complet = false, activites = true, separateur = ' → ' } = {}) {
-  return (liste || []).map((l) => `${libelleLieu(l, { complet })}${activites && l.activite ? ` (${l.activite})` : ''}`).join(separateur);
+/** Précisions d'un lieu entre parenthèses : « (Pédicure médicale · ressenti 9/10) ». */
+export function precisionsLieu(l, { activites = true, ressentis = true } = {}) {
+  const p = [activites && l.activite ? l.activite : '', ressentis && ressentiValide(l.ressenti) !== null ? `ressenti ${l.ressenti}/10` : ''].filter(Boolean);
+  return p.length ? ` (${p.join(' · ')})` : '';
+}
+
+/** « Arsdorf → Schouweiler (pédicure médicale · ressenti 9/10) → Leudelange → Arsdorf » */
+export function libelleLieux(liste, { complet = false, activites = true, ressentis = true, separateur = ' → ' } = {}) {
+  return (liste || []).map((l) => `${libelleLieu(l, { complet })}${precisionsLieu(l, { activites, ressentis })}`).join(separateur);
 }
 
 /** Activités suggérées au départ ; celles déjà saisies passent devant. */
@@ -618,8 +635,9 @@ export function filtrerActivites(activites, texte, max = 8) {
     .slice(0, max).map((x) => x.a);
 }
 
+/** Humeur par activité : ressenti sur place s'il est indiqué pour le lieu de l'activité, sinon note de la période. */
 export function humeurParActivite(evaluations) {
-  return humeurParCategorie(evaluations, (e) => lieuxDe(e).filter((l) => l.activite).map((l) => l.activite), normaliserLibelle, (a) => a);
+  return humeurParCategorie(evaluations, (e) => lieuxDe(e).filter((l) => l.activite), (l) => normaliserLibelle(l.activite), (l) => l.activite, (e, l) => l.ressenti);
 }
 
 export function cleLieux(liste) { return (liste || []).map(cleLieu).join('>'); }
@@ -708,33 +726,43 @@ export function suggestionContexte(evaluations, { date, creneau }) {
   return { lieu, situation: sit ? sit.situation : null };
 }
 
-/** Humeur par catégorie (lieu ou situation) : nombre, moyenne, minimum, maximum. */
-export function humeurParCategorie(evaluations, extraire, cle, libelle) {
+/**
+ * Humeur par catégorie (lieu, activité, situation…) : nombre, moyenne, minimum, maximum.
+ * noteDe(e, v) peut donner une note propre à la catégorie (ressenti sur place) ; sinon la note de
+ * l'évaluation est utilisée. « surPlace » compte les évaluations où cette note propre est indiquée.
+ */
+export function humeurParCategorie(evaluations, extraire, cle, libelle, noteDe = null) {
   const groupes = new Map();
   let sansValeur = 0;
   for (const e of evaluations) {
     // Une évaluation avec plusieurs lieux compte une fois pour chacun d'eux
     const valeurs = [].concat(extraire(e) || []).filter(Boolean);
     if (!valeurs.length) { sansValeur++; continue; }
-    const vus = new Set();
+    const parCle = new Map();
     for (const v of valeurs) {
       const k = cle(v);
-      if (vus.has(k)) continue;
-      vus.add(k);
-      const g = groupes.get(k) || { cle: k, libelle: libelle(v), valeur: v, notes: [] };
-      g.notes.push(e.note);
+      const x = parCle.get(k) || { v, propres: [] };
+      const propre = noteDe ? ressentiValide(noteDe(e, v)) : null;
+      if (propre !== null) x.propres.push(propre);
+      parCle.set(k, x);
+    }
+    for (const [k, x] of parCle) {
+      const g = groupes.get(k) || { cle: k, libelle: libelle(x.v), valeur: x.v, notes: [], surPlace: 0 };
+      // Même lieu deux fois dans la période (aller-retour) : moyenne de ses ressentis indiqués
+      if (x.propres.length) { g.notes.push(moyenne(x.propres)); g.surPlace++; } else g.notes.push(e.note);
       groupes.set(k, g);
     }
   }
   const lignes = [...groupes.values()].map((g) => ({
-    cle: g.cle, libelle: g.libelle, valeur: g.valeur, nombre: g.notes.length,
+    cle: g.cle, libelle: g.libelle, valeur: g.valeur, nombre: g.notes.length, surPlace: g.surPlace,
     moyenne: moyenne(g.notes), min: Math.min(...g.notes), max: Math.max(...g.notes),
   })).sort((a, b) => b.nombre - a.nombre || a.libelle.localeCompare(b.libelle, 'fr'));
   return { lignes, sansValeur };
 }
 
+/** Humeur par lieu : ressenti sur place quand il est indiqué, sinon note de la période. */
 export function humeurParLieu(evaluations) {
-  return humeurParCategorie(evaluations, lieuxDe, cleLieu, (l) => libelleLieu(l, { complet: true }));
+  return humeurParCategorie(evaluations, lieuxDe, cleLieu, (l) => libelleLieu(l, { complet: true }), (e, l) => l.ressenti);
 }
 
 export const JOURS_SEMAINE = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
@@ -837,6 +865,7 @@ export function validerSaisie(s) {
   const lieuxSaisis = s.lieux !== undefined ? [].concat(s.lieux || []) : [].concat(s.lieu || []);
   if (lieuxSaisis.some((l) => l && String(l.nom || '').length > 120)) erreurs.push('Nom de lieu trop long (120 caractères maximum).');
   if (lieuxSaisis.some((l) => l && String(l.activite || '').trim().length > LONGUEUR_ACTIVITE)) erreurs.push(`Activité trop longue (${LONGUEUR_ACTIVITE} caractères maximum).`);
+  if (lieuxSaisis.some((l) => l && l.ressenti != null && ressentiValide(l.ressenti) === null)) erreurs.push('Ressenti sur place invalide (nombre entier de 0 à 10).');
   if (lieuxSaisis.filter(Boolean).length > MAX_LIEUX) erreurs.push(`${MAX_LIEUX} lieux au maximum par évaluation.`);
   return erreurs;
 }
@@ -1121,7 +1150,7 @@ export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Dat
   const st = statistiques(evals);
   const prev = comparaisonsPrevisions(evals, evaluations);
   const arrondi = (x) => (x === null || x === undefined ? null : Math.round(x * 10) / 10);
-  const cat = (r) => r.lignes.map((l) => ({ libelle: l.libelle, evaluations: l.nombre, moyenne: arrondi(l.moyenne), min: l.min, max: l.max }));
+  const cat = (r) => r.lignes.map((l) => ({ libelle: l.libelle, evaluations: l.nombre, moyenne: arrondi(l.moyenne), min: arrondi(l.min), max: arrondi(l.max), ...(l.surPlace ? { dont_ressenti_sur_place: l.surPlace } : {}) }));
   const freq = frequenceMotifs(evals, motifs);
   const textes = evals.map((e) => {
     const t = textesPourRapport(e, 'reformule');
@@ -1156,6 +1185,7 @@ Points prioritaires : deux à quatre points, chacun sur une ligne commençant pa
 Règles impératives :
 - ${LONGUEUR_SYNTHESE} caractères au maximum au total, espaces compris.
 - N'utilise que les données fournies : aucune information inventée, aucune hypothèse, aucun diagnostic, aucun vocabulaire clinique, aucun conseil de traitement.
+- Dans « par_lieu » et « par_activite », la moyenne utilise le ressenti indiqué sur place quand il existe (« dont_ressenti_sur_place »), sinon la note de la période.
 - Présente les liens comme des constats (« les notes les plus basses sont relevées le lundi »), jamais comme des causes.
 - Ne considère jamais qu'une note supérieure à zéro exclut un risque. Si « verifications_securite » est supérieur à 0, mentionne sobrement qu'une vérification de sécurité a été proposée ; s'il vaut 0, n'en parle pas du tout (ne dis jamais qu'aucune vérification n'a eu lieu).
 - Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement.
@@ -1650,7 +1680,7 @@ export function exporterCSVEvaluations(evaluations) {
       historique_json: JSON.stringify(e.historique || []),
       lieu: libelleLieux(lieuxDe(e), { complet: true }), situation: libelleSituation(e.situation),
       lieu_json: e.lieu ? JSON.stringify(e.lieu) : '', situation_json: e.situation ? JSON.stringify(e.situation) : '',
-      lieux_json: lieuxDe(e).length > 1 || lieuxDe(e).some((l) => l.activite) ? JSON.stringify(lieuxDe(e)) : '',
+      lieux_json: lieuxDe(e).length > 1 || lieuxDe(e).some((l) => l.activite || l.ressenti != null) ? JSON.stringify(lieuxDe(e)) : '',
     };
     lignes.push(COLONNES_EVAL.map((c) => celluleCSV(v[c])).join(';'));
   }
