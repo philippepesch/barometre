@@ -1169,6 +1169,14 @@ function vueFiche([id]) {
         ${Number.isInteger(p.note) ? `<br><span class="doux">${reel ? `Constaté : ${esc(C.libelleNote(reel.note))} (écart ${C.signeFr(reel.note - p.note, 0)})` : `Créneau visé : ${esc(C.STATUTS[statutDe(null, p.cible.date, p.cible.creneau)].toLowerCase())}`}</span>` : ''}` : '<span class="doux">aucune</span>'}</dd>
       ${ev.securite && ev.securite.declenchee ? `<dt>Sécurité</dt><dd>Une vérification de sécurité a été proposée (${esc(ev.securite.raisons.join(', '))}).</dd>` : ''}
     </dl></div>
+    ${(() => {
+      const lies = C.evenementsActifs(etat.parametres.evenements).filter((x) => C.creneauEvenement(x) === ev.creneauId);
+      return `<div class="bloc"><h2>Événements marquants</h2>
+        ${lies.length ? `<ul class="liste-evenements">${lies.map((x) => `<li class="evenement-carte"><div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}</div><a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
+          ${x.faits ? `<p class="texte-libre encre-2" style="margin:6px 0 0"><strong>Ce qui s'est passé :</strong> ${esc(x.faits)}</p>` : ''}${x.vecu ? `<p class="texte-libre encre-2" style="margin:6px 0 0"><strong>Ce que j'ai ressenti :</strong> ${esc(x.vecu)}</p>` : ''}</li>`).join('')}</ul>`
+    : `<p class="doux">Aucun événement noté pour ${ev.creneau === 'matin' ? 'la soirée et la nuit précédant cette évaluation' : 'la journée de cette évaluation'}.</p>`}
+        <p style="margin:8px 0 0"><a class="bouton-discret" href="#/evenements/nouveau/${esc(ev.date)}">Ajouter un événement</a></p></div>`;
+    })()}
     ${C.aDesTextes(ev) ? blocVersionRapport(ev) : ''}
     ${ev.historique && ev.historique.length ? `<div class="bloc"><h2>Historique des modifications</h2><ol class="historique">${ev.historique.map((h) => `<li><strong>${C.formatDateHeure(h.le)}</strong> (version ${h.version})${h.raison ? ` — raison : ${esc(h.raison)}` : ''}
       <ul>${h.changements.map((c) => `<li>${esc(c.champ === 'lieux' && (c.avant || []).length <= 1 && (c.apres || []).length <= 1 ? 'Lieu' : (C.LIBELLE_CHAMP[c.champ] || c.champ))} : ${valeur(c.champ, c.avant)} → ${valeur(c.champ, c.apres)}</li>`).join('')}</ul></li>`).join('')}</ol></div>` : ''}
@@ -1207,7 +1215,7 @@ async function retirerEvaluation(id) {
 function vueEvenements(args = []) {
   const liste = C.evenementsActifs(etat.parametres.evenements);
   const ctx = C.normaliserContexte(etat.parametres.contexteRapport);
-  const edite = args[0] === 'nouveau' ? {} : args[0] ? liste.find((x) => x.id === args[0]) : null;
+  const edite = args[0] === 'nouveau' ? (C.estDateValide(args[1]) ? { date: args[1] } : {}) : args[0] ? liste.find((x) => x.id === args[0]) : null;
   const carte = (x) => `<li class="evenement-carte">
       <div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}</div>
         <a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
@@ -2112,16 +2120,19 @@ async function ouvrirPdf() {
   const entre = options.filter((o) => o.entre);
   // Par défaut : depuis la dernière séance, sinon depuis le dernier rapport, sinon tout le suivi
   const defaut = options.find((o) => o.cle === 'depuis-seance') || options.find((o) => o.cle === 'depuis') || options.find((o) => o.cle === 'tout');
-  const debutDefaut = defaut.debut;
+  // Ajouts ou corrections récents sur des jours antérieurs : la période est élargie pour les inclure
+  const ajoutsPour = (debut) => C.ajoutsHorsPeriode({ evaluations: etat.evaluations, evenements: etat.parametres.evenements, debut, seances: seances(), dernierRapport: dr, instant: maintenant() });
+  const ajoutsDefaut = ajoutsPour(defaut.debut);
+  const debutDefaut = ajoutsDefaut ? ajoutsDefaut.date : defaut.debut;
   const patient = etat.parametres.patient || {};
   dlg.innerHTML = `<form class="dialogue-corps" id="form-pdf" novalidate>
     <h2 id="dialogue-titre">Générer le rapport PDF${dest ? ` pour ${esc(dest)}` : ''}</h2>
     <p class="encre-2">Le rapport est calculé sur cet appareil à partir de tes données enregistrées, uniquement quand tu le demandes.${dr ? ` Dernier rapport : du ${C.formatDateCourte(dr.debut)} au ${C.formatDateCourte(dr.fin)}, généré le ${C.formatDateHeure(dr.genereLeUtc)}.` : ''}</p>
     <fieldset class="champ" style="border:0;padding:0;margin:0 0 10px;min-width:0"><legend style="font-weight:600;margin-bottom:8px;padding:0">Période</legend>
       <div class="puces">
-        ${simples.map((o) => `<label class="puce" data-periode="${esc(o.cle)}"><input type="radio" name="pdf-periode" value="${esc(o.cle)}" ${o === defaut ? 'checked' : ''}><span>${esc(o.libelle)}</span></label>`).join('')}
+        ${simples.map((o) => `<label class="puce" data-periode="${esc(o.cle)}"><input type="radio" name="pdf-periode" value="${esc(o.cle)}" ${o === defaut && !ajoutsDefaut ? 'checked' : ''}><span>${esc(o.libelle)}</span></label>`).join('')}
         ${entre.length ? '<label class="puce" data-periode="entre"><input type="radio" name="pdf-periode" value="entre"><span>Entre deux séances</span></label>' : ''}
-        <label class="puce" data-periode="perso"><input type="radio" name="pdf-periode" value="perso"><span>Personnalisée</span></label>
+        <label class="puce" data-periode="perso"><input type="radio" name="pdf-periode" value="perso" ${ajoutsDefaut ? 'checked' : ''}><span>Personnalisée</span></label>
       </div>
       ${entre.length ? `<div class="champ" id="pdf-entre-zone" style="margin-top:10px" hidden><label for="pdf-entre">Séances</label><select id="pdf-entre">${entre.map((o) => `<option value="${esc(o.cle)}">${esc(o.libelle)}</option>`).join('')}</select></div>` : ''}
     </fieldset>
@@ -2129,6 +2140,7 @@ async function ouvrirPdf() {
       <div class="champ" style="flex:1;min-width:150px"><label for="pdf-debut">Date de début</label><input type="date" id="pdf-debut" value="${debutDefaut}" max="${fin}" required></div>
       <div class="champ" style="flex:1;min-width:150px"><label for="pdf-fin">Date de fin</label><input type="date" id="pdf-fin" value="${fin}" required></div>
     </div>
+    <div id="pdf-ajouts"></div>
     ${patient.cns ? `<label class="interrupteur" style="margin-bottom:14px"><input type="checkbox" id="pdf-cns" ${etat.parametres.rapportAvecCNS !== false ? 'checked' : ''}> <span>Inclure mon matricule CNS <span class="doux">(${esc(C.formatCNS(patient.cns))})</span></span></label>` : ''}
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Type de rapport</legend>
       <label class="interrupteur"><input type="radio" name="type" value="complet" checked> <span>Complet <span class="doux">– tous les commentaires en annexe</span></span></label>
@@ -2151,7 +2163,7 @@ async function ouvrirPdf() {
   form.querySelector('[data-fermer]').addEventListener('click', () => dlg.close());
   form.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
   const zoneEntre = document.getElementById('pdf-entre-zone');
-  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); majEvenements(); };
+  const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); majEvenements(); majAjouts(); };
 
   // Synthèse de la période : rédigée par Claude (avec l'accord du patient) ou par le patient, puis validée
   const zoneSynthese = document.getElementById('pdf-synthese');
@@ -2224,6 +2236,31 @@ async function ouvrirPdf() {
   });
   ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', () => { editionSynthese = false; majSynthese(); }));
   majSynthese();
+  // Ajouts récents sur des jours antérieurs à la période
+  const zoneAjouts = document.getElementById('pdf-ajouts');
+  const quoi = (a) => [a.nbEvaluations ? C.pluriel(a.nbEvaluations, 'évaluation complétée ou corrigée', 'évaluations complétées ou corrigées') : '', a.nbEvenements ? C.pluriel(a.nbEvenements, 'événement noté', 'événements notés') : ''].filter(Boolean).join(' et ');
+  const jours = (a) => a.dates.map((d) => C.formatDateCourte(d).slice(0, 5)).join(', ');
+  function majAjouts() {
+    const { debut } = periodeChoisie();
+    const a = C.estDateValide(debut) ? ajoutsPour(debut) : null;
+    if (a) {
+      zoneAjouts.innerHTML = `<p class="bandeau bandeau-laiton rangee-espacee"><span>Tu as ajouté ou corrigé des informations récemment pour des jours avant cette période (${esc(jours(a))} : ${esc(quoi(a))}). Elles ne figureront pas dans ce rapport.</span><button type="button" class="bouton-secondaire" id="pdf-elargir">Inclure à partir du ${esc(C.formatDateCourte(a.date).slice(0, 5))}</button></p>`;
+      document.getElementById('pdf-elargir').addEventListener('click', () => {
+        document.getElementById('pdf-debut').value = a.date;
+        const perso = form.querySelector('[name="pdf-periode"][value="perso"]'); if (perso) perso.checked = true;
+        majSynthese(); majEvenements(); majAjouts();
+      });
+    } else if (ajoutsDefaut && debut === ajoutsDefaut.date) {
+      zoneAjouts.innerHTML = `<p class="bandeau">Période élargie au ${esc(C.formatDateCourte(ajoutsDefaut.date))} pour inclure ce que tu as ajouté ou corrigé récemment (${esc(jours(ajoutsDefaut))} : ${esc(quoi(ajoutsDefaut))}). <button type="button" class="bouton-discret" id="pdf-sans-elargir">Revenir à « ${esc(defaut.libelle)} »</button></p>`;
+      document.getElementById('pdf-sans-elargir').addEventListener('click', () => {
+        const r = form.querySelector(`[name="pdf-periode"][value="${defaut.cle}"]`);
+        if (r) r.checked = true;
+        appliquer(defaut);
+      });
+    } else zoneAjouts.innerHTML = '';
+  }
+  ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', majAjouts));
+
   // Contexte et événements marquants de la période
   const zoneEvenements = document.getElementById('pdf-evenements');
   function majEvenements() {
@@ -2239,6 +2276,7 @@ async function ouvrirPdf() {
   }
   ['pdf-debut', 'pdf-fin'].forEach((id) => document.getElementById(id).addEventListener('change', majEvenements));
   majEvenements();
+  majAjouts();
   form.querySelectorAll('[name="pdf-periode"]').forEach((r) => r.addEventListener('change', () => {
     if (zoneEntre) zoneEntre.hidden = r.value !== 'entre';
     if (r.value === 'perso') { document.getElementById('pdf-debut').focus(); return; }

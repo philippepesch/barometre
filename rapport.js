@@ -1014,13 +1014,21 @@ export async function genererRapport(PDFLib, donnees, options) {
   R.section(++numSection, 'Annexe chronologique des évaluations', 120, { nouvellePage: true });
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
+  // Événements marquants rattachés à chaque évaluation (même numéro que dans la section et le graphique)
+  const evtsParCreneau = new Map();
+  evenements.forEach((x, i) => { const k = C.creneauEvenement(x); evtsParCreneau.set(k, [...(evtsParCreneau.get(k) || []), { numero: i + 1, x }]); });
+  const texteDetaille = (etiquette, texte, couleur = ENCRE) => {
+    const paras = String(texte || '').split(/\n+/).map((t) => t.trim()).filter(Boolean);
+    paras.forEach((para, i) => R.riche([...(i === 0 ? [[`${etiquette} : `, 'gras', couleur]] : []), [para, 'normal', couleur]], { taille: 9, retrait: 14, apres: 2 }));
+  };
   if (type === 'synthetique' && evals.length) {
     const tronquer = (t, n = 220) => (t.length > n ? `${t.slice(0, n).replace(/\s+\S*$/, '')} […]` : t);
     R.tableau(
       [{ titre: 'Créneau', part: 1.3 }, { titre: 'Note', part: 1.3 }, { titre: 'Saisie', part: 1.3 }, { titre: 'Motifs et commentaire', part: 4.2 }],
       evals.map((e) => [
         [libCreneau(e), e.lieu ? libLieux(e) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
-        [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' '))].filter(Boolean).join(' — ') || '—',
+        [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' ')),
+          (evtsParCreneau.get(e.creneauId) || []).map((v) => `Événement n° ${v.numero}${v.x.titre ? ` : ${v.x.titre}` : ''}`).join(' ; ')].filter(Boolean).join(' — ') || '—',
       ]),
       { taille: 8.5 },
     );
@@ -1073,6 +1081,17 @@ export async function genererRapport(PDFLib, donnees, options) {
           }
           R.y += 2;
         }
+      }
+      const evtsCreneau = evtsParCreneau.get(e.creneauId) || [];
+      if (evtsCreneau.length) {
+        R.y += 2;
+        R.paragraphe(evtsCreneau.length > 1 ? 'Événements marquants de la période évaluée :' : 'Événement marquant de la période évaluée :', { taille: 9.5, police: 'gras', couleur: LAITON, apres: 2 });
+        for (const { numero, x } of evtsCreneau) {
+          R.riche([[`${numero}. ${C.majuscule(C.libelleMomentEvenement(x))}`, 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : [])], { taille: 9.3, retrait: 6, apres: 2 });
+          texteDetaille('Ce qui s\'est passé', x.faits);
+          texteDetaille('Vécu du patient', x.vecu, '#3B4550');
+        }
+        R.y += 2;
       }
       if (e.securite && e.securite.declenchee) R.paragraphe(`Une vérification de sécurité a été proposée (${e.securite.raisons.join(', ')}).`, { taille: 9, police: 'italique', apres: 3 });
       const completions = (e.historique || []).filter(estCompletion);

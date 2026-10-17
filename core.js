@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.17.0';
+export const VERSION_APP = '1.17.2';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1682,6 +1682,27 @@ export function periodesRapport(seances, { instant, aujourdhui, debutSuivi }) {
   options.push({ cle: '30', libelle: 'Dernier mois (30 jours)', debut: auPlusTot(ajouterJours(aujourdhui, -29)), fin: aujourdhui });
   options.push({ cle: 'tout', libelle: 'Depuis le début du suivi', debut: debutSuivi < aujourdhui ? debutSuivi : aujourdhui, fin: aujourdhui });
   return options.filter((o) => o.debut <= o.fin);
+}
+
+/**
+ * Ajouts et corrections récents qui tombent AVANT le début de la période choisie : une évaluation passée
+ * complétée après coup (lieux, ressenti, texte…) ou un événement noté pour un jour antérieur.
+ * « Récent » : modifié depuis la dernière séance passée (sinon depuis 14 jours), et pas déjà présent tel quel
+ * dans le dernier rapport. Retourne { date (la plus ancienne), dates, nbEvaluations, nbEvenements } ou null.
+ */
+export function ajoutsHorsPeriode({ evaluations = [], evenements = [], debut, seances = [], dernierRapport = null, instant = Date.now() }) {
+  const passee = seancesPassees(seances, instant)[0];
+  const seuil = passee ? bornesSeance(passee).debut : instant - 14 * 864e5;
+  const dr = dernierRapport && dernierRapport.genereLeUtc ? { ...dernierRapport, t: Date.parse(dernierRapport.genereLeUtc) } : null;
+  const t = (v) => (v ? Date.parse(v) || 0 : 0);
+  // Évaluation : saisie, ou dernière modification d'un champ (la seule relecture du texte rédigé ne compte pas)
+  const modifEval = (e) => Math.max(t(e.creeLeUtc), t(e.valideLeUtc), ...(e.historique || []).filter((h) => (h.changements || []).some((c) => c.champ !== 'reformulation')).map((h) => t(h.le)));
+  const modifEvt = (x) => Math.max(t(x.creeLeUtc), t(x.modifieLeUtc));
+  const aAjouter = (date, m) => date < debut && m >= seuil && !(dr && dr.debut <= date && date <= dr.fin && m <= dr.t);
+  const evs = evaluations.filter((e) => aAjouter(e.date, modifEval(e)));
+  const evts = evenementsActifs(evenements).filter((x) => aAjouter(x.date, modifEvt(x)));
+  const dates = [...new Set([...evs.map((e) => e.date), ...evts.map((x) => x.date)])].sort();
+  return dates.length ? { date: dates[0], dates, nbEvaluations: evs.length, nbEvenements: evts.length } : null;
 }
 
 // ---------------------------------------------------------------------------
