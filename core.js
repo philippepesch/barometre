@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.18.0';
+export const VERSION_APP = '1.18.1';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -356,7 +356,19 @@ export const PLAN_MOTIFS = [
   { libelle: 'Baisse de mes placements', polarite: 'defavorable', domaine: 'exterieur', cles: [/placement/, /bourse/, /portefeuille/, /valeurs? financ/, /baisse/], description: 'Mauvaise évolution de mes placements, de la bourse ou de mes valeurs financières.' },
   { libelle: 'Calme et solitude', polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.' },
   { libelle: 'Liberté, sans contraintes', polarite: 'favorable', domaine: 'obligations', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
-  { libelle: 'Réussite ou retour positif', polarite: 'favorable', domaine: 'activites', cles: [/retour positif/, /application/, /reussite/], description: 'Un travail abouti ou reconnu : retour positif sur les recherches, application créée, finalisée ou améliorée…' },
+  {
+    libelle: 'Encouragements, retours positifs', polarite: 'favorable', domaine: 'relations', questionSous: 'De qui, ou sur quoi ?',
+    cles: [/retour positif/, /encourag/, /compliment/, /\blob\b/, /felicit/, /reconnaissance/, /feedback/, /eloge/],
+    description: 'Un compliment, un encouragement, un retour positif ou des félicitations reçus. Précise de qui ou sur quoi (facultatif).',
+    sous: [
+      { libelle: 'De mes proches', cles: [/famill/, /enfant/, /\bfils\b/, /\bfille\b/, /epouse/, /\bfemme\b/, /\bmere\b/, /\bpere\b/, /parents/, /couple/], description: 'De ma famille : ma femme, mes enfants, mes parents…' },
+      { libelle: 'D\'un ami ou d\'un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'D\'un ami ou d\'un collègue.' },
+      { libelle: 'D\'un professionnel (médecin, thérapeute…)', cles: [/medecin/, /therapeut/, /docteur/, /professionnel/], description: 'D\'un médecin, de mon thérapeute ou d\'un autre professionnel.' },
+      { libelle: 'Sur mes travaux ou mes projets', cles: [/travaux/, /recherche/, /projet/, /application/], description: 'Un retour positif sur mes recherches, mes applications ou mes projets.' },
+      { libelle: 'D\'une autre personne', cles: [/autre personne/, /inconnu/, /en ligne/], description: 'De quelqu\'un d\'autre, sans préciser.' },
+    ],
+  },
+  { libelle: 'Réussite personnelle', anciens: ['Réussite ou retour positif'], polarite: 'favorable', domaine: 'activites', cles: [/application/, /reussite/, /abouti/, /finalis/, /termine/], description: 'Un travail abouti ou une chose menée à bien : application créée, finalisée ou améliorée, étape franchie…' },
   { libelle: 'Projets personnels (recherches, photo…)', polarite: 'favorable', domaine: 'activites', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…' },
   { libelle: 'Journée utile et occupée', polarite: 'favorable', domaine: 'activites', cles: [/occupe/, /utile/], description: 'Sentiment d\'avoir été occupé de manière constructive, journée utile.' },
   { libelle: 'Activité physique, promenade', polarite: 'favorable', domaine: 'corps', cles: [/promenade/, /activite physique/, /sport/], description: 'Promenade, sport ou toute activité physique, même avec peu de motivation.' },
@@ -414,7 +426,8 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
   const nonClasses = [];
   for (const m of actifs) {
     const n = normaliserLibelle(m.libelle);
-    let i = cibles.findIndex((g) => g.polarite === m.polarite && normaliserLibelle(g.libelle) === n);
+    // Même libellé, ou ancien libellé d'un motif renommé depuis (alias « anciens »)
+    let i = cibles.findIndex((g) => g.polarite === m.polarite && (normaliserLibelle(g.libelle) === n || (g.anciens || []).some((a) => normaliserLibelle(a) === n)));
     if (i < 0) {
       i = cibles.findIndex((g) => g.parent === null && g.polarite === m.polarite && g.cles.some((r) => r.test(n)));
       // Dans un motif à sous-catégories, la sous-catégorie qui correspond (sinon le motif lui-même)
@@ -440,6 +453,7 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
   for (const g of groupes) {
     const k = normaliserLibelle(g.cible.libelle);
     g.principal = g.membres.find((m) => normaliserLibelle(m.libelle) === k)
+      || g.membres.find((m) => (g.cible.anciens || []).some((a) => normaliserLibelle(a) === normaliserLibelle(m.libelle)))
       || [...g.membres].sort((a, b) => (usage.get(b.id) || 0) - (usage.get(a.id) || 0) || (a.ordre ?? 0) - (b.ordre ?? 0))[0] || null;
     g.aCreer = !g.principal;
     const p = g.principal;
