@@ -1526,7 +1526,8 @@ async function dialogueSimplification(plan) {
     return { g, titre };
   }).map(({ g, titre }) => titre + `<li${g.cible.parent !== null ? ' class="sous-liste"' : ''}>${g.cible.parent !== null ? '<span class="doux">↳ sous-catégorie : </span>' : ''}<strong>${esc(g.cible.libelle)}</strong> <span class="doux">(${C.LIBELLE_POLARITE[g.cible.polarite].toLowerCase()})</span>
       <div class="doux" style="font-size:.9rem">${esc(g.cible.description)}</div>
-      ${g.membres.length ? `<div style="font-size:.9rem">← ${g.membres.map((m) => esc(m.libelle)).join(' · ')}</div>` : '<div class="doux" style="font-size:.9rem">nouveau motif</div>'}</li>`).join('');
+      ${g.membres.length ? `<div style="font-size:.9rem">← ${g.membres.map((m) => esc(m.libelle)).join(' · ')}</div>` : (g.reclasses || []).length ? '' : '<div class="doux" style="font-size:.9rem">nouveau motif</div>'}
+      ${(g.reclasses || []).length ? `<div style="font-size:.9rem">← déplacé ici : ${g.reclasses.map((m) => esc(m.libelle)).join(' · ')}</div>` : ''}</li>`).join('');
   const r = await dialogue(`<h2 id="dialogue-titre">Organiser les motifs</h2>
     <p>Voici comment tes motifs seraient réunis. Les évaluations passées gardent exactement ce que tu avais coché ; dans les statistiques et le rapport, chaque ancien motif compte dans son nouveau motif. Une copie de sécurité est faite avant.</p>
     <ul class="liste-simplification">${groupes}</ul>

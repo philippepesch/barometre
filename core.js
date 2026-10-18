@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.17.2';
+export const VERSION_APP = '1.18.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -312,6 +312,7 @@ export function descriptionMotif(m, bibliotheque = []) {
 // Domaines : chaque motif est rangé selon la SOURCE de l'influence. On pose les questions dans l'ordre ;
 // la première réponse « oui » donne le domaine (aucun chevauchement possible).
 export const DOMAINES = [
+  { id: 'exterieur', libelle: 'Facteurs extérieurs', question: 'Est-ce un facteur extérieur sur lequel je n\'ai aucune influence (météo, résultats sportifs, bourse) ?' },
   { id: 'corps', libelle: 'Corps', question: 'Est-ce lié à mon corps (sommeil, santé, activité physique) ?' },
   { id: 'relations', libelle: 'Relations', question: 'Une autre personne est-elle en jeu ?' },
   { id: 'obligations', libelle: 'Obligations', question: 'Est-ce lié à une obligation (travail, rendez-vous, argent, papiers) ?' },
@@ -332,6 +333,27 @@ export function domaineMotif(m, bibliotheque = []) {
 // Simplification proposée de la bibliothèque (octobre 2026) : motifs proches réunis sous un libellé court.
 // L'ordre compte : un motif est rangé dans le premier groupe dont un mot-clé correspond (sans accents ni casse).
 export const PLAN_MOTIFS = [
+  // Facteurs extérieurs (aucune influence possible) : en tête, pour être reconnus avant les autres groupes
+  { libelle: 'Météo agréable', polarite: 'favorable', domaine: 'exterieur', cles: [/meteo/, /soleil/, /ensoleill/, /beau temps/], description: 'Soleil, temps doux ou agréable.' },
+  {
+    libelle: 'Bons résultats sportifs', polarite: 'favorable', domaine: 'exterieur', questionSous: 'Lesquels ?', cles: [/victoire/, /gagn/, /bons? resultats?/, /bonnes? performances?/],
+    description: 'Victoire ou bon résultat d\'une équipe que je soutiens. Précise laquelle (facultatif).',
+    sous: [
+      { libelle: 'Bon résultat du KSC', cles: [/\bksc\b/, /karlsruhe/], description: 'Victoire ou bon résultat du Karlsruher SC.' },
+      { libelle: 'Bon résultat de l\'équipe nationale', cles: [/nationale/, /luxembourg/], description: 'Victoire ou bon résultat de l\'équipe nationale de football du Luxembourg.' },
+    ],
+  },
+  { libelle: 'Hausse de mes placements', polarite: 'favorable', domaine: 'exterieur', cles: [/placement/, /bourse/, /portefeuille/, /valeurs? financ/, /action(s)? en hausse/], description: 'Bonne évolution de mes placements, de la bourse ou de mes valeurs financières.' },
+  { libelle: 'Météo maussade', polarite: 'defavorable', domaine: 'exterieur', cles: [/meteo/, /pluie/, /pluvieu/, /grisaille/, /mauvais temps/, /\bgris\b/, /froid/], description: 'Pluie, grisaille, froid ou manque de lumière.' },
+  {
+    libelle: 'Résultats sportifs décevants', polarite: 'defavorable', domaine: 'exterieur', questionSous: 'Lesquels ?', cles: [/defaite/, /perdu/, /mauvais(es)? (resultats?|performances?)/, /\bksc\b/, /equipe nationale/],
+    description: 'Défaite ou mauvais résultat d\'une équipe que je soutiens. Précise laquelle (facultatif).',
+    sous: [
+      { libelle: 'Mauvais résultat du KSC', cles: [/\bksc\b/, /karlsruhe/], description: 'Défaite ou mauvais résultat du Karlsruher SC.' },
+      { libelle: 'Mauvais résultat de l\'équipe nationale', cles: [/nationale/, /luxembourg/], description: 'Défaite ou mauvais résultat de l\'équipe nationale de football du Luxembourg.' },
+    ],
+  },
+  { libelle: 'Baisse de mes placements', polarite: 'defavorable', domaine: 'exterieur', cles: [/placement/, /bourse/, /portefeuille/, /valeurs? financ/, /baisse/], description: 'Mauvaise évolution de mes placements, de la bourse ou de mes valeurs financières.' },
   { libelle: 'Calme et solitude', polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.' },
   { libelle: 'Liberté, sans contraintes', polarite: 'favorable', domaine: 'obligations', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
   { libelle: 'Réussite ou retour positif', polarite: 'favorable', domaine: 'activites', cles: [/retour positif/, /application/, /reussite/], description: 'Un travail abouti ou reconnu : retour positif sur les recherches, application créée, finalisée ou améliorée…' },
@@ -372,7 +394,7 @@ export const PLAN_MOTIFS = [
   { libelle: 'Santé : douleurs, peur de la maladie', polarite: 'defavorable', domaine: 'corps', cles: [/douleur/, /cancer/, /maladie/], description: 'Douleurs physiques, peur du cancer ou de la maladie.' },
   { libelle: 'Manque d\'organisation ou de motivation', polarite: 'defavorable', domaine: 'obligations', cles: [/organis/, /motiv/, /equilibre/], description: 'Difficulté à s\'organiser, à se motiver (activité physique) ou à trouver un équilibre de vie sain.' },
   { libelle: 'Surcharge mentale', polarite: 'defavorable', domaine: 'esprit', cles: [/stimul/, /court.?circuit/, /surcharge/], description: 'Trop de sollicitations en même temps, sensation de court-circuit mental.' },
-  { libelle: 'Contrariétés du quotidien', polarite: 'defavorable', domaine: 'esprit', cles: [/flash/, /trop vite/, /performance/, /\bksc\b/, /contrariet/], description: 'Petits événements contrariants : excès de vitesse flashé, mauvais résultats du KSC…' },
+  { libelle: 'Contrariétés du quotidien', polarite: 'defavorable', domaine: 'esprit', cles: [/flash/, /trop vite/, /contrariet/], description: 'Petits événements contrariants : excès de vitesse flashé, objet perdu, imprévu agaçant…' },
   { libelle: 'Anxiété, préoccupations', polarite: 'defavorable', domaine: 'esprit', cles: [/anxi/, /preoccup/, /angoiss/], description: 'Anxiété diffuse, préoccupations personnelles.' },
 ];
 
@@ -403,6 +425,17 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
     }
     if (i < 0) nonClasses.push(m); else groupes[i].membres.push(m);
   }
+  // Anciens motifs déjà regroupés : rattachés au nouveau groupe s'ils y correspondent mieux (ex. un mauvais résultat
+  // du KSC, autrefois rangé dans les contrariétés, passe dans les facteurs extérieurs). Les évaluations suivent.
+  const regroupes = motifs.filter((m) => m.regroupeDans);
+  for (const m of regroupes) {
+    const n = normaliserLibelle(m.libelle);
+    let i = cibles.findIndex((g) => g.parent === null && g.polarite === m.polarite && g.cles.some((r) => r.test(n)));
+    if (i < 0) continue;
+    const sous = cibles.findIndex((g) => g.parent === i && g.cles.some((r) => r.test(n)));
+    if (sous >= 0) i = sous;
+    (groupes[i].reclasses = groupes[i].reclasses || []).push(m);
+  }
   let changements = 0;
   for (const g of groupes) {
     const k = normaliserLibelle(g.cible.libelle);
@@ -413,6 +446,14 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
     const parent = g.cible.parent === null ? null : groupes[g.cible.parent].principal;
     if (!p || p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (g.cible.parent !== null && (!parent || p.parentId !== parent.id)) || (g.cible.domaine || '') !== (p.domaine || '') || (g.cible.questionSous || '') !== (p.questionSous || '')) changements++;
     changements += g.membres.filter((m) => m !== p).length;
+  }
+  // Un motif regroupé ne change que si sa racine actuelle n'est pas déjà le motif retenu pour ce groupe
+  for (const g of groupes) {
+    g.reclasses = (g.reclasses || []).filter((m) => {
+      const racine = racineMotif(m.id, motifs);
+      return !(g.principal && racine && racine.id === g.principal.id) && !(g.membres.includes(racine));
+    });
+    changements += g.reclasses.length;
   }
   return { groupes, nonClasses, changements };
 }
@@ -436,6 +477,7 @@ export function appliquerSimplification(motifs, plan, instant = Date.now()) {
     }
     finaux[i] = p;
     for (const m of g.membres) if (m.id !== p.id) sortie.push({ ...m, regroupeDans: p.id, actif: false, modifieLeUtc: le });
+    for (const m of g.reclasses || []) if (m.id !== p.id) sortie.push({ ...m, regroupeDans: p.id, actif: false, modifieLeUtc: le });
   });
   return sortie;
 }
