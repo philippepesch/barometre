@@ -509,3 +509,12 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .evenement-tete { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .evenement-tete > div { flex: 1; min-width: 0; }
 .evenement-tete > a { flex: none; }
+
+/* Événements marquants dans le formulaire d'évaluation */
+.carte-evt { border: 1px solid var(--filet); border-left: 3px solid var(--laiton); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.tete-evt { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.impact-evt .segmente label.impact-positif input:checked + span { background: #2F6E9E; border-color: #2F6E9E; color: #fff; }
+.impact-evt .segmente label.impact-negatif input:checked + span { background: #8A3B4A; border-color: #8A3B4A; color: #fff; }
+.badge-impact { display: inline-block; margin-left: 6px; font-size: .8rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; color: #fff; vertical-align: middle; }
+.badge-impact.impact-positif { background: #2F6E9E; }
+.badge-impact.impact-negatif { background: #8A3B4A; }

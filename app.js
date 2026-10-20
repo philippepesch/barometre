@@ -931,6 +931,14 @@ function formulaire(cible, ev) {
       </details>
     </section>
 
+    <section class="question" aria-labelledby="qe">
+      <p class="question-numero">Événements marquants</p>
+      <h2 id="qe">Un événement a-t-il eu une grande influence sur ton ressenti ?</h2>
+      <p class="doux">Facultatif, ${C.MAX_EVENEMENTS_EVALUATION} au maximum : une victoire de ton équipe, une dispute, une bonne nouvelle… Pour chacun, indique s'il a eu un impact positif ou négatif. Il apparaîtra numéroté dans les graphiques du rapport.</p>
+      <div id="liste-evts"></div>
+      <p style="margin-top:10px"><button type="button" class="bouton-secondaire" id="btn-evt-ajouter">Ajouter un événement marquant</button></p>
+    </section>
+
     <section class="question" aria-labelledby="q3">
       <p class="question-numero">Question 3</p>
       <h2 id="q3">Quelle note prévois-tu pour ${esc(prevLib)}, et pourquoi ?</h2>
@@ -1027,6 +1035,40 @@ function formulaire(cible, ev) {
   document.getElementById('btn-autre-ajouter').addEventListener('click', ajouterAutre);
   document.getElementById('autre-libelle').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ajouterAutre(); } });
 
+  // Événements marquants de cette évaluation (3 au maximum), impact positif ou négatif obligatoire
+  const idCreneauCible = C.idCreneau(cible.date, cible.creneau);
+  let evts = C.evenementsDuCreneau(etat.parametres.evenements, idCreneauCible).map((x) => ({ id: x.id, titre: x.titre, faits: x.faits, impact: x.impact || '', cle: C.nouvelId() }));
+  const zoneEvts = document.getElementById('liste-evts');
+  const lireEvts = () => { zoneEvts.querySelectorAll('[data-evt]').forEach((b) => { const x = evts.find((y) => y.cle === b.dataset.evt); if (!x) return; x.titre = b.querySelector('[data-champ=titre]').value; x.faits = b.querySelector('[data-champ=faits]').value; const r = b.querySelector('input[type=radio]:checked'); x.impact = r ? r.value : ''; }); return evts; };
+  const dessinerEvts = () => {
+    zoneEvts.innerHTML = evts.map((x, i) => `<div class="carte-evt" data-evt="${x.cle}">
+      <div class="tete-evt"><strong>Événement ${i + 1}</strong><button type="button" class="bouton-discret" data-retirer-evt="${x.cle}">Retirer</button></div>
+      <div class="champ"><label for="evt-titre-${x.cle}">En quelques mots</label><input type="text" id="evt-titre-${x.cle}" data-champ="titre" maxlength="${C.LONGUEUR_TITRE_EVENEMENT}" value="${esc(x.titre || '')}" placeholder="Ex. : victoire du KSC 4-0 après une série de défaites" autocomplete="off"></div>
+      <fieldset class="champ impact-evt"><legend class="visuellement-cache">Impact sur ton humeur</legend>
+        <div class="segmente">${Object.entries(C.IMPACTS).map(([v, lib]) => `<label class="impact-${v}"><input type="radio" name="evt-impact-${x.cle}" value="${v}" ${x.impact === v ? 'checked' : ''}><span>${lib}</span></label>`).join('')}</div>
+      </fieldset>
+      <details class="repli" ${x.faits ? 'open' : ''}><summary>Ajouter une description <small class="doux">(facultatif)</small></summary>
+        <div class="champ"><label for="evt-faits-${x.cle}" class="visuellement-cache">Description</label><textarea id="evt-faits-${x.cle}" data-champ="faits" rows="3" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr" spellcheck="true">${esc(x.faits || '')}</textarea></div>
+      </details>
+    </div>`).join('');
+    document.getElementById('btn-evt-ajouter').hidden = evts.length >= C.MAX_EVENEMENTS_EVALUATION;
+  };
+  dessinerEvts();
+  document.getElementById('btn-evt-ajouter').addEventListener('click', () => {
+    lireEvts();
+    if (evts.length >= C.MAX_EVENEMENTS_EVALUATION) return;
+    evts.push({ titre: '', faits: '', impact: '', cle: C.nouvelId() });
+    dessinerEvts();
+    document.getElementById(`evt-titre-${evts[evts.length - 1].cle}`).focus();
+  });
+  zoneEvts.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-retirer-evt]');
+    if (!b) return;
+    lireEvts();
+    evts = evts.filter((x) => x.cle !== b.dataset.retirerEvt);
+    dessinerEvts();
+  });
+
   // Informations obligatoires (nouvelle évaluation) : message rouge tant qu'il manque quelque chose
   const exigerTout = !ev && etat.parametres.saisieComplete !== false;
   let verifierEnDirect = false;
@@ -1041,7 +1083,8 @@ function formulaire(cible, ev) {
   });
   const afficherManquants = () => {
     const zone = document.getElementById('erreurs');
-    const manquants = C.informationsManquantes(brouillon());
+    // Toujours exigé : titre et impact de chaque événement marquant ; le reste selon le réglage
+    const manquants = [...(exigerTout ? C.informationsManquantes(brouillon()) : []), ...C.manquesEvenements(lireEvts())];
     form.querySelectorAll('section.question').forEach((q) => q.classList.toggle('manque', manquants.some((m) => q.getAttribute('aria-labelledby') === m.champ)));
     if (!manquants.length) { zone.hidden = true; zone.classList.remove('erreurs-rouge'); zone.innerHTML = ''; return manquants; }
     zone.hidden = false;
@@ -1050,7 +1093,7 @@ function formulaire(cible, ev) {
       <ul>${manquants.map((m) => `<li><a href="#${m.champ}" data-aller="${m.champ}">${esc(C.majuscule(m.message))}</a></li>`).join('')}</ul>`;
     return manquants;
   };
-  if (exigerTout) {
+  {
     const majDirect = () => { if (verifierEnDirect) setTimeout(afficherManquants, 0); };
     form.addEventListener('input', majDirect);
     form.addEventListener('change', majDirect);
@@ -1066,10 +1109,8 @@ function formulaire(cible, ev) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const zoneErreurs = document.getElementById('erreurs');
-    if (exigerTout) {
-      verifierEnDirect = true;
-      if (afficherManquants().length) { zoneErreurs.scrollIntoView({ behavior: 'smooth', block: 'center' }); zoneErreurs.focus({ preventScroll: true }); return; }
-    }
+    verifierEnDirect = true;
+    if (afficherManquants().length) { zoneErreurs.scrollIntoView({ behavior: 'smooth', block: 'center' }); zoneErreurs.focus({ preventScroll: true }); return; }
     if (s.note === null) {
       zoneErreurs.hidden = false;
       zoneErreurs.textContent = 'Choisis d\'abord une note pour la question 1 : touche ou fais glisser le curseur.';
@@ -1106,16 +1147,26 @@ function formulaire(cible, ev) {
         lieux: champLieux.valeurs(),
         situation: champSituation.valeur(),
       };
+      // Événements marquants : enregistrés avec l'évaluation (création, correction ou retrait)
+      const listeEvts = C.evenementsDepuisFormulaire(etat.parametres.evenements, idCreneauCible, lireEvts(), instant);
+      const evtsChanges = JSON.stringify(C.evenementsDuCreneau(listeEvts, idCreneauCible)) !== JSON.stringify(C.evenementsDuCreneau(etat.parametres.evenements, idCreneauCible));
+      const sauverEvts = async () => { if (evtsChanges) await enregistrerParametres({ evenements: listeEvts }); };
       let resultat;
       if (ev) {
         resultat = C.modifierEvaluation(ev, saisie, document.getElementById('raison').value, instant);
-        if (!resultat) { annoncer('Aucun changement : l\'évaluation n\'a pas été modifiée.'); aller(`#/evaluation/${ev.id}`); return; }
+        if (!resultat) {
+          await sauverEvts();
+          annoncer(evtsChanges ? 'Événements marquants enregistrés.' : 'Aucun changement : l\'évaluation n\'a pas été modifiée.');
+          aller(`#/evaluation/${ev.id}`);
+          return;
+        }
       } else {
         const erreurs = C.validerSaisie(saisie);
         if (erreurs.length) throw new Error(erreurs.join(' '));
         resultat = C.creerEvaluation(saisie, instant);
       }
       await enregistrerEvaluation(resultat);
+      await sauverEvts();
       annoncer(ev ? `Modification enregistrée le ${C.formatDateHeure(instant)}.` : `Évaluation enregistrée à ${C.formatHeure(instant)}.`);
       aller(ev ? `#/evaluation/${resultat.id}` : '#/');
       if (resultat.securite && resultat.securite.declenchee) await verificationSecurite(resultat);
@@ -1170,12 +1221,12 @@ function vueFiche([id]) {
       ${ev.securite && ev.securite.declenchee ? `<dt>Sécurité</dt><dd>Une vérification de sécurité a été proposée (${esc(ev.securite.raisons.join(', '))}).</dd>` : ''}
     </dl></div>
     ${(() => {
-      const lies = C.evenementsActifs(etat.parametres.evenements).filter((x) => C.creneauEvenement(x) === ev.creneauId);
+      const lies = C.evenementsDuCreneau(etat.parametres.evenements, ev.creneauId);
       return `<div class="bloc"><h2>Événements marquants</h2>
-        ${lies.length ? `<ul class="liste-evenements">${lies.map((x) => `<li class="evenement-carte"><div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}</div><a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
+        ${lies.length ? `<ul class="liste-evenements">${lies.map((x) => `<li class="evenement-carte"><div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}${badgeImpact(x)}</div><a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
           ${x.faits ? `<p class="texte-libre encre-2" style="margin:6px 0 0"><strong>Ce qui s'est passé :</strong> ${esc(x.faits)}</p>` : ''}${x.vecu ? `<p class="texte-libre encre-2" style="margin:6px 0 0"><strong>Ce que j'ai ressenti :</strong> ${esc(x.vecu)}</p>` : ''}</li>`).join('')}</ul>`
     : `<p class="doux">Aucun événement noté pour ${ev.creneau === 'matin' ? 'la soirée et la nuit précédant cette évaluation' : 'la journée de cette évaluation'}.</p>`}
-        <p style="margin:8px 0 0"><a class="bouton-discret" href="#/evenements/nouveau/${esc(ev.date)}">Ajouter un événement</a></p></div>`;
+        <p style="margin:8px 0 0"><a class="bouton-discret" href="#/modifier/${esc(ev.id)}">${lies.length ? 'Modifier ou ajouter (avec l\'évaluation)' : 'Ajouter un événement marquant'}</a></p></div>`;
     })()}
     ${C.aDesTextes(ev) ? blocVersionRapport(ev) : ''}
     ${ev.historique && ev.historique.length ? `<div class="bloc"><h2>Historique des modifications</h2><ol class="historique">${ev.historique.map((h) => `<li><strong>${C.formatDateHeure(h.le)}</strong> (version ${h.version})${h.raison ? ` — raison : ${esc(h.raison)}` : ''}
@@ -1212,12 +1263,14 @@ async function retirerEvaluation(id) {
 // ---------------------------------------------------------------------------
 // Événements marquants et contexte (section à part du rapport ; jamais envoyés à un assistant)
 
+const badgeImpact = (x) => (C.IMPACTS[x.impact] ? ` <span class="badge-impact impact-${x.impact}">${esc(C.IMPACTS[x.impact])}</span>` : '');
+
 function vueEvenements(args = []) {
   const liste = C.evenementsActifs(etat.parametres.evenements);
   const ctx = C.normaliserContexte(etat.parametres.contexteRapport);
   const edite = args[0] === 'nouveau' ? (C.estDateValide(args[1]) ? { date: args[1] } : {}) : args[0] ? liste.find((x) => x.id === args[0]) : null;
   const carte = (x) => `<li class="evenement-carte">
-      <div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}</div>
+      <div class="evenement-tete"><div><strong>${esc(C.majuscule(C.libelleMomentEvenement(x)))}</strong>${x.titre ? `<br><span>${esc(x.titre)}</span>` : ''}${badgeImpact(x)}</div>
         <a class="bouton-discret" href="#/evenements/${esc(x.id)}">Modifier</a></div>
       ${x.faits ? `<details class="repli"><summary>Ce qui s'est passé${x.vecu ? ' · ce que j\'ai ressenti' : ''}</summary><p class="texte-libre encre-2"><strong>Ce qui s'est passé :</strong> ${esc(x.faits)}</p>${x.vecu ? `<p class="texte-libre encre-2"><strong>Ce que j'ai ressenti :</strong> ${esc(x.vecu)}</p>` : ''}</details>` : ''}
       ${x.rapport ? '' : '<p class="doux" style="margin:4px 0 0">Non inclus dans le rapport.</p>'}
@@ -1230,6 +1283,9 @@ function vueEvenements(args = []) {
       </div>
       <label class="interrupteur" style="margin:-4px 0 12px"><input type="checkbox" id="ev-approx" ${x.heureApprox ? 'checked' : ''}> <span>Heure approximative</span></label>
       <div class="champ"><label for="ev-titre">En quelques mots</label><input type="text" id="ev-titre" maxlength="${C.LONGUEUR_TITRE_EVENEMENT}" value="${esc(x.titre || '')}" placeholder="Ex. : appel difficile, dispute, bonne nouvelle…"></div>
+      <fieldset class="champ impact-evt"><legend style="font-weight:600;margin-bottom:6px">Influence sur ton humeur</legend>
+        <div class="segmente">${Object.entries(C.IMPACTS).map(([v, lib]) => `<label class="impact-${v}"><input type="radio" name="ev-impact" value="${v}" ${x.impact === v ? 'checked' : ''}><span>${lib}</span></label>`).join('')}</div>
+      </fieldset>
       <div class="champ"><label for="ev-faits">Ce qui s'est passé <small class="doux">(les faits)</small></label><textarea id="ev-faits" rows="5" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr" spellcheck="true">${esc(x.faits || '')}</textarea></div>
       <div class="champ"><label for="ev-vecu">Ce que j'ai ressenti <small class="doux">(facultatif)</small></label><textarea id="ev-vecu" rows="4" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr" spellcheck="true">${esc(x.vecu || '')}</textarea></div>
       <label class="interrupteur" style="margin-bottom:12px"><input type="checkbox" id="ev-rapport" ${x.rapport === false ? '' : 'checked'}> <span>Inclure dans le rapport</span></label>
@@ -1256,7 +1312,8 @@ function vueEvenements(args = []) {
       e.preventDefault();
       const v = (id) => document.getElementById(id).value;
       try {
-        const evenements = C.enregistrerEvenement(etat.parametres.evenements, { id: edite.id, date: v('ev-date'), heure: v('ev-heure'), heureApprox: document.getElementById('ev-approx').checked, titre: v('ev-titre'), faits: v('ev-faits'), vecu: v('ev-vecu'), rapport: document.getElementById('ev-rapport').checked }, maintenant());
+        const imp = form.querySelector('[name="ev-impact"]:checked');
+        const evenements = C.enregistrerEvenement(etat.parametres.evenements, { ...(edite.id ? edite : {}), id: edite.id, date: v('ev-date'), heure: v('ev-heure'), heureApprox: document.getElementById('ev-approx').checked, titre: v('ev-titre'), faits: v('ev-faits'), vecu: v('ev-vecu'), impact: imp ? imp.value : '', rapport: document.getElementById('ev-rapport').checked, ...(edite.creneauId && !v('ev-heure') && v('ev-date') === edite.date ? { creneauId: edite.creneauId } : { creneauId: '' }) }, maintenant(), { exigerImpact: true });
         await sauver(evenements);
         annoncer('Événement enregistré.');
         aller('#/evenements');

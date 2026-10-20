@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.19.0';
+export const VERSION_APP = '1.20.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -750,7 +750,8 @@ export function libelleLieux(liste, { complet = false, activites = true, ressent
 export const ACTIVITES_PROPOSEES = [
   'Lieu de travail', 'Télétravail', 'Courses', 'Restaurant', 'Visite familiale', 'Sortie entre amis',
   'Rendez-vous médical', 'Pédicure médicale', 'Kinésithérapie', 'Séance de psychothérapie', 'Démarches administratives',
-  'Sport', 'Match de foot', 'Randonnée', 'Tour à vélo', 'Promenade', 'Cinéma', 'Concert', 'Lecture', 'Repos à la maison', 'Jardinage', 'Bricolage',
+  'Sport', 'Match de foot', 'Balade solitaire', 'Balade avec un(e) ami(e)', 'Balade avec un membre de la famille', 'Randonnée', 'Marche longue distance',
+  'Tour à vélo', 'Randonnée cycliste', 'Cinéma', 'Concert', 'Lecture', 'Repos à la maison', 'Jardinage', 'Bricolage',
 ];
 
 /** Activités déjà saisies (de la plus fréquente à la moins fréquente), puis les suggestions de départ. */
@@ -1269,6 +1270,7 @@ Règles impératives :
 - Aucune redite : si plusieurs motifs ou passages expriment la même idée (par exemple « Calme et tranquillité » et « Absence de bruit », ou un motif coché que le texte répète), ne l'écris qu'une seule fois, en une formulation qui les réunit.
 - N'ajoute aucune information absente des entrées, aucune interprétation, aucune hypothèse, aucun vocabulaire clinique ni diagnostic.
 - Présente les motifs comme des éléments mentionnés par le patient, sans en tirer de conclusion.
+- Pour un ami, un collègue ou un proche dont le patient ne précise pas qu'il s'agit d'un homme ou d'une femme, ou qu'il désigne sans nom, emploie l'écriture neutre : « un(e) ami(e) », « un(e) collègue », « un membre de la famille ».
 - Conserve exactement chaque « id ».
 
 Réponds uniquement avec du JSON valide, sans texte autour, sous cette forme exacte :
@@ -1379,6 +1381,10 @@ export const LONGUEUR_TITRE_EVENEMENT = 120;
 export const LONGUEUR_TEXTE_EVENEMENT = 2000;
 export const LONGUEUR_CONTEXTE = 2000;
 
+/** Influence d'un événement sur l'humeur (obligatoire à la saisie d'un nouvel événement). */
+export const IMPACTS = { positif: 'Impact positif', negatif: 'Impact négatif' };
+export const MAX_EVENEMENTS_EVALUATION = 3;
+
 const heureValide = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(h || ''));
 const texteBorne = (v, n) => String(v || '').replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, n);
 
@@ -1391,15 +1397,18 @@ export function normaliserEvenement(x) {
   const faits = texteBorne(x.faits, LONGUEUR_TEXTE_EVENEMENT);
   const titre = texteBorne(x.titre, LONGUEUR_TITRE_EVENEMENT).replace(/\n/g, ' ');
   if (!faits && !titre) return null;
+  const creneauId = /^\d{4}-\d{2}-\d{2}_(matin|soir)$/.test(String(x.creneauId || '')) ? x.creneauId : '';
   return {
     id: x.id, date: x.date, heure: heureValide(x.heure) ? x.heure : '', heureApprox: !!(heureValide(x.heure) && x.heureApprox),
     titre, faits, vecu: texteBorne(x.vecu, LONGUEUR_TEXTE_EVENEMENT), rapport: x.rapport !== false,
+    ...(IMPACTS[x.impact] ? { impact: x.impact } : {}), ...(creneauId ? { creneauId } : {}),
     creeLeUtc: x.creeLeUtc && !Number.isNaN(Date.parse(x.creeLeUtc)) ? new Date(x.creeLeUtc).toISOString() : modifie, modifieLeUtc: modifie,
   };
 }
 
-export function validerEvenement(s) {
+export function validerEvenement(s, { exigerImpact = false } = {}) {
   const e = [];
+  if (exigerImpact && !IMPACTS[s.impact]) e.push('Choisis « impact positif » ou « impact négatif ».');
   if (!estDateValide(s.date)) e.push('Indique la date de l\'événement.');
   if (s.heure && !heureValide(s.heure)) e.push('Heure invalide (format HH:MM).');
   if (!String(s.titre || '').trim() && !String(s.faits || '').trim()) e.push('Décris en quelques mots ce qui s\'est passé.');
@@ -1409,8 +1418,8 @@ export function validerEvenement(s) {
 }
 
 /** Crée ou modifie un événement (même identifiant = modification). */
-export function enregistrerEvenement(liste, saisie, instant = Date.now()) {
-  const erreurs = validerEvenement(saisie);
+export function enregistrerEvenement(liste, saisie, instant = Date.now(), { exigerImpact = false } = {}) {
+  const erreurs = validerEvenement(saisie, { exigerImpact });
   if (erreurs.length) throw new Error(erreurs.join(' '));
   const le = new Date(instant).toISOString();
   const ex = (liste || []).find((x) => x.id === saisie.id && !x.supprime);
@@ -1422,8 +1431,11 @@ export function supprimerEvenement(liste, id, instant = Date.now()) {
   return (liste || []).map((x) => (x.id === id ? { id, supprime: true, modifieLeUtc: new Date(instant).toISOString() } : x));
 }
 
-// Sans heure : en tête de sa journée (les événements à heure précise suivent)
-const cleTriEvenement = (x) => `${x.date} ${x.heure || '00:00'} ${x.heure ? 1 : 0} ${x.creeLeUtc || ''}`;
+// Sans heure : en tête de sa journée ; noté depuis une évaluation : au début de la période qu'elle couvre
+const cleTriEvenement = (x) => {
+  if (!x.heure && x.creneauId) { const [d, c] = x.creneauId.split('_'); return `${c === 'matin' ? ajouterJours(d, -1) : d} ${c === 'matin' ? HEURES_RAPPEL.soir : HEURES_RAPPEL.matin} 0 ${x.creeLeUtc || ''}`; }
+  return `${x.date} ${x.heure || '00:00'} ${x.heure ? 1 : 0} ${x.creeLeUtc || ''}`;
+};
 
 /** Événements actifs (non supprimés), du plus ancien au plus récent ; optionnellement limités à une période. */
 export function evenementsActifs(liste, { debut = null, fin = null, rapportSeulement = false } = {}) {
@@ -1437,6 +1449,7 @@ export function evenementsActifs(liste, { debut = null, fin = null, rapportSeule
  * celle du matin (6 h) sur la soirée et la nuit. Sans heure : la journée (soir).
  */
 export function creneauEvenement(x) {
+  if (x.creneauId) return x.creneauId;
   if (!x.heure) return idCreneau(x.date, 'soir');
   if (x.heure < HEURES_RAPPEL.matin) return idCreneau(x.date, 'matin');
   if (x.heure < HEURES_RAPPEL.soir) return idCreneau(x.date, 'soir');
@@ -1444,7 +1457,53 @@ export function creneauEvenement(x) {
 }
 
 export function libelleMomentEvenement(x) {
+  if (!x.heure && x.creneauId) {
+    const [d, c] = x.creneauId.split('_');
+    return c === 'matin' ? `nuit du ${formatDateCourte(ajouterJours(d, -1)).slice(0, 5)} au ${formatDateCourte(d)} (évaluation du matin)` : `${formatDateCourte(d)}, journée (évaluation du soir)`;
+  }
   return `${formatDateCourte(x.date)}${x.heure ? ` à ${x.heure.replace(':', ' h ')}${x.heureApprox ? ' (heure approximative)' : ''}` : ''}`;
+}
+
+/** Événements rattachés à une évaluation (créneau), dans l'ordre. */
+export function evenementsDuCreneau(liste, creneauId) {
+  return evenementsActifs(liste).filter((x) => creneauEvenement(x) === creneauId);
+}
+
+/** Ce qui manque aux événements saisis dans le formulaire d'évaluation (une ligne vide est ignorée). */
+export function manquesEvenements(saisies = []) {
+  const m = [];
+  saisies.forEach((x, i) => {
+    const vide = !String(x.titre || '').trim() && !String(x.faits || '').trim();
+    if (vide && !x.impact) return;
+    const n = saisies.length > 1 ? ` ${i + 1}` : '';
+    if (!String(x.titre || '').trim()) m.push({ champ: 'qe', message: `le titre de l'événement marquant${n}` });
+    if (!IMPACTS[x.impact]) m.push({ champ: 'qe', message: `« impact positif » ou « impact négatif » pour l'événement marquant${n}` });
+  });
+  return m;
+}
+
+/**
+ * Applique à la liste les événements du formulaire d'une évaluation : mise à jour (même id, sans perdre les champs
+ * que le formulaire n'affiche pas), création (rattachée au créneau), suppression de ceux retirés. Retourne la liste.
+ */
+export function evenementsDepuisFormulaire(liste, creneauId, saisies, instant = Date.now()) {
+  let l = [...(liste || [])];
+  const [date] = creneauId.split('_');
+  const existants = evenementsDuCreneau(l, creneauId);
+  const gardes = new Set();
+  for (const x of saisies) {
+    if (!String(x.titre || '').trim() && !String(x.faits || '').trim()) continue;
+    const ex = x.id ? existants.find((e) => e.id === x.id) : null;
+    if (ex) {
+      gardes.add(ex.id);
+      if ((ex.titre || '') === String(x.titre || '').trim() && (ex.faits || '') === String(x.faits || '').trim() && (ex.impact || '') === x.impact) continue;
+      l = enregistrerEvenement(l, { ...ex, titre: x.titre, faits: x.faits, impact: x.impact }, instant, { exigerImpact: true });
+    } else {
+      l = enregistrerEvenement(l, { date, heure: '', creneauId, titre: x.titre, faits: x.faits, impact: x.impact }, instant, { exigerImpact: true });
+    }
+  }
+  for (const e of existants) if (!gardes.has(e.id)) l = supprimerEvenement(l, e.id, instant);
+  return l;
 }
 
 /** Fusion de deux listes (appareils différents) : par identifiant, la modification la plus récente l'emporte. */

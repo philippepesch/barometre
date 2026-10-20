@@ -24,6 +24,8 @@ const DOUX = '#5E6B74';
 const FILET = '#CDD4D9';
 const LAITON = '#8A6D35';
 const FOND = '#F1F3F4';
+// Événements marquants : couleur selon l'impact déclaré (sans impact : laiton)
+const COULEUR_IMPACT = { positif: '#2F6E9E', negatif: '#8A3B4A' };
 
 // Caractères disponibles dans l'encodage WinAnsi des polices standard PDF
 const WINANSI_EXTRA = '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ';
@@ -228,9 +230,9 @@ class Redacteur {
     const R0 = 26;
     this.place(70);
     const num = String(numero);
-    this.page.drawCircle({ x: MARGE + 9, y: A4[1] - (this.y + 7.5), size: 9, color: this.couleur(LAITON) });
+    this.page.drawCircle({ x: MARGE + 9, y: A4[1] - (this.y + 7.5), size: 9, color: this.couleur(COULEUR_IMPACT[x.impact] || LAITON) });
     this.texte(num, MARGE + 9 - this.largeur(num, 9, 'gras') / 2, this.y + 10.7, { taille: 9, police: 'gras', couleur: '#FFFFFF' });
-    this.riche([[C.majuscule(C.libelleMomentEvenement(x)), 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : [])], { taille: 10.5, retrait: R0, apres: 3 });
+    this.riche([[C.majuscule(C.libelleMomentEvenement(x)), 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : []), ...(C.IMPACTS[x.impact] ? [[`  ·  ${C.IMPACTS[x.impact].toLowerCase()}`, 'gras', COULEUR_IMPACT[x.impact]]] : [])], { taille: 10.5, retrait: R0, apres: 3 });
     const bloc = (etiquette, texte, couleur) => {
       if (!texte) return;
       this.place(30);
@@ -317,7 +319,7 @@ class Redacteur {
     const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
     const hBandes = avecBandes ? 52 : 0;
     const marques = (contexte && contexte.evenements) || [];
-    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 : 0));
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 + 25 : 0));
     // À gauche : note et pictogramme météo de chaque niveau ; à droite : nom du niveau
     const gauche = MARGE + 36, droite = MARGE + LARGEUR - 60;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
@@ -374,16 +376,22 @@ class Redacteur {
     // Événements marquants : pastilles numérotées sous les dates, à la position du créneau concerné
     if (marques.length) {
       const parIndex = new Map();
-      for (const m of marques) { const i = indexParId.get(m.creneauId); if (i === undefined) continue; parIndex.set(i, [...(parIndex.get(i) || []), m.numero]); }
+      for (const m of marques) { const i = indexParId.get(m.creneauId); if (i === undefined) continue; parIndex.set(i, [...(parIndex.get(i) || []), m]); }
       const yM = this.y + 2;
-      for (const [i, nums] of parIndex) {
-        const lib = nums.join(',');
-        const w = Math.max(11, this.largeur(lib, 7, 'gras') + 6);
+      for (const [i, ms] of parIndex) {
+        // Une pastille par événement, empilées sous le créneau, colorées selon l'impact
         const x = xDe(i);
         this.page.drawLine({ start: P(x, bas), end: P(x, yM), thickness: 0.5, color: this.couleur(LAITON), dashArray: [1.5, 1.5] });
-        this.cadre(x - w / 2, yM, w, 11, { fond: LAITON, rayon: 5.5 });
-        this.texte(lib, x - this.largeur(lib, 7, 'gras') / 2, yM + 8, { taille: 7, police: 'gras', couleur: '#FFFFFF' });
+        ms.forEach((m, k) => {
+          const lib = String(m.numero);
+          const w = Math.max(11, this.largeur(lib, 7, 'gras') + 6);
+          const y = yM + k * 12.5;
+          this.cadre(x - w / 2, y, w, 11, { fond: COULEUR_IMPACT[m.impact] || LAITON, rayon: 5.5 });
+          this.texte(lib, x - this.largeur(lib, 7, 'gras') / 2, y + 8, { taille: 7, police: 'gras', couleur: '#FFFFFF' });
+        });
       }
+      const pile = Math.max(1, ...[...parIndex.values()].map((ms) => ms.length));
+      this.y += (pile - 1) * 12.5;
       this.y += 18;
     }
     // Bandes « Lieu » et « Situation » : un segment par suite de créneaux identiques
@@ -885,7 +893,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     if (evenements.length) {
       if (contexte) R.sousTitre('Événements de la période');
       evenements.forEach((x, i) => R.evenement(i + 1, x));
-      R.paragraphe('Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s\'est passé de ce qu\'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique.', { taille: 8.3, police: 'italique', couleur: DOUX });
+      R.paragraphe('Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s\'est passé de ce qu\'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l\'impact (positif ou négatif) est celui qu\'indique le patient.', { taille: 8.3, police: 'italique', couleur: DOUX });
     }
   }
 
@@ -938,8 +946,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (grille.length > 2 * 400) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
-    R.encadre(320, () => R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x) })) }));
-    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur le créneau qui les suit (l\'évaluation du soir porte sur la journée, celle du matin sur la soirée et la nuit).' : ''}`, { taille: 8.5, couleur: DOUX });
+    R.encadre(320, () => R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }));
+    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
   // 5. Tendances
@@ -1081,7 +1089,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       evals.map((e) => [
         [libCreneau(e), e.lieu ? libLieux(e) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
         [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' ')),
-          (evtsParCreneau.get(e.creneauId) || []).map((v) => `Événement n° ${v.numero}${v.x.titre ? ` : ${v.x.titre}` : ''}`).join(' ; ')].filter(Boolean).join(' — ') || '—',
+          (evtsParCreneau.get(e.creneauId) || []).map((v) => `Événement n° ${v.numero}${v.x.titre ? ` : ${v.x.titre}` : ''}${C.IMPACTS[v.x.impact] ? ` (${C.IMPACTS[v.x.impact].toLowerCase()})` : ''}`).join(' ; ')].filter(Boolean).join(' — ') || '—',
       ]),
       { taille: 8.5 },
     );
@@ -1140,7 +1148,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         R.y += 2;
         R.paragraphe(evtsCreneau.length > 1 ? 'Événements marquants de la période évaluée :' : 'Événement marquant de la période évaluée :', { taille: 9.5, police: 'gras', couleur: LAITON, apres: 2 });
         for (const { numero, x } of evtsCreneau) {
-          R.riche([[`${numero}. ${C.majuscule(C.libelleMomentEvenement(x))}`, 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : [])], { taille: 9.3, retrait: 6, apres: 2 });
+          R.riche([[`${numero}. ${C.majuscule(C.libelleMomentEvenement(x))}`, 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : []), ...(C.IMPACTS[x.impact] ? [[`  ·  ${C.IMPACTS[x.impact].toLowerCase()}`, 'gras', COULEUR_IMPACT[x.impact]]] : [])], { taille: 9.3, retrait: 6, apres: 2 });
           texteDetaille('Ce qui s\'est passé', x.faits);
           texteDetaille('Vécu du patient', x.vecu, '#3B4550');
         }
