@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.24.0';
+export const VERSION_APP = '1.24.1';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2345,6 +2345,18 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 
 // ---------------------------------------------------------------------------
 // Styles visuels du rapport PDF (couleurs, typographie, cadres), au choix du patient
+/**
+ * Mention affichée à côté du logo sur la page de garde du rapport : celle des Réglages ;
+ * à défaut (jamais renseignée), « © by » suivi du nom du patient et de l'année de création de l'application.
+ */
+export const LONGUEUR_MENTION = 80;
+export function mentionRapport(parametres) {
+  const p = parametres || {};
+  if (typeof p.mentionRapport === 'string') return p.mentionRapport.replace(/\s+/g, ' ').trim().slice(0, LONGUEUR_MENTION);
+  const nom = String((p.patient && p.patient.nom) || '').trim();
+  return nom ? `© by ${nom} 2026` : '';
+}
+
 // Style visuel unique du rapport, choisi par le patient parmi dix propositions (« Tableau de bord »)
 export const THEMES_RAPPORT = [
   { id: 'tableau', libelle: 'Tableau de bord', description: 'Bande latérale foncée sur chaque page, titres en bandeau, cartes avec ombre.',
@@ -2359,7 +2371,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport'];
 
 function empreinteTexte(s) {
   let h = 5381;

@@ -2387,7 +2387,9 @@ async function ouvrirPdf() {
       const caseEvenements = document.getElementById('pdf-avec-evenements');
       const avecEvenements = !!(caseEvenements && caseEvenements.checked);
       const ctxRapport = C.normaliserContexte(etat.parametres.contexteRapport);
-      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
+      let logoPng = null;
+      try { const r = await fetch('./icone-192.png'); if (r.ok) logoPng = new Uint8Array(await r.arrayBuffer()); } catch { /* sans logo */ }
+      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), logoPng, inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
       const nbPages = (new TextDecoder('latin1').decode(octets).match(/\/Type\s*\/Page[^s]/g) || []).length;
@@ -2672,6 +2674,7 @@ async function vueReglages([section] = []) {
       <div class="champ"><label for="patient-nom">Nom complet</label><input type="text" id="patient-nom" value="${esc((p.patient || {}).nom || '')}" maxlength="120" autocomplete="name"></div>
       <div class="champ"><label for="patient-adresse">Adresse</label><textarea id="patient-adresse" rows="3" maxlength="300" autocomplete="street-address">${esc((p.patient || {}).adresse || '')}</textarea></div>
       <div class="champ"><label for="patient-cns">Matricule CNS <small class="doux">(13 chiffres ; tu choisis à chaque rapport de l'inclure ou non)</small></label><input type="text" id="patient-cns" value="${esc(C.formatCNS((p.patient || {}).cns || ''))}" maxlength="20" inputmode="numeric" autocomplete="off" spellcheck="false"></div>
+      <div class="champ"><label for="mention-rapport">Mention à côté du logo, en haut de la page de garde <small class="doux">(facultatif)</small></label><input type="text" id="mention-rapport" value="${esc(C.mentionRapport(p))}" maxlength="${C.LONGUEUR_MENTION}" placeholder="Par exemple : © by Prénom Nom 2026" autocomplete="off"></div>
       <h3 style="margin-top:18px">Ton thérapeute</h3>
       <div class="champ"><label for="therapeute-nom">Nom complet</label><input type="text" id="therapeute-nom" value="${esc((p.therapeute || {}).nom || '')}" maxlength="120" autocomplete="off"></div>
       <div class="champ"><label for="therapeute-titre">Titre professionnel</label><input type="text" id="therapeute-titre" value="${esc((p.therapeute || {}).titre || '')}" maxlength="120" placeholder="Par exemple : Psychothérapeute" autocomplete="off"></div>
@@ -2788,12 +2791,24 @@ async function vueReglages([section] = []) {
     majBoutonPdf();
     annoncer('Réglages enregistrés.');
   });
+  {
+    const champMention = document.getElementById('mention-rapport');
+    champMention.addEventListener('input', () => { champMention.dataset.touchee = '1'; });
+    document.getElementById('patient-nom').addEventListener('input', (e) => {
+      if (champMention.dataset.touchee === '1' || typeof etat.parametres.mentionRapport === 'string') return;
+      champMention.value = C.mentionRapport({ patient: { nom: e.target.value } });
+    });
+  }
   document.getElementById('form-identites').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
       const patient = C.normaliserPatient({ nom: document.getElementById('patient-nom').value, adresse: document.getElementById('patient-adresse').value, cns: document.getElementById('patient-cns').value });
       const therapeute = C.normaliserTherapeute({ nom: document.getElementById('therapeute-nom').value, titre: document.getElementById('therapeute-titre').value, adresse: document.getElementById('therapeute-adresse').value });
-      await enregistrerParametres({ patient, therapeute });
+      // Mention jamais modifiée : elle suit le nom (valeur par défaut) ; sinon, le texte choisi (même vide)
+      const champMention = document.getElementById('mention-rapport');
+      const modifs = { patient, therapeute };
+      if (champMention.dataset.touchee === '1' || typeof etat.parametres.mentionRapport === 'string') modifs.mentionRapport = champMention.value.trim();
+      await enregistrerParametres(modifs);
       document.getElementById('patient-cns').value = C.formatCNS(patient.cns);
       annoncer('Identités enregistrées.');
     } catch (err) { annoncer(err.message); document.getElementById('patient-cns').focus(); }

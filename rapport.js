@@ -904,6 +904,18 @@ export async function genererRapport(PDFLib, donnees, options) {
   // Page de garde : titre, identités, informations du rapport, chiffres clés, sommaire
   R.y = 46;
   const periodeLongue = `Du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`;
+  // Logo de l'application en haut à droite de la page de garde, avec la mention choisie dans les Réglages
+  const dessinerLogo = async (couleurTexte) => {
+    const mention = C.mentionRapport(parametres);
+    const taille = 40, xL = A4[0] - MARGE - taille + 6, yL = 26;
+    let logo = null;
+    if (options.logoPng) { try { logo = await doc.embedPng(options.logoPng); } catch { logo = null; } }
+    if (logo) R.page.drawImage(logo, { x: xL, y: A4[1] - yL - taille, width: taille, height: taille });
+    if (mention) {
+      const tl = 8.5, xT = (logo ? xL - 8 : A4[0] - MARGE) - R.largeur(mention, tl, 'gras');
+      R.texte(mention, xT, yL + taille / 2 + 3, { taille: tl, police: 'gras', couleur: couleurTexte });
+    }
+  };
   if (COUVERTURE === 'bandeau') {
     // Grand aplat de couleur en haut de la page de garde, titre en blanc
     const lignesT = R.couper(titreDoc, 26, 'gras', LARGEUR);
@@ -912,6 +924,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.texte('BAROMÈTRE DE L\'HUMEUR  ·  RAPPORT DE SUIVI', MARGE, 52, { taille: 8.5, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' });
     lignesT.forEach((l, k) => R.texte(l, MARGE, 92 + k * 30, { taille: 26, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' }));
     R.texte(periodeLongue, MARGE, 92 + lignesT.length * 30 - 4, { taille: 12, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' });
+    await dessinerLogo(FOND_PAGE || SUR_ACCENT);
     R.y = hB + 22;
   } else if (COUVERTURE === 'centree') {
     // Titre centré entre deux filets, comme une une de journal ou une page sobre
@@ -932,6 +945,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.y += 18;
     R.paragraphe(titreDoc, { taille: 24, police: 'gras', interligne: 1.15, apres: 2 });
     R.paragraphe(periodeLongue, { taille: 12, police: 'gras', couleur: DOUX, apres: 12 });
+    await dessinerLogo(DOUX);
   }
 
   // Identités : patient et thérapeute, dans deux cadres
