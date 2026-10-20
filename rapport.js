@@ -26,6 +26,8 @@ const COULEUR_AUTRE = '#9AA5AD';
 export const THEMES_RAPPORT = C.THEMES_RAPPORT;
 export const themeRapport = C.themeRapport;
 
+// Tableaux et graphiques « comme dans Excel » : fond gris clair et quadrillage
+const FOND_GRILLE = '#F2F4F7', TRAIT_GRILLE = '#C9D1DA';
 let SUR_ACCENT, ENCRE, DOUX, FILET, LAITON, FOND, TETE, BARRE_FAV, BARRE_DEF, CADRE, RAYON, ENTETE, GRILLE, AXE, FOND_PAGE, STYLE_CADRE, STYLE_BARRE, COUVERTURE, DECO;
 function appliquerTheme(t) {
   ({ encre: ENCRE, doux: DOUX, filet: FILET, accent: LAITON, fond: FOND, tete: TETE, fav: BARRE_FAV, def: BARRE_DEF, trait: CADRE, rayon: RAYON, grille: GRILLE, axe: AXE } = t);
@@ -191,7 +193,7 @@ class Redacteur {
   }
 
   place(h) {
-    if (this.y + h <= BAS_CONTENU) return false;
+    if (this.mesure || this.garde || this.y + h <= BAS_CONTENU) return false;
     const c = this.enCadre;
     // Dans un cadre : rien encore dessiné → le cadre commence sur la page suivante ; sinon il se poursuit
     const vide = c && c.page === this.page && this.y <= c.yDebut + 0.01;
@@ -202,6 +204,46 @@ class Redacteur {
       if (vide) { c.y0 = this.y; this.y += 12; c.yDebut = this.y; } else c.y0 = HAUT_CONTENU - 8;
     }
     return true;
+  }
+
+  /**
+   * Hauteur exacte qu'occupera « dessin » : il est exécuté à blanc (aucun tracé, aucun saut de page).
+   * Sert à garder un titre avec son premier graphique et à remplir les pages sans trou.
+   */
+  async mesurer(dessin) {
+    const sauve = { page: this.page, y: this.y, enCadre: this.enCadre, mesure: this.mesure };
+    const rien = () => {};
+    this.page = { drawRectangle: rien, drawLine: rien, drawText: rien, drawSvgPath: rien, drawCircle: rien, drawImage: rien, node: { addAnnot: rien } };
+    this.mesure = true; this.enCadre = null; this.y = 0;
+    try { await dessin(); return this.y; } finally { Object.assign(this, sauve); }
+  }
+
+  /**
+   * Blocs d'un même chapitre placés sans laisser de trou : quand le bloc suivant ne tient plus sur la page,
+   * un bloc plus petit du même chapitre qui y tient est placé avant lui ; sinon on passe à la page suivante.
+   */
+  async flux(blocs) {
+    const reste = [];
+    for (const b of blocs) reste.push({ ...b, h: await this.mesurer(b.dessin) });
+    // Sur chaque page : la combinaison de blocs qui la remplit le mieux, dans l'ordre d'origine
+    const meilleurs = (libre) => {
+      let choix = [], total = -1;
+      const n = Math.min(reste.length, 12);
+      for (let m = 1; m < 1 << n; m++) {
+        let t = 0;
+        for (let k = 0; k < n; k++) if (m & (1 << k)) t += reste[k].h;
+        if (t <= libre && t > total + 0.5) { total = t; choix = reste.filter((_, k) => m & (1 << k)); }
+      }
+      return choix;
+    };
+    while (reste.length) {
+      let choix = meilleurs(BAS_CONTENU - this.y);
+      if (!choix.length) {
+        if (this.y > HAUT_CONTENU + 1) { this.nouvellePage(); choix = meilleurs(BAS_CONTENU - this.y); }
+        if (!choix.length) choix = [reste[0]]; // plus grand qu'une page : il se poursuit sur la suivante
+      }
+      for (const b of choix) { reste.splice(reste.indexOf(b), 1); await b.dessin(); }
+    }
   }
 
   /**
@@ -236,10 +278,24 @@ class Redacteur {
   }
 
   encadre(besoin, dessin) {
+    // Hauteur exacte quand le dessin est synchrone (mesure à blanc), sinon l'estimation fournie
+    let exact = false;
+    if (!this.mesure && dessin.constructor.name !== 'AsyncFunction') {
+      exact = true;
+      const sauve = { page: this.page, y: this.y, enCadre: this.enCadre };
+      const rien = () => {};
+      this.page = { drawRectangle: rien, drawLine: rien, drawText: rien, drawSvgPath: rien, drawCircle: rien, drawImage: rien, node: { addAnnot: rien } };
+      this.mesure = true; this.enCadre = null; this.y = 0;
+      try { dessin(); besoin = this.y + 4; } finally { Object.assign(this, sauve); this.mesure = false; }
+    }
     this.place(Math.min(besoin, BAS_CONTENU - HAUT_CONTENU - 30) + 24);
+    // Hauteur exacte connue et le cadre tient sur la page : aucun saut de page à l'intérieur (pas de trou)
+    const garde = this.garde;
+    if (exact && this.y + besoin + 24 <= BAS_CONTENU) this.garde = true;
     this.enCadre = { page: this.page, y0: this.y, yDebut: this.y + 12, segments: [] };
     this.y += 12;
     const fin = () => {
+      this.garde = garde;
       const c = this.enCadre;
       this.enCadre = null;
       this.y += 4;
@@ -336,9 +392,20 @@ class Redacteur {
     this.y += 12;
   }
 
+  /** Titre de partie (I à V) : grand titre de couleur, filet épais ; repris en gras au sommaire. */
+  partie(chiffre, titre, { nouvellePage = false, besoin = 160 } = {}) {
+    if (nouvellePage) { if (this.y > HAUT_CONTENU + 1) this.nouvellePage(); } else if (!this.place(besoin + 64)) this.y += 14;
+    const y = this.y;
+    this.texte(`PARTIE ${chiffre}`, MARGE, y + 10, { taille: 9, police: 'gras', couleur: LAITON });
+    this.texte(titre, MARGE, y + 34, { taille: 21, police: 'gras', couleur: ENCRE });
+    this.page.drawRectangle({ x: MARGE, y: A4[1] - y - 46, width: LARGEUR, height: 2.4, color: this.couleur(LAITON) });
+    this.sommaire.push({ partie: chiffre, titre, page: this.pages.length - 1, y });
+    this.y += 58;
+  }
+
   section(numero, titre, besoin = 90, { nouvellePage = false } = {}) {
     if (nouvellePage && this.y > HAUT_CONTENU + 1) this.nouvellePage();
-    else if (!this.place(50 + besoin)) this.y += 16;
+    else if (!this.place(56 + besoin)) this.y += 16;
     const num = String(numero);
     const titreAff = ENTETE === 'centre' || ENTETE === 'crochets' ? titre.toUpperCase() : titre;
     if (ENTETE === 'marge') {
@@ -420,11 +487,19 @@ class Redacteur {
     const total = colonnes.reduce((a, c) => a + c.part, 0);
     const largeurs = colonnes.map((c) => (c.part / total) * LARGEUR);
     const pad = 5;
+    // Quadrillage complet (bordure, lignes et colonnes) sur fond gris clair, en-tête plus foncé
+    const quadriller = (yH, h) => {
+      const c = this.couleur(TRAIT_GRILLE);
+      this.page.drawRectangle({ x: MARGE, y: A4[1] - yH - h, width: LARGEUR, height: h, borderColor: c, borderWidth: 0.6 });
+      let x = MARGE;
+      largeurs.slice(0, -1).forEach((l) => { x += l; this.page.drawLine({ start: { x, y: A4[1] - yH }, end: { x, y: A4[1] - yH - h }, thickness: 0.6, color: c }); });
+    };
     const dessinerEntete = () => {
       const h = taille * 1.4 + 2 * pad;
       this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur(TETE) });
       let x = MARGE;
       colonnes.forEach((c, i) => { this.texte(c.titre, x + pad, this.y + pad + taille, { taille, police: 'gras' }); x += largeurs[i]; });
+      quadriller(this.y, h);
       this.y += h;
     };
     this.place(taille * 1.4 * 3 + 4 * pad);
@@ -434,13 +509,14 @@ class Redacteur {
       const nb = Math.max(...cellules.map((c) => c.length));
       const h = nb * taille * 1.38 + 2 * pad;
       if (this.place(h)) dessinerEntete();
+      this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur(FOND_GRILLE) });
+      quadriller(this.y, h);
       let x = MARGE;
       cellules.forEach((c, i) => {
         c.forEach((l, k) => this.texte(l, x + pad, this.y + pad + taille + k * taille * 1.38, { taille, police: colonnes[i].gras ? 'gras' : 'normal', couleur: colonnes[i].doux ? DOUX : ENCRE }));
         x += largeurs[i];
       });
       this.y += h;
-      this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y }, thickness: 0.4, color: this.couleur(FILET) });
     }
     this.y += 10;
   }
@@ -460,8 +536,20 @@ class Redacteur {
     const xDe = (i) => (n <= 1 ? (gauche + droite) / 2 : gauche + 8 + (i * (droite - gauche - 16)) / (n - 1));
     const yDe = (note) => bas - (note / 10) * (bas - haut);
     const P = (x, y) => ({ x, y: A4[1] - y });
+    // Zone de tracé sur fond gris clair, quadrillée (lignes des notes et une colonne par jour)
+    this.page.drawRectangle({ x: gauche, y: A4[1] - bas, width: droite - gauche, height: bas - haut, color: this.couleur(FOND_GRILLE), borderColor: this.couleur(TRAIT_GRILLE), borderWidth: 0.6 });
+    {
+      const joursG = [...new Set(grille.map((s) => s.date))];
+      const pasJ = Math.max(1, Math.ceil(joursG.length / 31));
+      joursG.forEach((d, k) => {
+        if (k === 0 || k % pasJ) return;
+        const i = grille.findIndex((s) => s.date === d);
+        const x = (xDe(i) + xDe(Math.max(0, i - 1))) / 2;
+        this.page.drawLine({ start: P(x, haut), end: P(x, bas), thickness: 0.4, color: this.couleur(TRAIT_GRILLE) });
+      });
+    }
     for (let v = 0; v <= 10; v++) {
-      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.35, color: this.couleur(v === 0 ? AXE : GRILLE), opacity: v === 0 || v % 2 === 0 ? 1 : 0.55 });
+      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.4, color: this.couleur(v === 0 ? AXE : TRAIT_GRILLE), opacity: v === 0 || v % 2 === 0 ? 1 : 0.6 });
       const lib = String(v);
       this.texte(lib, gauche - 21 - this.largeur(lib, 7.5, 'gras'), yDe(v) + 2.7, { taille: 7.5, police: 'gras', couleur: DOUX });
       this.meteo(v, gauche - 17, yDe(v) - 6.5, 13);
@@ -600,12 +688,21 @@ class Redacteur {
     this.sommaire.forEach((e, i) => {
       const col = Math.floor(i / parCol), lig = i % parCol;
       const x = MARGE + 10 + col * (lc + 18), y = yHaut + lig * pas;
-      const num = `${e.numero}`;
       const pg = String(e.page + 1);
-      this.texte(num, x + 12 - this.largeur(num, 9, 'gras'), y + 9, { taille: 9, police: 'gras', couleur: LAITON });
-      const titre = this.couper(e.titre, 9, 'normal', lc - 50)[0] + (this.largeur(e.titre, 9) > lc - 50 ? '…' : '');
-      this.texte(titre, x + 18, y + 9, { taille: 9 });
-      const fin = x + 18 + this.largeur(titre, 9) + 4, xp = x + lc - this.largeur(pg, 9, 'gras');
+      let fin;
+      if (e.partie) {
+        // Partie : chiffre romain et titre en gras, de la couleur du style
+        const t = `${e.partie}. ${e.titre}`;
+        this.texte(t, x, y + 9, { taille: 9.3, police: 'gras', couleur: LAITON });
+        fin = x + this.largeur(t, 9.3, 'gras') + 4;
+      } else {
+        const num = `${e.numero}`;
+        this.texte(num, x + 24 - this.largeur(num, 9, 'gras'), y + 9, { taille: 9, police: 'gras', couleur: LAITON });
+        const titre = this.couper(e.titre, 9, 'normal', lc - 62)[0] + (this.largeur(e.titre, 9) > lc - 62 ? '…' : '');
+        this.texte(titre, x + 30, y + 9, { taille: 9 });
+        fin = x + 30 + this.largeur(titre, 9) + 4;
+      }
+      const xp = x + lc - this.largeur(pg, 9, 'gras');
       if (xp - 4 > fin) page.drawLine({ start: { x: fin, y: A4[1] - y - 8.4 }, end: { x: xp - 4, y: A4[1] - y - 8.4 }, thickness: 0.7, color: this.couleur(DOUX), dashArray: [0.7, 2.3] });
       this.texte(pg, xp, y + 9, { taille: 9, police: 'gras' });
       try { // lien vers la section
@@ -642,11 +739,13 @@ class Redacteur {
     const graduer = (yA, yB) => {
       for (let v = 0; v <= vmax; v += pasG) {
         const x = x0 + (v / vmax) * (x1 - x0);
-        this.page.drawLine({ start: { x, y: A4[1] - yA }, end: { x, y: A4[1] - yB }, thickness: v === 0 ? 0.6 : 0.3, color: this.couleur(v === 0 ? AXE : GRILLE) });
+        this.page.drawLine({ start: { x, y: A4[1] - yA }, end: { x, y: A4[1] - yB }, thickness: v === 0 ? 0.6 : 0.4, color: this.couleur(v === 0 ? AXE : TRAIT_GRILLE) });
       }
     };
     for (const l of lignes) {
       this.place(hLigne + 14);
+      // Fond gris clair et quadrillage de la zone des barres
+      this.page.drawRectangle({ x: x0, y: A4[1] - this.y - hLigne, width: x1 - x0, height: hLigne, color: this.couleur(FOND_GRILLE), borderColor: this.couleur(TRAIT_GRILLE), borderWidth: 0.4 });
       graduer(this.y, this.y + hLigne);
       const yc = this.y + hLigne / 2;
       const bas = plusBas && l === plusBas;
@@ -692,6 +791,16 @@ class Redacteur {
     this.texte('Favorable', centre + 8, this.y + 9, { taille: 8.5, police: 'gras', couleur: FAV });
     this.y += 16;
     const yHaut = this.y;
+    // Fond gris clair quadrillé derrière les barres opposées
+    {
+      const hZone = lignes.length * hLigne, c = this.couleur(TRAIT_GRILLE);
+      this.page.drawRectangle({ x: x0, y: A4[1] - this.y - hZone, width: x1 - x0, height: hZone, color: this.couleur(FOND_GRILLE), borderColor: c, borderWidth: 0.6 });
+      for (let k = 1; k < lignes.length; k++) this.page.drawLine({ start: { x: x0, y: A4[1] - this.y - k * hLigne }, end: { x: x1, y: A4[1] - this.y - k * hLigne }, thickness: 0.4, color: c });
+      for (const f of [0.25, 0.5, 0.75]) for (const sgn of [-1, 1]) {
+        const x = centre + sgn * f * demi;
+        this.page.drawLine({ start: { x, y: A4[1] - this.y }, end: { x, y: A4[1] - this.y - hZone }, thickness: 0.4, color: c });
+      }
+    }
     for (const l of lignes) {
       const yc = this.y + hLigne / 2;
       this.texte(l.libelle, MARGE, yc + 3.4, { taille: 9.5, police: 'gras' });
@@ -720,6 +829,17 @@ class Redacteur {
     const max = Math.max(1, ...compte);
     const pas = LARGEUR / 11, lb = Math.min(28, pas - 10);
     const base = this.y + h;
+    // Fond gris clair quadrillé (une ligne par graduation, une colonne par note)
+    {
+      const c = this.couleur(TRAIT_GRILLE);
+      this.page.drawRectangle({ x: MARGE, y: A4[1] - base, width: LARGEUR, height: h - 6, color: this.couleur(FOND_GRILLE), borderColor: c, borderWidth: 0.6 });
+      const pasV = Math.max(1, Math.ceil(max / 5));
+      for (let v = pasV; v <= max; v += pasV) {
+        const y = base - (v / max) * (h - 16);
+        this.page.drawLine({ start: { x: MARGE, y: A4[1] - y }, end: { x: MARGE + LARGEUR, y: A4[1] - y }, thickness: 0.4, color: c });
+      }
+      for (let i = 1; i < 11; i++) this.page.drawLine({ start: { x: MARGE + i * pas, y: A4[1] - base }, end: { x: MARGE + i * pas, y: A4[1] - base + h - 6 }, thickness: 0.4, color: c });
+    }
     this.page.drawLine({ start: { x: MARGE, y: A4[1] - base }, end: { x: MARGE + LARGEUR, y: A4[1] - base }, thickness: 0.6, color: this.couleur(AXE) });
     compte.forEach((n, i) => {
       const xc = MARGE + i * pas + pas / 2;
@@ -741,7 +861,7 @@ class Redacteur {
     const l = LARGEUR, h = (cadre.hauteur / cadre.largeur) * LARGEUR, k = l / cadre.largeur;
     this.place(h + 40);
     const yH = this.y;
-    if (fondPng) {
+    if (fondPng && !this.mesure) {
       try {
         const img = await this.doc.embedPng(fondPng);
         this.page.drawImage(img, { x: MARGE, y: A4[1] - yH - h, width: l, height: h });
@@ -992,7 +1112,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       ['Période analysée', `du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)} (${C.pluriel(nbJours, 'jour')})`],
       precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
       prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : null,
-      ['Type de rapport', type === 'complet' ? 'complet (annexe intégrale)' : 'synthétique (annexe abrégée)'],
+      ['Type de rapport', type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
       ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
     ].filter(Boolean);
     for (const [lib, val] of infos) {
@@ -1024,8 +1144,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   // Contexte et événements marquants (notes du patient, jamais transmises à l'assistant)
   const evenements = Array.isArray(options.evenements) ? C.evenementsActifs(options.evenements, { debut, fin, rapportSeulement: true }) : [];
   const contexte = options.contexte ? C.normaliserContexte(options.contexte) : null;
-  const avecEvenements = !!(evenements.length || contexte);
-  const NB_SECTIONS = 12 + (synthese ? 1 : 0) + (avecDomaines ? 1 : 0) + (avecEvenements ? 1 : 0);
+  // 5 parties + 13 sections, plus les événements marquants et les facteurs par domaine s'il y en a
+  const NB_SECTIONS = 5 + 13 + (evenements.length ? 1 : 0) + (avecDomaines ? 1 : 0);
   let numSection = 0;
   const hSommaire = NB_SECTIONS * 16 + 40;
   R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: Math.min(RAYON, 9) * 0.7 });
@@ -1043,52 +1163,43 @@ export async function genererRapport(PDFLib, donnees, options) {
   lignesAvert.forEach((l, i) => R.texte(l, MARGE + 12, R.y + 7 + 8.6 + i * 8.6 * 1.4, { taille: 8.6, police: 'italique', couleur: DOUX }));
   R.y += hAvert + 4;
 
-  // 2. Évaluations attendues, complétées, omises
-  // Synthèse de la période (rédigée avec l'accord du patient, relue et validée par lui)
+  // Chapitre avec graphiques : le titre reste avec son premier bloc, et les blocs remplissent les pages
+  // sans laisser de trou (un bloc plus petit peut passer avant un bloc qui ne tient plus sur la page).
+  const chapitre = async (titre, { avant = null, blocs = [], apres = null } = {}) => {
+    // Titre + introduction + le plus petit bloc (le flux le placera en premier s'il le faut)
+    const hAvant = avant ? await R.mesurer(async () => avant()) : 0;
+    let hBloc = 0;
+    for (const [k, b] of blocs.entries()) { const h = await R.mesurer(b); hBloc = k === 0 ? h : Math.min(hBloc, h); }
+    const besoin = hAvant + hBloc;
+    R.section(++numSection, titre, Math.min(besoin, BAS_CONTENU - HAUT_CONTENU - 70));
+    if (avant) avant();
+    await R.flux(blocs.map((dessin) => ({ dessin })));
+    if (apres) apres();
+  };
+
+  // ===== Partie I – Introduction : présentation, aperçu de la période (évolution validée), contexte, évaluations
+  await R.partie('I', 'Introduction', { nouvellePage: true });
+  R.section(++numSection, 'Introduction', 120);
+  {
+    const nbJours = C.joursEntre(debut, fin) + 1;
+    R.paragraphe(`Ce rapport présente le suivi de l'humeur du patient du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)} (${C.pluriel(nbJours, 'jour')}). L'humeur est évaluée deux fois par jour, le matin et le soir, sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil). Chaque évaluation peut comporter des motifs cochés (favorables ou défavorables), un commentaire, le ou les lieux, la situation professionnelle et une prévision pour le créneau suivant ; le patient peut aussi noter des événements marquants.`, { taille: 10, apres: 6 });
+    R.paragraphe('Le rapport comprend cinq parties : I. Introduction ; II. Évaluations jour par jour ; III. Impacts : événements marquants et facteurs ; IV. Analyse ; V. Conclusion et points à aborder.', { taille: 10, apres: 6 });
+  }
   if (synthese) {
-    R.section(++numSection, 'Synthèse de la période', 120, { nouvellePage: true });
-    for (const ligne of String(synthese.texte).split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
-      const m = /^(Évolution|Points prioritaires)\s*:\s*(.*)$/i.exec(ligne);
-      if (m) {
-        R.y += 2;
-        if (m[2]) R.riche([[`${m[1]} : `, 'gras'], [m[2]]], { taille: 10, apres: 4 });
-        else R.paragraphe(`${m[1]} :`, { taille: 10, police: 'gras', apres: 2 });
-      } else if (/^[–\-•]\s*/.test(ligne)) R.puces([ligne.replace(/^[–\-•]\s*/, '')], { taille: 10 });
-      else R.paragraphe(ligne, { taille: 10, apres: 4 });
-    }
-    R.paragraphe(`Synthèse rédigée ${synthese.source === 'assistant' ? 'avec l\'aide d\'un assistant (Claude, Anthropic) ' : ''}à partir des données de la période, relue et validée par le patient${synthese.valideeLeUtc ? ` le ${C.formatDateHeure(synthese.valideeLeUtc)}` : ''}. Elle décrit des constats et ne constitue pas une évaluation clinique.`, { taille: 8.3, police: 'italique', couleur: DOUX });
-  }
-
-  if (avecEvenements) {
-    R.section(++numSection, evenements.length ? (contexte ? 'Contexte et événements marquants' : 'Événements marquants') : 'Contexte', 120, { nouvellePage: !synthese });
-    if (contexte) {
-      if (evenements.length) R.sousTitre('Contexte indiqué par le patient');
-      for (const para of contexte.texte.split(/\n+/).map((t) => t.trim()).filter(Boolean)) R.paragraphe(para, { taille: 10, apres: 4 });
-      if (contexte.modifieLeUtc) R.paragraphe(`Mis à jour le ${C.formatDateHeure(contexte.modifieLeUtc)}.`, { taille: 8.3, couleur: DOUX });
-    }
-    if (evenements.length) {
-      if (contexte) R.sousTitre('Événements de la période');
-      if (type === 'synthetique') evenements.forEach((x, i) => R.evenement(i + 1, x));
-      else {
-        // Rapport complet : un tableau d'ensemble ; le texte de chaque événement figure une seule fois,
-        // avec l'évaluation qu'il concerne (annexe), ou ci-dessous s'il n'y a pas d'évaluation pour ce moment
-        R.tableau(
-          [{ titre: 'N°', part: 0.45 }, { titre: 'Moment', part: 2.2 }, { titre: 'Événement', part: 3.6 }, { titre: 'Impact', part: 1 }],
-          evenements.map((x, i) => [String(i + 1), C.majuscule(C.libelleMomentEvenement(x)), x.titre || (x.faits || '').slice(0, 80), C.IMPACTS[x.impact] ? C.IMPACTS[x.impact].replace('Impact ', '') : '—']),
-          { taille: 8.8 },
-        );
-        const avecEval = new Set(evals.map((e) => e.creneauId));
-        const orphelins = evenements.map((x, i) => ({ x, n: i + 1 })).filter(({ x }) => !avecEval.has(C.creneauEvenement(x)));
-        if (orphelins.length) {
-          R.sousTitre(orphelins.length > 1 ? 'Événements sans évaluation correspondante' : 'Événement sans évaluation correspondante');
-          orphelins.forEach(({ x, n }) => R.evenement(n, x));
-        }
-      }
-      R.paragraphe(`Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s'est passé de ce qu'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l'impact (positif ou négatif) est celui qu'indique le patient.${type === 'synthetique' ? '' : ' Le détail de chaque événement figure une seule fois, avec l\'évaluation qu\'il concerne, dans l\'annexe chronologique.'}`, { taille: 8.3, police: 'italique', couleur: DOUX });
+    const parts = C.partiesSynthese(synthese.texte);
+    if (parts.evolution.length) {
+      R.sousTitre('Aperçu de la période', 60);
+      parts.evolution.forEach((l, k) => (k === 0 ? R.riche([['Évolution : ', 'gras'], [l]], { taille: 10, apres: 4 }) : R.paragraphe(l, { taille: 10, apres: 4 })));
+      R.paragraphe(`Rédigé ${synthese.source === 'assistant' ? 'avec l\'aide d\'un assistant (Claude, Anthropic) ' : ''}à partir des données de la période, relu et validé par le patient${synthese.valideeLeUtc ? ` le ${C.formatDateHeure(synthese.valideeLeUtc)}` : ''}. Constats descriptifs, sans évaluation clinique ; la conclusion figure dans la partie V.`, { taille: 8.3, police: 'italique', couleur: DOUX });
     }
   }
+  if (contexte) {
+    R.sousTitre('Contexte indiqué par le patient', 60);
+    for (const para of contexte.texte.split(/\n+/).map((t) => t.trim()).filter(Boolean)) R.paragraphe(para, { taille: 10, apres: 4 });
+    if (contexte.modifieLeUtc) R.paragraphe(`Mis à jour le ${C.formatDateHeure(contexte.modifieLeUtc)}.`, { taille: 8.3, couleur: DOUX });
+  }
 
-  R.section(++numSection, 'Évaluations attendues, complétées et omises', 90, { nouvellePage: !synthese && !avecEvenements });
+  R.section(++numSection, 'Évaluations attendues, complétées et omises', 90);
   R.chiffres([
     { valeur: String(comptes.attendues), libelle: 'attendues' },
     { valeur: String(comptes.completees), libelle: 'complétées' },
@@ -1106,147 +1217,6 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (comptes.aVenir) det.push(`${C.pluriel(comptes.aVenir, 'créneau', 'créneaux')} de la période ${comptes.aVenir > 1 ? 'sont' : 'est'} encore à venir.`);
   for (const d of det) R.paragraphe(d, { taille: 9.5, couleur: DOUX, apres: 4 });
 
-  // 2. Moyennes
-  R.section(++numSection, 'Moyennes');
-  if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
-  else {
-    const tuile = (lib, m, n) => ({ valeur: n ? C.nombreFr(m) : '—', suffixe: n ? '/10' : '', libelle: n ? `${lib} · ${C.pluriel(n, 'évaluation')}` : lib, icone: n ? Math.round(m) : null });
-    R.chiffres([
-      tuile('Générale', stats.moyenne, stats.nombre),
-      tuile('Matin', stats.moyenneMatin, stats.nombreMatin),
-      tuile('Soir', stats.moyenneSoir, stats.nombreSoir),
-    ]);
-    if (stats.nombre < 5) R.paragraphe(`Avec ${C.pluriel(stats.nombre, 'évaluation')}, ces moyennes sont peu représentatives.`, { taille: 9, couleur: DOUX });
-  }
-
-  // 3. Répartition des notes, minimum et maximum
-  R.section(++numSection, 'Répartition des notes', 170);
-  if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
-  else {
-    R.paragraphe('Nombre d\'évaluations pour chaque note, de 0 (Alerte rouge) à 10 (Plein soleil).', { taille: 8.5, couleur: DOUX, apres: 4 });
-    const quand = (l) => l.map((e) => libCreneau(e)).join(', ');
-    R.encadre(180, () => {
-      R.histogramme(C.repartitionNotes(evals));
-      R.riche([['Note minimale : ', 'gras'], [`${C.libelleNote(stats.min)} (${quand(stats.evaluationsMin)})`]], { taille: 9.5 });
-      R.riche([['Note maximale : ', 'gras'], [`${C.libelleNote(stats.max)} (${quand(stats.evaluationsMax)})`]], { taille: 9.5, apres: 0 });
-    });
-  }
-
-  // 4. Graphique
-  R.section(++numSection, 'Graphique chronologique', 520);
-  if (grille.length > 2 * 400) {
-    R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
-  } else {
-    R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }); });
-    R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
-  }
-
-  // 5. Tendances
-  R.section(++numSection, 'Tendances principales');
-  R.puces(C.tendancesDescriptives(evals));
-
-  // 6 et 7. Facteurs : barres (nombre de fois où le motif a été coché)
-  const barresFacteurs = (pol) => {
-    const l = freq.filter((f) => f.polarite === pol);
-    if (!l.length) return false;
-    const max = Math.max(...freq.map((f) => f.nombre));
-    const lignes = l.slice(0, type === 'synthetique' ? 10 : 20);
-    R.encadre(lignes.length * 21 + 18, () => R.barres(lignes.map((f) => ({ libelle: f.libelle, valeur: f.nombre, nombre: f.nombre, detail: `${Math.round((f.nombre / evals.length) * 100)} % des évaluations` })),
-      { mode: 'compte', max, couleur: pol === 'favorable' ? BARRE_FAV : pol === 'defavorable' ? BARRE_DEF : '#9A9C94' }));
-    if (type === 'synthetique' && l.length > 10) R.paragraphe(`Rapport synthétique : les 10 motifs les plus fréquents sur ${l.length}.`, { taille: 8.5, couleur: DOUX });
-    return true;
-  };
-  const rappelMotifs = 'Nombre de fois où chaque motif a été coché. Seuls les motifs explicitement cochés lors d\'une évaluation sont comptés ; les commentaires libres sont reproduits en annexe.';
-  if (avecDomaines) {
-    R.section(++numSection, 'Facteurs par domaine', 200);
-    R.paragraphe(`Chaque motif est rangé selon la source de l'influence : ${C.DOMAINES.map((d) => d.libelle.toLowerCase()).join(', ').replace(/, ([^,]*)$/, ' ou $1')}.`, { taille: 9, couleur: DOUX, apres: 6 });
-    R.encadre(domaines.length * 26 + 60, () => R.barresDomaines(domaines, { total: evals.length }));
-  }
-  R.section(++numSection, 'Facteurs favorables mentionnés', 160);
-  if (!barresFacteurs('favorable')) R.paragraphe('Aucun facteur favorable n\'a été coché sur la période.');
-  R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
-  R.section(++numSection, 'Facteurs défavorables mentionnés', 160);
-  if (!barresFacteurs('defavorable')) R.paragraphe('Aucun facteur défavorable n\'a été coché sur la période.');
-  if (freq.some((f) => f.polarite === 'mixte')) { R.sousTitre('Facteurs mixtes'); barresFacteurs('mixte'); }
-  R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX });
-
-  // 8. Quand et où l'humeur est la plus basse : jours, situations, lieux (carte), activités
-  R.section(++numSection, 'Jours, situations, lieux et activités', 200);
-  if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
-  else {
-    R.paragraphe('Humeur moyenne (sur 10) selon le jour de la semaine, la situation professionnelle, le lieu et l\'activité déclarés par le patient. Le libellé en gras signale la moyenne la plus basse (au moins 2 évaluations).', { taille: 9, couleur: DOUX, apres: 6 });
-    const enBarres = (r) => r.map((l) => ({ libelle: l.libelle, valeur: l.moyenne, nombre: l.nombre }));
-    const hBarres = (n) => Math.min(200, n * 21 + 30);
-    const hB = (n) => n * 21 + 18 + 40;
-    R.encadre(hB(7), () => {
-      R.sousTitre('Par jour de la semaine', hBarres(7));
-      R.barres(enBarres(C.humeurParJourSemaine(evals)).map((l) => ({ ...l, libelle: C.majuscule(l.libelle) })));
-    });
-    R.encadre(hB(parSituation.lignes.length || 1), () => {
-      R.sousTitre('Par situation professionnelle', hBarres(parSituation.lignes.length || 1));
-      if (parSituation.lignes.length) {
-        R.barres(enBarres(parSituation.lignes));
-        if (parSituation.sansValeur) R.paragraphe(`${C.pluriel(parSituation.sansValeur, 'évaluation')} sans situation indiquée.`, { taille: 8.3, couleur: DOUX });
-      } else R.paragraphe('Aucune situation professionnelle indiquée sur la période.', { taille: 9.5, couleur: DOUX });
-    });
-    R.encadre(hB(Math.min(12, parLieu.lignes.length) || 1), () => {
-      R.sousTitre('Par lieu', hBarres(parLieu.lignes.length || 1));
-      if (parLieu.lignes.length) {
-        R.barres(enBarres(parLieu.lignes.slice(0, 12)).map((x, i) => ({ ...x, libelle: C.libelleLieu(parLieu.lignes[i].valeur) })));
-        if (parLieu.sansValeur) R.paragraphe(`${C.pluriel(parLieu.sansValeur, 'évaluation')} sans lieu indiqué.`, { taille: 8.3, couleur: DOUX });
-      } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
-    });
-    const carte = parLieu.lignes.length ? preparationCarte(evals) : null;
-    if (carte) {
-      await R.encadre((TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 110, async () => {
-        R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
-        await R.carteLieux(carte.points, carte.cadre, options.fondCarte || null);
-        const sansCoord = carte.sansCoordonnees > 1 ? ` ${carte.sansCoordonnees} lieux sans coordonnées (saisis librement, ou « En route ») n'apparaissent pas sur la carte.` : carte.sansCoordonnees ? ' Un lieu sans coordonnées (saisi librement, ou « En route ») n\'apparaît pas sur la carte.' : '';
-        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne (ressenti sur place quand il est indiqué), du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX, apres: 0 });
-      });
-    }
-    if (parActivite.lignes.length) {
-      R.encadre(hB(Math.min(12, parActivite.lignes.length)), () => {
-        R.sousTitre('Par activité', hBarres(parActivite.lignes.length));
-        R.barres(enBarres(parActivite.lignes.slice(0, 12)));
-      });
-    }
-    const multi = evals.some((e) => C.lieuxDe(e).length > 1);
-    const surPlace = evals.reduce((t, e) => t + C.lieuxDe(e).filter((l) => C.ressentiValide(l.ressenti) !== null).length, 0);
-    const texteRessenti = surPlace ? ` Pour les lieux et les activités, la moyenne utilise le « ressenti sur place » quand le patient l'a indiqué (${C.pluriel(surPlace, 'lieu')} de la période), sinon la note de la période : c'est le cas lorsqu'il s'est rendu à plusieurs endroits et que son humeur y a été différente.` : '';
-    R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « En route » désigne un déplacement (à pied, à vélo, en voiture, en bus, en train, en avion, en bateau…).' : ''}${texteRessenti}`, { taille: 8.3, couleur: DOUX });
-  }
-
-  // 10. Prévisions et réalité
-  R.section(++numSection, 'Comparaison entre prévisions et réalité');
-  if (!prev.lignes.length) R.paragraphe('Aucune prévision n\'a été formulée sur la période.');
-  else {
-    const etatCible = (l) => {
-      if (l.ecart !== null) return l.ecart === 0 ? '0 (identique)' : C.signeFr(l.ecart, 0);
-      const st = statutParId.get(C.idCreneau(l.cible.date, l.cible.creneau));
-      return st === 'omis' ? 'créneau omis' : st === 'en_attente' ? 'en attente de réponse' : st === 'a_rattraper' ? 'à rattraper' : st === 'a_venir' ? 'à venir' : 'pas de réponse';
-    };
-    let lignesPrev = prev.lignes;
-    if (type === 'synthetique' && lignesPrev.length > 12) {
-      lignesPrev = [...prev.lignes].filter((l) => l.ecart !== null).sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart)).slice(0, 10)
-        .sort((a, b) => (a.source.creneauId < b.source.creneauId ? -1 : 1));
-      R.paragraphe(`Rapport synthétique : seules les 10 prévisions présentant les écarts les plus importants sont listées (sur ${prev.lignes.length}).`, { taille: 8.5, couleur: DOUX });
-    }
-    R.tableau(
-      [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Créneau visé', part: 1.6 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Écart', part: 1.5 }],
-      lignesPrev.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, etatCible(l)]),
-    );
-    if (prev.nombreComparees) {
-      R.paragraphe(`Sur ${C.pluriel(prev.nombreComparees, 'prévision comparable', 'prévisions comparables')} : ${prev.exactes} identique(s), ${prev.realiteSuperieure} où la note constatée est supérieure, ${prev.realiteInferieure} où elle est inférieure. Écart moyen : ${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point.`, { taille: 9.5 });
-    } else R.paragraphe('Aucune prévision ne peut encore être comparée à une note constatée.', { taille: 9.5, couleur: DOUX });
-    const motifPrev = (l) => (textes.get(l.source.id) || C.textesPourRapport(l.source, modeTextes)).prevision;
-    const motifsPrev = prev.lignes.filter((l) => motifPrev(l));
-    if (motifsPrev.length) {
-      R.sousTitre('Motifs des prévisions');
-      R.puces(motifsPrev.map((l) => `Pour ${libCreneau(l.cible)} (${l.prevue}/10) : ${motifPrev(l)}`), { taille: 9.5 });
-    }
-  }
-
   // 10. Évaluations manquantes
   R.section(++numSection, 'Évaluations manquantes');
   const omis = grille.filter((s) => s.statut === 'omis');
@@ -1257,13 +1227,9 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (attente.length) R.paragraphe(`En attente de réponse ou encore à rattraper (délai de ${C.DELAI_RATTRAPAGE_H} h) au moment du rapport : ${attente.map(libCreneau).join(', ')}.`, { taille: 9.5 });
   if (nonRens.length) R.paragraphe(`Non renseigné (antérieur au début du suivi dans l'application, données inconnues) : ${nonRens.map(libCreneau).join(', ')}.`, { taille: 9.5, couleur: DOUX });
 
-  // 11. Synthèse neutre
-  R.section(++numSection, 'Sujets susceptibles d\'être abordés en séance');
-  R.paragraphe('Relevé factuel établi automatiquement à partir des saisies, sans interprétation ; libre au patient et au thérapeute de s\'en saisir ou non.', { taille: 9, couleur: DOUX });
-  R.puces(C.sujetsDeDiscussion(evals, freq, prev, comptes));
-
-  // 12. Annexe
-  R.section(++numSection, 'Annexe chronologique des évaluations', 120, { nouvellePage: true });
+  // ===== Partie II – Évaluations jour par jour (détail complet, ou tableau dans le rapport synthétique)
+  await R.partie('II', 'Évaluations jour par jour', { nouvellePage: true });
+  R.section(++numSection, 'Évaluations jour par jour', 120);
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
   // Événements marquants rattachés à chaque évaluation (même numéro que dans la section et le graphique)
@@ -1368,6 +1334,209 @@ export async function genererRapport(PDFLib, donnees, options) {
         }
       }
       R.y += 4;
+    }
+  }
+
+  // ===== Partie III – Impacts : événements marquants et facteurs cochés
+  await R.partie('III', 'Impacts : événements marquants et facteurs', { besoin: 230 });
+  {
+    if (evenements.length) {
+      R.section(++numSection, 'Événements marquants', 120);
+      if (type === 'synthetique') evenements.forEach((x, i) => R.evenement(i + 1, x));
+      else {
+        // Rapport complet : un tableau d'ensemble ; le texte de chaque événement figure une seule fois,
+        // avec l'évaluation qu'il concerne (annexe), ou ci-dessous s'il n'y a pas d'évaluation pour ce moment
+        R.tableau(
+          [{ titre: 'N°', part: 0.45 }, { titre: 'Moment', part: 2.2 }, { titre: 'Événement', part: 3.6 }, { titre: 'Impact', part: 1 }],
+          evenements.map((x, i) => [String(i + 1), C.majuscule(C.libelleMomentEvenement(x)), x.titre || (x.faits || '').slice(0, 80), C.IMPACTS[x.impact] ? C.IMPACTS[x.impact].replace('Impact ', '') : '—']),
+          { taille: 8.8 },
+        );
+        const avecEval = new Set(evals.map((e) => e.creneauId));
+        const orphelins = evenements.map((x, i) => ({ x, n: i + 1 })).filter(({ x }) => !avecEval.has(C.creneauEvenement(x)));
+        if (orphelins.length) {
+          R.sousTitre(orphelins.length > 1 ? 'Événements sans évaluation correspondante' : 'Événement sans évaluation correspondante');
+          orphelins.forEach(({ x, n }) => R.evenement(n, x));
+        }
+      }
+      R.paragraphe(`Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s'est passé de ce qu'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l'impact (positif ou négatif) est celui qu'indique le patient.${type === 'synthetique' ? '' : ' Le détail de chaque événement figure une seule fois, avec l\'évaluation qu\'il concerne, dans la partie II.'}`, { taille: 8.3, police: 'italique', couleur: DOUX });
+    }
+  }
+
+  // 6 et 7. Facteurs : barres (nombre de fois où le motif a été coché)
+  const blocFacteurs = (pol) => {
+    const l = freq.filter((f) => f.polarite === pol);
+    if (!l.length) return null;
+    const max = Math.max(...freq.map((f) => f.nombre));
+    const lignes = l.slice(0, type === 'synthetique' ? 10 : 20);
+    return () => {
+      R.encadre(lignes.length * 21 + 18, () => R.barres(lignes.map((f) => ({ libelle: f.libelle, valeur: f.nombre, nombre: f.nombre, detail: `${Math.round((f.nombre / evals.length) * 100)} % des évaluations` })),
+        { mode: 'compte', max, couleur: pol === 'favorable' ? BARRE_FAV : pol === 'defavorable' ? BARRE_DEF : '#9A9C94' }));
+      if (type === 'synthetique' && l.length > 10) R.paragraphe(`Rapport synthétique : les 10 motifs les plus fréquents sur ${l.length}.`, { taille: 8.5, couleur: DOUX });
+    };
+  };
+  const rappelMotifs = 'Nombre de fois où chaque motif a été coché. Seuls les motifs explicitement cochés lors d\'une évaluation sont comptés ; les commentaires libres sont reproduits dans la partie II.';
+  if (avecDomaines) {
+    await chapitre('Facteurs par domaine', {
+      avant: () => R.paragraphe(`Chaque motif est rangé selon la source de l'influence : ${C.DOMAINES.map((d) => d.libelle.toLowerCase()).join(', ').replace(/, ([^,]*)$/, ' ou $1')}.`, { taille: 9, couleur: DOUX, apres: 6 }),
+      blocs: [() => R.encadre(domaines.length * 26 + 60, () => R.barresDomaines(domaines, { total: evals.length }))],
+    });
+  }
+  {
+    const fav = blocFacteurs('favorable');
+    await chapitre('Facteurs favorables mentionnés', {
+      blocs: [fav || (() => R.paragraphe('Aucun facteur favorable n\'a été coché sur la période.'))],
+      apres: () => R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX }),
+    });
+    const def = blocFacteurs('defavorable');
+    const mix = blocFacteurs('mixte');
+    await chapitre('Facteurs défavorables mentionnés', {
+      blocs: [def || (() => R.paragraphe('Aucun facteur défavorable n\'a été coché sur la période.')), ...(mix ? [() => { R.sousTitre('Facteurs mixtes'); mix(); }] : [])],
+      apres: () => R.paragraphe(rappelMotifs, { taille: 8.5, couleur: DOUX }),
+    });
+  }
+
+  // ===== Partie IV – Analyse
+  await R.partie('IV', 'Analyse', { besoin: 200 });
+  // 2. Moyennes
+  R.section(++numSection, 'Moyennes');
+  if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
+  else {
+    const tuile = (lib, m, n) => ({ valeur: n ? C.nombreFr(m) : '—', suffixe: n ? '/10' : '', libelle: n ? `${lib} · ${C.pluriel(n, 'évaluation')}` : lib, icone: n ? Math.round(m) : null });
+    R.chiffres([
+      tuile('Générale', stats.moyenne, stats.nombre),
+      tuile('Matin', stats.moyenneMatin, stats.nombreMatin),
+      tuile('Soir', stats.moyenneSoir, stats.nombreSoir),
+    ]);
+    if (stats.nombre < 5) R.paragraphe(`Avec ${C.pluriel(stats.nombre, 'évaluation')}, ces moyennes sont peu représentatives.`, { taille: 9, couleur: DOUX });
+  }
+
+  // 3. Répartition des notes, minimum et maximum
+  if (!stats.nombre) { R.section(++numSection, 'Répartition des notes'); R.paragraphe('Aucune évaluation sur la période.'); } else {
+    const quand = (l) => l.map((e) => libCreneau(e)).join(', ');
+    await chapitre('Répartition des notes', {
+      avant: () => R.paragraphe('Nombre d\'évaluations pour chaque note, de 0 (Alerte rouge) à 10 (Plein soleil).', { taille: 8.5, couleur: DOUX, apres: 4 }),
+      blocs: [() => R.encadre(180, () => {
+        R.histogramme(C.repartitionNotes(evals));
+        R.riche([['Note minimale : ', 'gras'], [`${C.libelleNote(stats.min)} (${quand(stats.evaluationsMin)})`]], { taille: 9.5 });
+        R.riche([['Note maximale : ', 'gras'], [`${C.libelleNote(stats.max)} (${quand(stats.evaluationsMax)})`]], { taille: 9.5, apres: 0 });
+      })],
+    });
+  }
+
+  // 4. Graphique
+  if (grille.length > 2 * 400) {
+    R.section(++numSection, 'Graphique chronologique');
+    R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
+  } else {
+    await chapitre('Graphique chronologique', {
+      blocs: [() => R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }); })],
+      apres: () => R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX }),
+    });
+  }
+
+  // 5. Tendances
+  R.section(++numSection, 'Tendances principales');
+  R.puces(C.tendancesDescriptives(evals));
+
+  // 8. Quand et où l'humeur est la plus basse : jours, situations, lieux (carte), activités
+  if (!stats.nombre) { R.section(++numSection, 'Jours, situations, lieux et activités'); R.paragraphe('Aucune évaluation sur la période.'); } else {
+    const enBarres = (r) => r.map((l) => ({ libelle: l.libelle, valeur: l.moyenne, nombre: l.nombre }));
+    const hBarres = (n) => Math.min(200, n * 21 + 30);
+    const hB = (n) => n * 21 + 18 + 40;
+    const blocs = [
+      () => R.encadre(hB(7), () => {
+        R.sousTitre('Par jour de la semaine', hBarres(7));
+        R.barres(enBarres(C.humeurParJourSemaine(evals)).map((l) => ({ ...l, libelle: C.majuscule(l.libelle) })));
+      }),
+      () => R.encadre(hB(parSituation.lignes.length || 1), () => {
+        R.sousTitre('Par situation professionnelle', hBarres(parSituation.lignes.length || 1));
+        if (parSituation.lignes.length) {
+          R.barres(enBarres(parSituation.lignes));
+          if (parSituation.sansValeur) R.paragraphe(`${C.pluriel(parSituation.sansValeur, 'évaluation')} sans situation indiquée.`, { taille: 8.3, couleur: DOUX });
+        } else R.paragraphe('Aucune situation professionnelle indiquée sur la période.', { taille: 9.5, couleur: DOUX });
+      }),
+      () => R.encadre(hB(Math.min(12, parLieu.lignes.length) || 1), () => {
+        R.sousTitre('Par lieu', hBarres(parLieu.lignes.length || 1));
+        if (parLieu.lignes.length) {
+          R.barres(enBarres(parLieu.lignes.slice(0, 12)).map((x, i) => ({ ...x, libelle: C.libelleLieu(parLieu.lignes[i].valeur) })));
+          if (parLieu.sansValeur) R.paragraphe(`${C.pluriel(parLieu.sansValeur, 'évaluation')} sans lieu indiqué.`, { taille: 8.3, couleur: DOUX });
+        } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
+      }),
+    ];
+    const carte = parLieu.lignes.length ? preparationCarte(evals) : null;
+    if (carte) {
+      blocs.push(() => R.encadre((TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 110, async () => {
+        R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
+        await R.carteLieux(carte.points, carte.cadre, options.fondCarte || null);
+        const sansCoord = carte.sansCoordonnees > 1 ? ` ${carte.sansCoordonnees} lieux sans coordonnées (saisis librement, ou « En route ») n'apparaissent pas sur la carte.` : carte.sansCoordonnees ? ' Un lieu sans coordonnées (saisi librement, ou « En route ») n\'apparaît pas sur la carte.' : '';
+        R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne (ressenti sur place quand il est indiqué), du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX, apres: 0 });
+      }));
+    }
+    if (parActivite.lignes.length) {
+      blocs.push(() => R.encadre(hB(Math.min(12, parActivite.lignes.length)), () => {
+        R.sousTitre('Par activité', hBarres(parActivite.lignes.length));
+        R.barres(enBarres(parActivite.lignes.slice(0, 12)));
+      }));
+    }
+    const multi = evals.some((e) => C.lieuxDe(e).length > 1);
+    const surPlace = evals.reduce((t, e) => t + C.lieuxDe(e).filter((l) => C.ressentiValide(l.ressenti) !== null).length, 0);
+    const texteRessenti = surPlace ? ` Pour les lieux et les activités, la moyenne utilise le « ressenti sur place » quand le patient l'a indiqué (${C.pluriel(surPlace, 'lieu')} de la période), sinon la note de la période : c'est le cas lorsqu'il s'est rendu à plusieurs endroits et que son humeur y a été différente.` : '';
+    await chapitre('Jours, situations, lieux et activités', {
+      avant: () => R.paragraphe('Humeur moyenne (sur 10) selon le jour de la semaine, la situation professionnelle, le lieu et l\'activité déclarés par le patient. Le libellé en gras signale la moyenne la plus basse (au moins 2 évaluations).', { taille: 9, couleur: DOUX, apres: 6 }),
+      blocs,
+      apres: () => R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « En route » désigne un déplacement (à pied, à vélo, en voiture, en bus, en train, en avion, en bateau…).' : ''}${texteRessenti}`, { taille: 8.3, couleur: DOUX }),
+    });
+  }
+
+  // 10. Prévisions et réalité
+  R.section(++numSection, 'Comparaison entre prévisions et réalité');
+  if (!prev.lignes.length) R.paragraphe('Aucune prévision n\'a été formulée sur la période.');
+  else {
+    const etatCible = (l) => {
+      if (l.ecart !== null) return l.ecart === 0 ? '0 (identique)' : C.signeFr(l.ecart, 0);
+      const st = statutParId.get(C.idCreneau(l.cible.date, l.cible.creneau));
+      return st === 'omis' ? 'créneau omis' : st === 'en_attente' ? 'en attente de réponse' : st === 'a_rattraper' ? 'à rattraper' : st === 'a_venir' ? 'à venir' : 'pas de réponse';
+    };
+    let lignesPrev = prev.lignes;
+    if (type === 'synthetique' && lignesPrev.length > 12) {
+      lignesPrev = [...prev.lignes].filter((l) => l.ecart !== null).sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart)).slice(0, 10)
+        .sort((a, b) => (a.source.creneauId < b.source.creneauId ? -1 : 1));
+      R.paragraphe(`Rapport synthétique : seules les 10 prévisions présentant les écarts les plus importants sont listées (sur ${prev.lignes.length}).`, { taille: 8.5, couleur: DOUX });
+    }
+    R.tableau(
+      [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Créneau visé', part: 1.6 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Écart', part: 1.5 }],
+      lignesPrev.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, etatCible(l)]),
+    );
+    if (prev.nombreComparees) {
+      R.paragraphe(`Sur ${C.pluriel(prev.nombreComparees, 'prévision comparable', 'prévisions comparables')} : ${prev.exactes} identique(s), ${prev.realiteSuperieure} où la note constatée est supérieure, ${prev.realiteInferieure} où elle est inférieure. Écart moyen : ${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point.`, { taille: 9.5 });
+    } else R.paragraphe('Aucune prévision ne peut encore être comparée à une note constatée.', { taille: 9.5, couleur: DOUX });
+    const motifPrev = (l) => (textes.get(l.source.id) || C.textesPourRapport(l.source, modeTextes)).prevision;
+    const motifsPrev = prev.lignes.filter((l) => motifPrev(l));
+    if (motifsPrev.length) {
+      R.sousTitre('Motifs des prévisions');
+      R.puces(motifsPrev.map((l) => `Pour ${libCreneau(l.cible)} (${l.prevue}/10) : ${motifPrev(l)}`), { taille: 9.5 });
+    }
+  }
+
+  // ===== Partie V – Conclusion et points à aborder
+  await R.partie('V', 'Conclusion', { besoin: 200 });
+  // 11. Synthèse neutre
+  // Fin du rapport : conclusion et points à aborder (synthèse validée, rédigée avec Claude) ;
+  // à défaut, relevé factuel automatique des sujets possibles
+  {
+    const parts = synthese ? C.partiesSynthese(synthese.texte) : null;
+    if (parts && (parts.conclusion.length || parts.points.length)) {
+      R.section(++numSection, 'Conclusion et points à aborder', 120);
+      parts.conclusion.forEach((l, k) => (k === 0 ? R.riche([['Conclusion : ', 'gras'], [l]], { taille: 10.5, apres: 6 }) : R.paragraphe(l, { taille: 10.5, apres: 6 })));
+      if (parts.points.length) {
+        R.paragraphe('Points à aborder en séance :', { taille: 10.5, police: 'gras', apres: 4 });
+        R.puces(parts.points, { taille: 10.5 });
+      }
+      R.paragraphe(`Rédigé ${synthese.source === 'assistant' ? 'avec l\'aide d\'un assistant (Claude, Anthropic) ' : ''}à partir des données de la période, relu et validé par le patient${synthese.valideeLeUtc ? ` le ${C.formatDateHeure(synthese.valideeLeUtc)}` : ''}. Il s'agit de constats et de propositions de sujets, non d'une évaluation clinique.`, { taille: 8.3, police: 'italique', couleur: DOUX });
+    } else {
+      R.section(++numSection, 'Points à aborder en séance');
+      R.paragraphe('Relevé factuel établi automatiquement à partir des saisies, sans interprétation (aucune conclusion rédigée et validée pour cette période) ; libre au patient et au thérapeute de s\'en saisir ou non.', { taille: 9, couleur: DOUX });
+      R.puces(C.sujetsDeDiscussion(evals, freq, prev, comptes));
     }
   }
 

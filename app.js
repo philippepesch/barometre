@@ -2221,7 +2221,7 @@ async function ouvrirPdf() {
     <div id="pdf-ajouts"></div>
     ${patient.cns ? `<label class="interrupteur" style="margin-bottom:14px"><input type="checkbox" id="pdf-cns" ${etat.parametres.rapportAvecCNS !== false ? 'checked' : ''}> <span>Inclure mon matricule CNS <span class="doux">(${esc(C.formatCNS(patient.cns))})</span></span></label>` : ''}
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Type de rapport</legend>
-      <label class="interrupteur"><input type="radio" name="type" value="complet" checked> <span>Complet <span class="doux">– tous les commentaires en annexe</span></span></label>
+      <label class="interrupteur"><input type="radio" name="type" value="complet" checked> <span>Complet <span class="doux">– chaque évaluation en détail (partie II)</span></span></label>
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="type" value="synthetique"> <span>Synthétique <span class="doux">– commentaires abrégés, tableaux résumés</span></span></label>
     </fieldset>
     <fieldset class="champ"><legend style="font-weight:600;margin-bottom:6px">Commentaires dans le rapport</legend>
@@ -2243,72 +2243,157 @@ async function ouvrirPdf() {
   const zoneEntre = document.getElementById('pdf-entre-zone');
   const appliquer = (o) => { if (!o) return; document.getElementById('pdf-debut').value = o.debut; document.getElementById('pdf-fin').value = o.fin; majSynthese(); majEvenements(); majAjouts(); };
 
-  // Synthèse de la période : rédigée par Claude (avec l'accord du patient) ou par le patient, puis validée
+  // Synthèse de la période : Claude propose (avec l'accord du patient) un aperçu, des conclusions et des points
+  // à aborder ; le patient coche ce qui doit figurer dans le rapport, peut corriger ou ajouter, puis valide.
   const zoneSynthese = document.getElementById('pdf-synthese');
   let editionSynthese = false;
+  let brouillon = null; // propositions en cours de choix pour la période affichée
+  let minuterieSynthese = null;
   function periodeChoisie() { return { debut: document.getElementById('pdf-debut').value, fin: document.getElementById('pdf-fin').value }; }
+  const LISTES_SYNTHESE = { conclusions: { titre: 'Conclusion', aide: 'coche une ou plusieurs phrases', ajout: 'Ma propre conclusion' }, points: { titre: 'Points à aborder en séance', aide: 'coche ceux que tu veux aborder', ajout: 'Mon propre point' } };
+  const ajusterHauteur = (t) => { t.style.height = 'auto'; t.style.height = `${t.scrollHeight + 2}px`; };
+  const nbChoisis = (l) => (l || []).filter((x) => x.choisi && String(x.texte || '').trim()).length;
   function majSynthese() {
     const { debut, fin } = periodeChoisie();
-    if (!C.estDateValide(debut) || !C.estDateValide(fin) || debut > fin) { zoneSynthese.innerHTML = ''; return; }
+    if (!C.estDateValide(debut) || !C.estDateValide(fin) || debut > fin) { zoneSynthese.innerHTML = ''; brouillon = null; return; }
     const sy = C.syntheseDe(etat.parametres, debut, fin, { valideeSeulement: false });
     const accord = iaPrete() && etat.parametres.ia && etat.parametres.ia.consentementSyntheseUtc;
-    const titre = '<h3 style="margin:0 0 6px">Synthèse de la période <span class="doux" style="font-weight:400">(en tête du rapport, 1000 caractères au plus)</span></h3>';
+    const titre = `<h3 style="margin:0 0 6px">Introduction, conclusion et points à aborder</h3>
+      <p class="doux" style="margin:0 0 8px">L'« Évolution » sert d'aperçu dans l'introduction du rapport ; les conclusions et les points que tu coches ferment le rapport.</p>`;
     if (sy && (editionSynthese || sy.statut !== 'validee')) {
+      brouillon = JSON.parse(JSON.stringify(C.propositionsDe(sy)));
+      const liste = (cle) => {
+        const L = LISTES_SYNTHESE[cle];
+        return `<fieldset class="choix-synthese" data-liste="${cle}"><legend><strong>${L.titre}</strong> <span class="doux">– ${L.aide}</span></legend>
+          ${brouillon[cle].length ? brouillon[cle].map((x, k) => `<div class="choix-ligne"><input type="checkbox" id="sy-${cle}-${k}" data-liste="${cle}" data-i="${k}" ${x.choisi ? 'checked' : ''} aria-label="Retenir : ${esc(x.texte.slice(0, 60))}"><textarea rows="2" lang="fr" spellcheck="true" maxlength="${C.LONGUEUR_PROPOSITION}" data-liste="${cle}" data-i="${k}" aria-label="${L.titre} ${k + 1}">${esc(x.texte)}</textarea></div>`).join('') : '<p class="doux" style="margin:0 0 6px">Aucune proposition : ajoute ton propre texte ci-dessous.</p>'}
+          <div class="rangee choix-ajout"><input type="text" maxlength="${C.LONGUEUR_PROPOSITION}" lang="fr" data-ajout="${cle}" placeholder="${L.ajout}" aria-label="${L.ajout}"><button type="button" class="bouton-secondaire" data-synthese="ajouter" data-liste="${cle}">Ajouter</button></div>
+        </fieldset>`;
+      };
       zoneSynthese.innerHTML = `${titre}
-        ${sy.statut !== 'validee' ? '<p class="encre-2" style="margin:0 0 6px">Relis cette proposition, corrige-la si besoin, puis valide-la : seule une synthèse validée figure dans le rapport.</p>' : ''}
-        <textarea id="pdf-synthese-texte" rows="9" maxlength="${C.LONGUEUR_SYNTHESE}" lang="fr" spellcheck="true">${esc(sy.texte)}</textarea>
-        <small class="doux" id="pdf-synthese-compte"></small>
-        <div class="rangee" style="margin-top:8px"><button type="button" class="bouton" data-synthese="valider">Valider la synthèse</button>${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Nouvelle proposition</button>' : ''}<button type="button" class="bouton-discret" data-synthese="retirer">Retirer</button></div>`;
-      const ta = document.getElementById('pdf-synthese-texte');
-      const compter = () => { document.getElementById('pdf-synthese-compte').innerHTML = ta.value.length > C.LONGUEUR_SYNTHESE ? `<span class="erreur-texte">${ta.value.length} / ${C.LONGUEUR_SYNTHESE} caractères</span>` : `${ta.value.length} / ${C.LONGUEUR_SYNTHESE} caractères`; };
-      ta.addEventListener('input', compter); compter();
+        ${sy.statut !== 'validee' ? `<p class="encre-2" style="margin:0 0 8px">${sy.source === 'assistant' ? 'Claude propose plusieurs phrases. ' : ''}Coche ce qui doit figurer dans le rapport, corrige le texte si besoin, puis valide : rien n'apparaît dans le rapport sans ta validation.</p>` : ''}
+        <div class="champ"><label for="pdf-evolution"><strong>Évolution</strong> <span class="doux">(aperçu, ${C.LONGUEUR_EVOLUTION} caractères au plus)</span></label>
+        <textarea id="pdf-evolution" rows="5" maxlength="${C.LONGUEUR_EVOLUTION}" lang="fr" spellcheck="true">${esc(brouillon.evolution)}</textarea><small class="doux" id="pdf-evolution-compte"></small></div>
+        ${liste('conclusions')}${liste('points')}
+        <p class="doux" id="pdf-choix-resume" style="margin:6px 0 0" aria-live="polite"></p>
+        <div class="rangee" style="margin-top:8px"><button type="button" class="bouton" data-synthese="valider">Valider mes choix</button>${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Nouvelle proposition</button>' : ''}<button type="button" class="bouton-discret" data-synthese="retirer">Retirer</button></div>`;
+      // Champs à la hauteur de leur texte (rien de caché sur un petit écran)
+      zoneSynthese.querySelectorAll('textarea').forEach(ajusterHauteur);
+      const ta = document.getElementById('pdf-evolution');
+      const compter = () => {
+        const n = ta.value.length;
+        document.getElementById('pdf-evolution-compte').innerHTML = n > C.LONGUEUR_EVOLUTION ? `<span class="erreur-texte">${n} / ${C.LONGUEUR_EVOLUTION} caractères</span>` : `${n} / ${C.LONGUEUR_EVOLUTION} caractères`;
+        const nc = nbChoisis(brouillon.conclusions), np = nbChoisis(brouillon.points);
+        document.getElementById('pdf-choix-resume').textContent = `Cochés : ${C.pluriel(nc, 'conclusion')} et ${C.pluriel(np, 'point', 'points')} à aborder.`;
+      };
+      compter();
     } else if (sy) {
-      zoneSynthese.innerHTML = `${titre}<label class="interrupteur"><input type="checkbox" id="pdf-avec-synthese" checked> <span><strong>Inclure la synthèse validée</strong> <span class="doux">(validée le ${C.formatDateHeure(sy.valideeLeUtc)})</span></span></label>
-        <details class="repli" style="margin-top:6px"><summary>Lire la synthèse</summary><p class="texte-libre encre-2">${esc(sy.texte)}</p></details>
-        <div class="rangee" style="margin-top:6px"><button type="button" class="bouton-discret" data-synthese="modifier">Modifier</button>${accord ? '<button type="button" class="bouton-discret" data-synthese="rediger">Nouvelle proposition</button>' : ''}</div>`;
+      brouillon = null;
+      const parts = C.partiesSynthese(sy.texte);
+      zoneSynthese.innerHTML = `${titre}<label class="interrupteur"><input type="checkbox" id="pdf-avec-synthese" checked> <span><strong>Inclure mes choix validés</strong> <span class="doux">(validés le ${C.formatDateHeure(sy.valideeLeUtc)})</span></span></label>
+        ${parts.conclusion.length ? '' : `<p class="encre-2" style="margin:6px 0 0">Aucune conclusion n'est encore choisie.${accord ? ' Touche « Nouvelle proposition » pour en obtenir.' : ''}</p>`}
+        <details class="repli" style="margin-top:6px"><summary>Relire</summary>
+          <p class="encre-2"><strong>Évolution :</strong> ${esc(parts.evolution.join(' '))}</p>
+          ${parts.conclusion.length ? `<p class="encre-2"><strong>Conclusion :</strong> ${esc(parts.conclusion.join(' '))}</p>` : ''}
+          ${parts.points.length ? `<p class="encre-2" style="margin-bottom:2px"><strong>Points à aborder :</strong></p><ul class="encre-2" style="margin-top:0">${parts.points.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+        </details>
+        <div class="rangee" style="margin-top:6px"><button type="button" class="bouton-discret" data-synthese="modifier">Modifier mes choix</button>${accord ? '<button type="button" class="bouton-discret" data-synthese="rediger">Nouvelle proposition</button>' : ''}</div>`;
     } else {
+      brouillon = null;
       zoneSynthese.innerHTML = `${titre}
-        <p class="encre-2" style="margin:0 0 6px">Un résumé de l'évolution sur la période et des points prioritaires, en langage professionnel et clair.</p>
-        <div class="rangee">${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Rédiger la synthèse avec Claude</button>' : ''}<button type="button" class="bouton-discret" data-synthese="ecrire">L'écrire moi-même</button></div>
-        ${accord ? '' : `<p class="doux" style="margin:6px 0 0">Pour qu'elle soit rédigée automatiquement, active la version professionnelle automatique et coche l'accord « Synthèse du rapport » dans <a href="#/reglages/ia" data-fermer-dialogue>Réglages</a>.</p>`}`;
+        <p class="encre-2" style="margin:0 0 6px">Claude propose un aperçu de l'évolution, plusieurs conclusions et plusieurs points à aborder ; tu coches ceux qui doivent figurer dans le rapport. Sans choix validés, le rapport se termine par un relevé factuel des points à aborder.</p>
+        <div class="rangee">${accord ? '<button type="button" class="bouton-secondaire" data-synthese="rediger">Demander des propositions à Claude</button>' : ''}<button type="button" class="bouton-discret" data-synthese="ecrire">L'écrire moi-même</button></div>
+        ${accord ? '' : `<p class="doux" style="margin:6px 0 0">Pour obtenir des propositions, active la version professionnelle automatique et coche l'accord « Synthèse du rapport » dans <a href="#/reglages/ia" data-fermer-dialogue>Réglages</a>.</p>`}`;
       zoneSynthese.querySelectorAll('[data-fermer-dialogue]').forEach((a) => a.addEventListener('click', () => dlg.close()));
     }
   }
   const sauverSynthese = async (sy) => { await enregistrerParametres({ syntheses: C.enregistrerSynthese(etat.parametres, sy) }); };
+  // Enregistre le brouillon (choix et corrections) pour ne rien perdre si la fenêtre est fermée
+  const sauverBrouillon = async () => {
+    if (!brouillon) return;
+    const { debut, fin } = periodeChoisie();
+    const sy = C.syntheseDe(etat.parametres, debut, fin, { valideeSeulement: false });
+    if (!sy) return;
+    await sauverSynthese({ ...sy, propositions: JSON.parse(JSON.stringify(brouillon)) });
+  };
+  const resumeChoix = () => { const r = document.getElementById('pdf-choix-resume'); if (r && brouillon) r.textContent = `Cochés : ${C.pluriel(nbChoisis(brouillon.conclusions), 'conclusion')} et ${C.pluriel(nbChoisis(brouillon.points), 'point', 'points')} à aborder.`; };
+  zoneSynthese.addEventListener('change', (e) => {
+    const c = e.target;
+    if (!brouillon || c.type !== 'checkbox' || !c.dataset.liste) return;
+    brouillon[c.dataset.liste][Number(c.dataset.i)].choisi = c.checked;
+    resumeChoix(); sauverBrouillon();
+  });
+  zoneSynthese.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!brouillon) return;
+    if (t.tagName === 'TEXTAREA') ajusterHauteur(t);
+    if (t.id === 'pdf-evolution') {
+      brouillon.evolution = t.value;
+      const n = t.value.length, cpt = document.getElementById('pdf-evolution-compte');
+      if (cpt) cpt.innerHTML = n > C.LONGUEUR_EVOLUTION ? `<span class="erreur-texte">${n} / ${C.LONGUEUR_EVOLUTION} caractères</span>` : `${n} / ${C.LONGUEUR_EVOLUTION} caractères`;
+    } else if (t.tagName === 'TEXTAREA' && t.dataset.liste) {
+      brouillon[t.dataset.liste][Number(t.dataset.i)].texte = t.value;
+      // Corriger une phrase la retient
+      const caseLiee = document.getElementById(`sy-${t.dataset.liste}-${t.dataset.i}`);
+      if (caseLiee && !caseLiee.checked && t.value.trim()) { caseLiee.checked = true; brouillon[t.dataset.liste][Number(t.dataset.i)].choisi = true; }
+      resumeChoix();
+    } else return;
+    clearTimeout(minuterieSynthese);
+    minuterieSynthese = setTimeout(sauverBrouillon, 600);
+  });
+  zoneSynthese.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.dataset && e.target.dataset.ajout) { e.preventDefault(); zoneSynthese.querySelector(`[data-synthese="ajouter"][data-liste="${e.target.dataset.ajout}"]`).click(); }
+  });
   zoneSynthese.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-synthese]');
     if (!b) return;
     const { debut, fin } = periodeChoisie();
     const action = b.dataset.synthese;
     const ancienne = C.syntheseDe(etat.parametres, debut, fin, { valideeSeulement: false });
+    const maintenantIso = () => new Date(maintenant()).toISOString();
     if (action === 'rediger') {
-      b.disabled = true; b.textContent = 'Rédaction en cours…';
+      b.disabled = true; b.textContent = 'Claude rédige ses propositions…';
       try {
         const { redigerSynthese } = await import('./ia.js');
-        const texte = await redigerSynthese(etat.parametres, C.donneesSynthese(etat.evaluations, etat.motifs, { debut, fin, instant: maintenant(), debutSuiviUtc: etat.parametres.debutSuiviUtc, evenements: evtsIA() }));
-        await sauverSynthese({ debut, fin, texte, statut: 'proposee', source: 'assistant', creeLeUtc: new Date(maintenant()).toISOString(), valideeLeUtc: null });
+        const prop = await redigerSynthese(etat.parametres, C.donneesSynthese(etat.evaluations, etat.motifs, { debut, fin, instant: maintenant(), debutSuiviUtc: etat.parametres.debutSuiviUtc, evenements: evtsIA() }));
+        const propositions = C.propositionsAChoisir(prop);
+        await sauverSynthese({ debut, fin, texte: C.composerSynthese(propositions), propositions, statut: 'proposee', source: 'assistant', creeLeUtc: maintenantIso(), valideeLeUtc: null });
         editionSynthese = true;
-        annoncer('Synthèse proposée : relis-la et valide-la.');
-      } catch (err) { annoncer(`La synthèse n'a pas pu être rédigée : ${err.message}`); }
+        annoncer('Propositions prêtes : coche ce qui doit figurer dans le rapport, puis valide.');
+      } catch (err) { annoncer(`Les propositions n'ont pas pu être rédigées : ${err.message}`); }
       majSynthese();
       return;
     }
     if (action === 'ecrire') {
-      await sauverSynthese({ debut, fin, texte: '', statut: 'proposee', source: 'manuelle', creeLeUtc: new Date(maintenant()).toISOString(), valideeLeUtc: null });
-      editionSynthese = true; majSynthese(); document.getElementById('pdf-synthese-texte').focus(); return;
+      const propositions = C.propositionsAChoisir({});
+      await sauverSynthese({ debut, fin, texte: '', propositions, statut: 'proposee', source: 'manuelle', creeLeUtc: maintenantIso(), valideeLeUtc: null });
+      editionSynthese = true; majSynthese(); document.getElementById('pdf-evolution').focus(); return;
     }
     if (action === 'modifier') { editionSynthese = true; majSynthese(); return; }
     if (action === 'retirer') {
       await enregistrerParametres({ syntheses: (etat.parametres.syntheses || []).filter((x) => !(x.debut === debut && x.fin === fin)) });
       editionSynthese = false; majSynthese(); return;
     }
+    if (action === 'ajouter') {
+      const cle = b.dataset.liste;
+      const champ = zoneSynthese.querySelector(`[data-ajout="${cle}"]`);
+      const t = champ.value.trim();
+      if (!t) { champ.focus(); return; }
+      brouillon.evolution = document.getElementById('pdf-evolution').value;
+      brouillon[cle].push({ texte: t, choisi: true, propre: true });
+      await sauverBrouillon();
+      majSynthese();
+      const nouv = zoneSynthese.querySelector(`[data-ajout="${cle}"]`); if (nouv) nouv.focus();
+      return;
+    }
     if (action === 'valider') {
-      const texte = document.getElementById('pdf-synthese-texte').value.trim();
-      if (!texte) { annoncer('La synthèse est vide.'); return; }
-      if (texte.length > C.LONGUEUR_SYNTHESE) { annoncer(`La synthèse doit compter au maximum ${C.LONGUEUR_SYNTHESE} caractères : raccourcis-la.`); return; }
-      await sauverSynthese({ ...(ancienne || { debut, fin, source: 'manuelle', creeLeUtc: new Date(maintenant()).toISOString() }), texte, statut: 'validee', valideeLeUtc: new Date(maintenant()).toISOString() });
+      clearTimeout(minuterieSynthese);
+      brouillon.evolution = document.getElementById('pdf-evolution').value;
+      const err = C.erreursChoixSynthese(brouillon);
+      if (err.length) { annoncer(err.join(' ')); const r = document.getElementById('pdf-choix-resume'); if (r) r.innerHTML = `<span class="erreur-texte">${esc(err.join(' '))}</span>`; return; }
+      const propositions = JSON.parse(JSON.stringify(brouillon));
+      await sauverSynthese({ ...(ancienne || { debut, fin, source: 'manuelle', creeLeUtc: maintenantIso() }), propositions, texte: C.composerSynthese(propositions), statut: 'validee', valideeLeUtc: maintenantIso() });
       editionSynthese = false;
-      annoncer('Synthèse validée : elle figurera en tête du rapport.');
+      annoncer('Choix validés : l\'évolution figurera dans l\'introduction, la conclusion et les points à aborder à la fin du rapport.');
       majSynthese();
     }
   });

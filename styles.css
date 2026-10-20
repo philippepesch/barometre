@@ -543,3 +543,13 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .nuancier { flex: none; width: 34px; height: 14px; border-radius: 4px; border: 1px solid var(--filet); }
 .puce-style .serif { font-family: Georgia, 'Times New Roman', serif; }
 .puce-style .mono { font-family: 'Courier New', Courier, monospace; }
+
+/* Choix de la conclusion et des points à aborder (fenêtre du rapport) */
+.choix-synthese { border: 1px solid var(--filet, #d8dde3); border-radius: 10px; padding: 8px 10px 10px; margin: 10px 0 0; min-width: 0; }
+.choix-synthese legend { padding: 0 4px; }
+.choix-ligne { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0; }
+.choix-ligne input[type="checkbox"] { width: 22px; height: 22px; margin-top: 8px; flex: 0 0 auto; accent-color: var(--laiton, #2f6e9e); }
+.choix-ligne textarea { flex: 1; min-width: 0; min-height: 3.2em; resize: vertical; font-size: 0.95rem; overflow: hidden; }
+.choix-ligne:has(input:not(:checked)) textarea { opacity: 0.72; }
+.choix-ajout { margin-top: 8px; flex-wrap: nowrap; }
+.choix-ajout input { flex: 1; min-width: 0; }

@@ -127,7 +127,7 @@ export async function trouverModele(cle, { fetch: f = globalThis.fetch.bind(glob
 }
 
 /**
- * Synthèse de la période (1000 caractères au plus), avec l'accord spécifique du patient.
+ * Propositions pour la synthèse de la période (évolution, conclusions et points à aborder à cocher), avec l'accord spécifique du patient.
  * donnees = C.donneesSynthese(...) : statistiques agrégées et textes déjà validés, sans identité ni dates.
  */
 export async function redigerSynthese(parametres, donnees, { fetch: f = globalThis.fetch.bind(globalThis) } = {}) {
@@ -139,12 +139,14 @@ export async function redigerSynthese(parametres, donnees, { fetch: f = globalTh
     ? appelerServeur(cfg, parametres.serveurRappels, systeme, donnees, f)
     : appelerAnthropic(cfg, systeme, donnees, f));
   const systeme = C.instructionsSynthese({ style: C.styleRedaction(parametres).id });
-  let texte = C.lireReponseSynthese(await appeler(systeme));
-  if (texte.length > C.LONGUEUR_SYNTHESE) {
+  const tropLong = (p) => p.evolution.length > C.LONGUEUR_EVOLUTION || [...p.conclusions, ...p.points].some((t) => t.length > C.LONGUEUR_PROPOSITION);
+  let prop = C.lirePropositionsSynthese(await appeler(systeme));
+  if (tropLong(prop)) {
     try {
-      const t2 = C.lireReponseSynthese(await appeler(`${systeme}\n\nATTENTION : ta réponse précédente comptait ${texte.length} caractères. Elle doit en compter au maximum ${C.LONGUEUR_SYNTHESE}, espaces compris : condense en gardant l'essentiel.`));
-      if (t2.length < texte.length) texte = t2;
+      const p2 = C.lirePropositionsSynthese(await appeler(`${systeme}\n\nATTENTION : ta réponse précédente dépassait les longueurs demandées (« evolution » : ${C.LONGUEUR_EVOLUTION} caractères au plus ; chaque conclusion et chaque point : ${C.LONGUEUR_PROPOSITION} caractères au plus) : condense en gardant l'essentiel.`));
+      if (!tropLong(p2)) prop = p2;
     } catch { /* on garde la première version : le patient peut la raccourcir */ }
   }
-  return texte;
+  if (!prop.evolution && !prop.conclusions.length && !prop.points.length) throw new Error('Réponse vide de l\'assistant.');
+  return prop;
 }

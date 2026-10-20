@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.24.1';
+export const VERSION_APP = '1.26.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1353,7 +1353,12 @@ ${JSON.stringify(entreesReformulation(evaluations, options), null, 2)}
 // puis relue et validée par lui. Seules des données agrégées et les textes déjà validés sont transmis :
 // jamais le nom, l'adresse, le matricule, ni les dates du calendrier (les jours sont numérotés).
 
-export const LONGUEUR_SYNTHESE = 1000;
+export const LONGUEUR_SYNTHESE = 3000;
+/** Longueurs des parties proposées : aperçu (évolution), chaque phrase de conclusion, chaque point à aborder. */
+export const LONGUEUR_EVOLUTION = 900;
+export const LONGUEUR_PROPOSITION = 300;
+export const NB_CONCLUSIONS = 4;
+export const NB_POINTS = 8;
 
 export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Date.now(), debutSuiviUtc = null, evenements = null }) {
   const evals = trierChrono(dansPeriode(evaluations, debut, fin));
@@ -1399,22 +1404,42 @@ export function instructionsSynthese({ style: idStyle = 'sobre' } = {}) {
   const st = STYLES_REDACTION.find((x) => x.id === idStyle) || STYLES_REDACTION[0];
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois les données agrégées d'un journal d'humeur tenu deux fois par jour par un patient (note de 0 à 10, voir « echelle »), pour une période donnée, ainsi que ses commentaires déjà relus et validés (« texte_valide »). Le texte est destiné à son psychothérapeute ; le patient le relira et le validera.
 
-Rédige une synthèse en français, à la troisième personne (« le patient »), dans un langage professionnel mais clair, neutre et factuel, en deux parties :
-Évolution : quelques phrases sur l'évolution de l'humeur pendant la période (niveau général, tendance, variations, moments, jours, situations, lieux ou activités associés aux notes les plus basses ou les plus hautes).
-Points prioritaires : deux à quatre points, chacun sur une ligne commençant par « – », qui méritent l'attention en priorité selon les données (par exemple un jour, une situation ou un lieu nettement plus difficile, des motifs défavorables récurrents, des notes très basses, un écart entre prévisions et réalité, des évaluations omises).
+Rédige en français, à la troisième personne (« le patient »), dans un langage professionnel mais clair, neutre et factuel :
+« evolution » : quelques phrases (${LONGUEUR_EVOLUTION} caractères au plus) qui présentent l'évolution de l'humeur pendant la période (niveau général, tendance, variations, moments, jours, situations, lieux, activités ou événements associés aux notes les plus basses ou les plus hautes). Ce texte sert d'aperçu dans l'introduction du rapport.
+« conclusions » : ${NB_CONCLUSIONS} propositions de conclusion, chacune en une ou deux phrases (${LONGUEUR_PROPOSITION} caractères au plus), qui résument chacune un aspect différent de ce qui ressort de la période, sans répéter l'évolution. Le patient cochera celles qui figureront dans le rapport : chaque proposition doit pouvoir se lire seule.
+« points » : ${NB_POINTS} propositions de points à aborder lors de la prochaine séance, chacune en une phrase (${LONGUEUR_PROPOSITION} caractères au plus), classées de la plus importante à la moins importante selon les données (par exemple un jour, une situation, un lieu ou une relation nettement plus difficile, des motifs défavorables récurrents, un événement marquant, des notes très basses, un écart entre prévisions et réalité, des évaluations omises, mais aussi ce qui a aidé), formulées comme des sujets à discuter, sans conseil. Le patient cochera ceux qu'il veut aborder.
 
 Règles impératives :
-- ${LONGUEUR_SYNTHESE} caractères au maximum au total, espaces compris.
+- Respecte les longueurs indiquées (espaces compris).
 - N'utilise que les données fournies : aucune information inventée, aucune hypothèse, aucun diagnostic, aucun vocabulaire clinique, aucun conseil de traitement.
 - Dans « par_lieu » et « par_activite », la moyenne utilise le ressenti indiqué sur place quand il existe (« dont_ressenti_sur_place »), sinon la note de la période.
 - Présente les liens comme des constats (« les notes les plus basses sont relevées le lundi »), jamais comme des causes.
 - Ne considère jamais qu'une note supérieure à zéro exclut un risque. Si « verifications_securite » est supérieur à 0, mentionne sobrement qu'une vérification de sécurité a été proposée ; s'il vaut 0, n'en parle pas du tout (ne dis jamais qu'aucune vérification n'a eu lieu).
-- Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement.
-- Aucune redite : chaque idée n'est écrite qu'une fois. Les « evenements_marquants » peuvent déjà figurer dans les « texte_valide » : un même événement n'est mentionné qu'une fois.
-- Style souhaité par le patient (à adapter aux deux parties, sans dépasser la longueur) : ${st.consigne}
+- Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement (et propose moins d'éléments).
+- Aucune redite : chaque idée n'est écrite qu'une fois, et les propositions ne se répètent pas entre elles. Les « evenements_marquants » peuvent déjà figurer dans les « texte_valide » : un même événement n'est mentionné qu'une fois.
+- Style souhaité par le patient (à adapter à chaque partie, sans dépasser les longueurs) : ${st.consigne}
 - Pas de dates du calendrier (les jours sont numérotés) ; tu peux citer les jours de la semaine.
 
-Réponds uniquement avec du JSON valide, sans texte autour : {"synthese": "Évolution : …\\nPoints prioritaires :\\n– …\\n– …"}`;
+Réponds uniquement avec du JSON valide, sans texte autour : {"evolution": "…", "conclusions": ["…", "…"], "points": ["…", "…"]}`;
+}
+
+/**
+ * Parties d'une synthèse : « Évolution » (début du rapport), « Conclusion » et « Points à aborder » (fin).
+ * Les anciennes synthèses (« Points prioritaires ») restent lisibles : leurs points vont à la fin.
+ */
+export function partiesSynthese(texte) {
+  const p = { evolution: [], conclusion: [], points: [] };
+  let cle = 'evolution';
+  for (const ligne of String(texte || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+    const m = /^(Évolution|Evolution|Conclusion|Points prioritaires|Points à aborder|Points a aborder)\s*:\s*(.*)$/i.exec(ligne);
+    if (m) {
+      const t = normaliserLibelle(m[1]);
+      cle = t.startsWith('evolution') ? 'evolution' : t.startsWith('conclusion') ? 'conclusion' : 'points';
+      if (m[2]) p[cle].push(cle === 'points' ? m[2].replace(/^[–\-•]\s*/, '') : m[2]);
+    } else if (/^[–\-•]\s*/.test(ligne)) p[cle === 'conclusion' ? 'points' : cle].push(ligne.replace(/^[–\-•]\s*/, ''));
+    else p[cle].push(ligne);
+  }
+  return p;
 }
 
 /** Lit la synthèse renvoyée par l'assistant (JSON, éventuellement entouré de texte ou de balises de code). */
@@ -1431,6 +1456,74 @@ export function lireReponseSynthese(texte) {
   const t = brut.replace(/^```\w*|```$/g, '').trim();
   if (!t) throw new Error('Réponse vide de l\'assistant.');
   return t;
+}
+
+/**
+ * Propositions renvoyées par l'assistant : { evolution, conclusions: [texte], points: [texte] }.
+ * Une réponse à l'ancien format ({"synthese": "Évolution : … Conclusion : … Points à aborder : …"}) est aussi lue.
+ */
+export function lirePropositionsSynthese(texte) {
+  const brut = String(texte || '');
+  const debutJson = brut.indexOf('{');
+  const finJson = brut.lastIndexOf('}');
+  const liste = (l) => (Array.isArray(l) ? l : []).map((x) => normaliserEspaces(String(x == null ? '' : x)).replace(/^[–\-•]\s*/, '')).filter(Boolean);
+  if (debutJson >= 0 && finJson > debutJson) {
+    try {
+      const d = JSON.parse(brut.slice(debutJson, finJson + 1));
+      if (d && (typeof d.evolution === 'string' || Array.isArray(d.conclusions) || Array.isArray(d.points))) {
+        return { evolution: String(d.evolution || '').trim(), conclusions: liste(d.conclusions), points: liste(d.points) };
+      }
+    } catch { /* ancien format ci-dessous */ }
+  }
+  const p = partiesSynthese(lireReponseSynthese(brut));
+  return { evolution: p.evolution.join('\n'), conclusions: p.conclusion, points: p.points };
+}
+
+function normaliserEspaces(t) { return t.replace(/\s+/g, ' ').trim(); }
+
+/** Propositions à cocher, à partir de ce que renvoie l'assistant (rien n'est coché d'office). */
+export function propositionsAChoisir({ evolution = '', conclusions = [], points = [] } = {}) {
+  return {
+    evolution: String(evolution || '').trim(),
+    conclusions: conclusions.map((texte) => ({ texte, choisi: false })),
+    points: points.map((texte) => ({ texte, choisi: false })),
+  };
+}
+
+/** Propositions d'une synthèse enregistrée ; une ancienne synthèse (texte seul) donne des éléments déjà cochés. */
+export function propositionsDe(synthese) {
+  if (synthese && synthese.propositions) return synthese.propositions;
+  const p = partiesSynthese(synthese ? synthese.texte : '');
+  return {
+    evolution: p.evolution.join('\n'),
+    conclusions: (p.conclusion.length ? [p.conclusion.join(' ')] : []).map((texte) => ({ texte, choisi: true })),
+    points: p.points.map((texte) => ({ texte, choisi: true })),
+  };
+}
+
+/** Erreurs empêchant de valider les choix (texte d'évolution, au moins une conclusion et un point cochés). */
+export function erreursChoixSynthese(prop) {
+  const err = [];
+  const choisis = (l) => (l || []).filter((x) => x.choisi && String(x.texte || '').trim());
+  if (!String(prop.evolution || '').trim()) err.push('Le texte « Évolution » est vide.');
+  else if (prop.evolution.trim().length > LONGUEUR_EVOLUTION) err.push(`Le texte « Évolution » doit compter au maximum ${LONGUEUR_EVOLUTION} caractères.`);
+  if (!choisis(prop.conclusions).length) err.push('Coche au moins une conclusion.');
+  if (!choisis(prop.points).length) err.push('Coche au moins un point à aborder.');
+  for (const x of [...choisis(prop.conclusions), ...choisis(prop.points)]) {
+    if (x.texte.trim().length > LONGUEUR_PROPOSITION) { err.push(`Chaque conclusion ou point doit compter au maximum ${LONGUEUR_PROPOSITION} caractères.`); break; }
+  }
+  return err;
+}
+
+/** Texte de la synthèse composé à partir des éléments cochés (lu par le rapport avec partiesSynthese). */
+export function composerSynthese(prop) {
+  const choisis = (l) => (l || []).filter((x) => x.choisi && String(x.texte || '').trim()).map((x) => normaliserEspaces(x.texte));
+  const lignes = [`Évolution : ${String(prop.evolution || '').trim()}`];
+  const c = choisis(prop.conclusions);
+  if (c.length) lignes.push(`Conclusion : ${c.join(' ')}`);
+  const pts = choisis(prop.points);
+  if (pts.length) lignes.push('Points à aborder :', ...pts.map((t) => `– ${t}`));
+  return lignes.join('\n');
 }
 
 /** Synthèse enregistrée (et validée) pour exactement cette période, ou null. */
