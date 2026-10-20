@@ -518,3 +518,28 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .badge-impact { display: inline-block; margin-left: 6px; font-size: .8rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; color: #fff; vertical-align: middle; }
 .badge-impact.impact-positif { background: #2F6E9E; }
 .badge-impact.impact-negatif { background: #8A3B4A; }
+
+/* Choix du style de rédaction */
+.liste-styles { display: grid; gap: 8px; }
+.choix-style { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--filet); border-radius: 10px; cursor: pointer; background: var(--surface); }
+.choix-style:has(input:checked) { border-color: var(--laiton); box-shadow: 0 0 0 1px var(--laiton); }
+.choix-style input { margin-top: 4px; }
+.exemple-style { display: block; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--filet-fort); font-size: .88rem; font-style: italic; color: var(--encre-2); }
+
+/* Choix du style de rédaction */
+.liste-styles { display: grid; gap: 8px; }
+.choix-style { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--filet); border-radius: 10px; cursor: pointer; background: var(--surface); }
+.choix-style:has(input:checked) { border-color: var(--laiton); box-shadow: 0 0 0 1px var(--laiton); }
+.choix-style input { margin-top: 4px; }
+.exemple-style { display: block; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--filet-fort); font-size: .88rem; font-style: italic; color: var(--encre-2); }
+
+/* Style visuel du rapport */
+.styles-visuels { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.puce-style { display: block; cursor: pointer; }
+.puce-style input { position: absolute; opacity: 0; pointer-events: none; }
+.puce-style > span { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--filet); border-radius: 10px; font-size: .9rem; background: var(--surface); }
+.puce-style input:checked + span { border-color: var(--laiton); box-shadow: 0 0 0 2px var(--laiton); font-weight: 600; }
+.puce-style input:focus-visible + span { outline: 2.5px solid var(--laiton); outline-offset: 2px; }
+.nuancier { flex: none; width: 34px; height: 14px; border-radius: 4px; border: 1px solid var(--filet); }
+.puce-style .serif { font-family: Georgia, 'Times New Roman', serif; }
+.puce-style .mono { font-family: 'Courier New', Courier, monospace; }

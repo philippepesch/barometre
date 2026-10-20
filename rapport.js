@@ -19,11 +19,25 @@ const BAS_CONTENU = A4[1] - 60;
 export const COULEURS_CATEGORIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
 const COULEUR_AUTRE = '#9AA5AD';
 
-const ENCRE = '#1E2A33';
-const DOUX = '#5E6B74';
-const FILET = '#CDD4D9';
-const LAITON = '#8A6D35';
-const FOND = '#F1F3F4';
+/**
+ * Style visuel du rapport (« Tableau de bord ») : bande latérale, titres en bandeau, cadres avec ombre.
+ * Le moteur garde des variantes de mise en page (titres, cadres, barres, couverture, décor) paramétrées par le style.
+ */
+export const THEMES_RAPPORT = C.THEMES_RAPPORT;
+export const themeRapport = C.themeRapport;
+
+let SUR_ACCENT, ENCRE, DOUX, FILET, LAITON, FOND, TETE, BARRE_FAV, BARRE_DEF, CADRE, RAYON, ENTETE, GRILLE, AXE, FOND_PAGE, STYLE_CADRE, STYLE_BARRE, COUVERTURE, DECO;
+function appliquerTheme(t) {
+  ({ encre: ENCRE, doux: DOUX, filet: FILET, accent: LAITON, fond: FOND, tete: TETE, fav: BARRE_FAV, def: BARRE_DEF, trait: CADRE, rayon: RAYON, grille: GRILLE, axe: AXE } = t);
+  ENTETE = t.entete || 'pastille';
+  SUR_ACCENT = t.surAccent || '#FFFFFF';
+  FOND_PAGE = t.fondPage || null;
+  STYLE_CADRE = t.cadre || 'bord';
+  STYLE_BARRE = t.barre || 'pleine';
+  COUVERTURE = t.couverture || 'classique';
+  DECO = t.deco || 'aucune';
+}
+appliquerTheme(THEMES_RAPPORT[0]);
 // Événements marquants : couleur selon l'impact déclaré (sans impact : laiton)
 const COULEUR_IMPACT = { positif: '#2F6E9E', negatif: '#8A3B4A' };
 
@@ -79,10 +93,15 @@ class Redacteur {
   }
 
   /** Rectangle aux coins arrondis (yHaut = bord supérieur). */
-  cadre(x, yHaut, l, h, { fond = null, bord = null, epaisseur = 0.6, rayon = 5 } = {}) {
-    const r = Math.min(rayon, l / 2, h / 2);
-    const d = `M${x + r} ${yHaut} H${x + l - r} A${r} ${r} 0 0 1 ${x + l} ${yHaut + r} V${yHaut + h - r} A${r} ${r} 0 0 1 ${x + l - r} ${yHaut + h} `
+  cheminCadre(x, yHaut, l, h, rayon) {
+    const r = Math.max(0, Math.min(rayon, l / 2, h / 2));
+    if (!r) return `M${x} ${yHaut} H${x + l} V${yHaut + h} H${x} Z`;
+    return `M${x + r} ${yHaut} H${x + l - r} A${r} ${r} 0 0 1 ${x + l} ${yHaut + r} V${yHaut + h - r} A${r} ${r} 0 0 1 ${x + l - r} ${yHaut + h} `
       + `H${x + r} A${r} ${r} 0 0 1 ${x} ${yHaut + h - r} V${yHaut + r} A${r} ${r} 0 0 1 ${x + r} ${yHaut} Z`;
+  }
+
+  cadre(x, yHaut, l, h, { fond = null, bord = null, epaisseur = 0.6, rayon = 5 } = {}) {
+    const d = this.cheminCadre(x, yHaut, l, h, rayon);
     this.page.drawSvgPath(d, { x: 0, y: A4[1], ...(fond ? { color: this.couleur(fond) } : {}), ...(bord ? { borderColor: this.couleur(bord), borderWidth: epaisseur } : {}) });
   }
 
@@ -127,6 +146,48 @@ class Redacteur {
     this.page = this.doc.addPage(A4);
     this.pages.push(this.page);
     this.y = HAUT_CONTENU;
+    this.decorerPage();
+  }
+
+  /** Fond et décoration de page propres au style visuel (dessinés avant tout contenu). */
+  decorerPage() {
+    const p = this.page;
+    if (FOND_PAGE) p.drawRectangle({ x: 0, y: 0, width: A4[0], height: A4[1], color: this.couleur(FOND_PAGE) });
+    if (DECO === 'points' || DECO === 'etoiles') {
+      // Trame de points (carnet) ou petites étoiles irrégulières (nuit)
+      const pas = DECO === 'points' ? 14 : 23;
+      let graine = 7;
+      const alea = () => { graine = (graine * 9301 + 49297) % 233280; return graine / 233280; };
+      for (let x = 18; x < A4[0] - 10; x += pas) {
+        for (let y = 18; y < A4[1] - 10; y += pas) {
+          if (DECO === 'points') p.drawCircle({ x, y, size: 0.55, color: this.couleur(GRILLE) });
+          else if (alea() < 0.22) p.drawCircle({ x: x + alea() * pas, y: y + alea() * pas, size: 0.3 + alea() * 0.6, color: this.couleur('#C9D6E8'), opacity: 0.25 + alea() * 0.35 });
+        }
+      }
+    }
+    if (DECO === 'bande') p.drawRectangle({ x: 0, y: 0, width: 16, height: A4[1], color: this.couleur(LAITON) });
+    if (DECO === 'cadrePage') {
+      p.drawRectangle({ x: 22, y: 22, width: A4[0] - 44, height: A4[1] - 44, borderColor: this.couleur(CADRE), borderWidth: 0.9 });
+      if (STYLE_CADRE === 'double') p.drawRectangle({ x: 26, y: 26, width: A4[0] - 52, height: A4[1] - 52, borderColor: this.couleur(CADRE), borderWidth: 0.4 });
+    }
+  }
+
+  /** Barre d'un graphique, selon le style : pleine, arrondie, carrée, en contour ou fine (tige + pastille). */
+  barre(x, yHaut, l, h, couleur, { vertical = false } = {}) {
+    if (STYLE_BARRE === 'fine') {
+      const c = this.couleur(couleur);
+      if (vertical) {
+        this.page.drawLine({ start: { x: x + l / 2, y: A4[1] - yHaut - h }, end: { x: x + l / 2, y: A4[1] - yHaut - 3 }, thickness: 2, color: c });
+        this.page.drawCircle({ x: x + l / 2, y: A4[1] - yHaut - 3, size: 4, color: c });
+      } else {
+        this.page.drawLine({ start: { x, y: A4[1] - yHaut - h / 2 }, end: { x: x + l - 3, y: A4[1] - yHaut - h / 2 }, thickness: 2, color: c });
+        this.page.drawCircle({ x: x + l - 3, y: A4[1] - yHaut - h / 2, size: 4, color: c });
+      }
+      return;
+    }
+    if (STYLE_BARRE === 'contour') { this.cadre(x, yHaut, l, h, { fond: FOND, bord: couleur, epaisseur: 1.3, rayon: 0 }); return; }
+    const rayon = STYLE_BARRE === 'arrondie' ? Math.min(l, h) / 2 : STYLE_BARRE === 'carree' ? 0 : 2;
+    this.cadre(x, yHaut, l, h, { fond: couleur, rayon });
   }
 
   place(h) {
@@ -147,6 +208,33 @@ class Redacteur {
    * Graphique encadré : rectangle à coins arrondis autour de ce que dessine « dessin » (synchrone ou non).
    * « besoin » : hauteur à réserver pour que le cadre ne commence pas en bas de page.
    */
+  /** Cadre d'un graphique selon le style (dessiné après le contenu : jamais de remplissage par-dessus). */
+  dessinerCadre(x, y, l, h) {
+    const P = (px, py) => ({ x: px, y: A4[1] - py });
+    const ligne = (a, b, ep = 0.9, coul = CADRE, tirets) => this.page.drawLine({ start: P(...a), end: P(...b), thickness: ep, color: this.couleur(coul), ...(tirets ? { dashArray: tirets } : {}) });
+    switch (STYLE_CADRE) {
+      case 'aucun':
+        ligne([x, y], [x + l, y], 0.6); break;
+      case 'filets':
+        ligne([x, y], [x + l, y], 1.6); ligne([x, y + 3], [x + l, y + 3], 0.5);
+        ligne([x, y + h - 3], [x + l, y + h - 3], 0.5); ligne([x, y + h], [x + l, y + h], 1.6); break;
+      case 'pointille':
+        this.page.drawSvgPath(this.cheminCadre(x, y, l, h, RAYON), { x: 0, y: A4[1], borderColor: this.couleur(CADRE), borderWidth: 1, borderDashArray: [3, 2.5] }); break;
+      case 'gauche':
+        this.page.drawRectangle({ x, y: A4[1] - y - h, width: 4, height: h, color: this.couleur(LAITON) });
+        ligne([x + 4, y + h], [x + l, y + h], 0.5, FILET); break;
+      case 'ombre':
+        this.page.drawRectangle({ x: x + 3, y: A4[1] - y - h - 3, width: l, height: 3, color: this.couleur(CADRE) });
+        this.page.drawRectangle({ x: x + l, y: A4[1] - y - h - 3, width: 3, height: h, color: this.couleur(CADRE) });
+        this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 0.8, rayon: RAYON }); break;
+      case 'double':
+        this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 1.4, rayon: RAYON });
+        this.cadre(x + 3, y + 3, l - 6, h - 6, { bord: CADRE, epaisseur: 0.5, rayon: RAYON }); break;
+      default:
+        this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 0.9, rayon: RAYON });
+    }
+  }
+
   encadre(besoin, dessin) {
     this.place(Math.min(besoin, BAS_CONTENU - HAUT_CONTENU - 30) + 24);
     this.enCadre = { page: this.page, y0: this.y, yDebut: this.y + 12, segments: [] };
@@ -159,7 +247,7 @@ class Redacteur {
       const courante = this.page;
       for (const sg of c.segments) {
         this.page = sg.page;
-        this.cadre(MARGE - 12, sg.y0, LARGEUR + 24, sg.y1 - sg.y0, { bord: '#C3CCD2', epaisseur: 0.9, rayon: 9 });
+        this.dessinerCadre(MARGE - 12, sg.y0, LARGEUR + 24, sg.y1 - sg.y0);
       }
       this.page = courante;
       this.y += 12;
@@ -242,7 +330,7 @@ class Redacteur {
       this.y += 2;
     };
     bloc('Ce qui s\'est passé', x.faits, ENCRE);
-    bloc('Vécu du patient', x.vecu, '#3B4550');
+    bloc('Vécu du patient', x.vecu, DOUX);
     this.place(8);
     this.page.drawLine({ start: { x: MARGE + R0, y: A4[1] - this.y - 2 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 2 }, thickness: 0.5, color: this.couleur(FILET) });
     this.y += 12;
@@ -252,10 +340,55 @@ class Redacteur {
     if (nouvellePage && this.y > HAUT_CONTENU + 1) this.nouvellePage();
     else if (!this.place(50 + besoin)) this.y += 16;
     const num = String(numero);
-    this.cadre(MARGE, this.y, 22, 22, { fond: LAITON, rayon: 4 });
-    this.texte(num, MARGE + 11 - this.largeur(num, 11, 'gras') / 2, this.y + 15.2, { taille: 11, police: 'gras', couleur: '#FFFFFF' });
-    this.texte(titre, MARGE + 32, this.y + 16, { taille: 14, police: 'gras' });
-    this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - 29 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 29 }, thickness: 0.8, color: this.couleur(FILET) });
+    const titreAff = ENTETE === 'centre' || ENTETE === 'crochets' ? titre.toUpperCase() : titre;
+    if (ENTETE === 'marge') {
+      // Grand numéro en couleur dans la marge, titre en gras, trait court de couleur
+      const n2 = num.padStart(2, '0');
+      this.texte(n2, MARGE - 4, this.y + 24, { taille: 30, police: 'gras', couleur: LAITON });
+      const xt = MARGE + this.largeur(n2, 30, 'gras') + 6;
+      this.texte(titre, xt, this.y + 21, { taille: 15.5, police: 'gras' });
+      this.page.drawRectangle({ x: xt, y: A4[1] - this.y - 30, width: 46, height: 3, color: this.couleur(LAITON) });
+    } else if (ENTETE === 'centre') {
+      // Petit numéro, titre centré en capitales entre deux doubles filets (journal)
+      const n = `— ${num} —`;
+      this.texte(n, MARGE + LARGEUR / 2 - this.largeur(n, 8, 'gras') / 2, this.y + 6, { taille: 8, police: 'gras', couleur: DOUX });
+      const lt = this.largeur(titreAff, 13, 'gras');
+      this.texte(titreAff, MARGE + LARGEUR / 2 - lt / 2, this.y + 21, { taille: 13, police: 'gras' });
+      for (const [yy, ep] of [[26.5, 1.4], [29, 0.4]]) this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - yy }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - yy }, thickness: ep, color: this.couleur(ENCRE) });
+    } else if (ENTETE === 'crochets') {
+      // Machine à écrire : [04] TITRE, souligné en pointillés
+      this.texte(`[${num.padStart(2, '0')}]`, MARGE, this.y + 16, { taille: 13, police: 'gras', couleur: LAITON });
+      this.texte(titreAff, MARGE + this.largeur('[00]', 13, 'gras') + 10, this.y + 16, { taille: 12.5, police: 'gras' });
+      this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - 27 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 27 }, thickness: 1, color: this.couleur(ENCRE), dashArray: [4, 3] });
+    } else if (ENTETE === 'onglet') {
+      // Onglet de couleur avec le numéro, titre en couleur, trait fin
+      const wl = this.largeur(num, 12, 'gras') + 20;
+      this.cadre(MARGE - 6, this.y - 1, wl, 24, { fond: LAITON, rayon: 6 });
+      this.texte(num, MARGE - 6 + wl / 2 - this.largeur(num, 12, 'gras') / 2, this.y + 15.5, { taille: 12, police: 'gras', couleur: SUR_ACCENT });
+      this.texte(titre, MARGE + wl + 4, this.y + 16, { taille: 14.5, police: 'gras', couleur: LAITON });
+      this.page.drawLine({ start: { x: MARGE + wl + 4, y: A4[1] - this.y - 27 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 27 }, thickness: 0.8, color: this.couleur(LAITON), dashArray: [1, 2.5] });
+    } else if (ENTETE === 'cercle') {
+      this.page.drawCircle({ x: MARGE + 12, y: A4[1] - this.y - 11, size: 12, color: this.couleur(LAITON) });
+      this.texte(num, MARGE + 12 - this.largeur(num, 11, 'gras') / 2, this.y + 15, { taille: 11, police: 'gras', couleur: SUR_ACCENT });
+      this.texte(titre, MARGE + 32, this.y + 16, { taille: 14.5, police: 'gras', couleur: LAITON });
+      this.page.drawLine({ start: { x: MARGE + 32, y: A4[1] - this.y - 29 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 29 }, thickness: 2, color: this.couleur(FILET) });
+    } else if (ENTETE === 'bandeau') {
+      // Bandeau plein de la couleur du style, titre en blanc
+      this.cadre(MARGE, this.y - 2, LARGEUR, 28, { fond: LAITON, rayon: Math.min(RAYON, 9) * 0.6 });
+      this.texte(num, MARGE + 12, this.y + 16.5, { taille: 12, police: 'gras', couleur: SUR_ACCENT });
+      this.page.drawLine({ start: { x: MARGE + 30, y: A4[1] - this.y - 4 }, end: { x: MARGE + 30, y: A4[1] - this.y - 20 }, thickness: 0.8, color: this.couleur(SUR_ACCENT), opacity: 0.6 });
+      this.texte(titre, MARGE + 40, this.y + 16.5, { taille: 13.5, police: 'gras', couleur: SUR_ACCENT });
+    } else if (ENTETE === 'ligne') {
+      // Numéro et titre dans la couleur du style, épais trait dessous
+      this.texte(num.padStart(2, '0'), MARGE, this.y + 17, { taille: 17, police: 'gras', couleur: LAITON });
+      this.texte(titre, MARGE + 34, this.y + 16, { taille: 15, police: 'gras', couleur: LAITON });
+      this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - 28 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 28 }, thickness: 1.8, color: this.couleur(LAITON) });
+    } else {
+      this.cadre(MARGE, this.y, 22, 22, { fond: LAITON, rayon: Math.min(RAYON, 11) * 0.45 });
+      this.texte(num, MARGE + 11 - this.largeur(num, 11, 'gras') / 2, this.y + 15.2, { taille: 11, police: 'gras', couleur: SUR_ACCENT });
+      this.texte(titre, MARGE + 32, this.y + 16, { taille: 14, police: 'gras' });
+      this.page.drawLine({ start: { x: MARGE, y: A4[1] - this.y - 29 }, end: { x: MARGE + LARGEUR, y: A4[1] - this.y - 29 }, thickness: 0.8, color: this.couleur(FILET) });
+    }
     this.sommaire.push({ numero, titre, page: this.pages.length - 1, y: this.y });
     this.y += 40;
   }
@@ -273,7 +406,7 @@ class Redacteur {
     const l = (LARGEUR - (cases.length - 1) * 8) / cases.length;
     cases.forEach((c, i) => {
       const x = MARGE + i * (l + 8);
-      this.cadre(x, this.y, l, h, { fond: FOND, rayon: 5 });
+      this.cadre(x, this.y, l, h, { fond: FOND, rayon: Math.min(RAYON, 9) * 0.6 });
       let xt = x + 11;
       if (Number.isInteger(c.icone)) { this.meteo(c.icone, x + 9, this.y + 7, 24); xt = x + 39; }
       this.texte(c.valeur, xt, this.y + 27, { taille: 18, police: 'gras' });
@@ -289,7 +422,7 @@ class Redacteur {
     const pad = 5;
     const dessinerEntete = () => {
       const h = taille * 1.4 + 2 * pad;
-      this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur('#E6EBEE') });
+      this.page.drawRectangle({ x: MARGE, y: A4[1] - this.y - h, width: LARGEUR, height: h, color: this.couleur(TETE) });
       let x = MARGE;
       colonnes.forEach((c, i) => { this.texte(c.titre, x + pad, this.y + pad + taille, { taille, police: 'gras' }); x += largeurs[i]; });
       this.y += h;
@@ -328,7 +461,7 @@ class Redacteur {
     const yDe = (note) => bas - (note / 10) * (bas - haut);
     const P = (x, y) => ({ x, y: A4[1] - y });
     for (let v = 0; v <= 10; v++) {
-      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.35, color: this.couleur(v === 0 ? '#9AA5AD' : v % 2 ? '#EEF1F3' : '#E1E6E9') });
+      this.page.drawLine({ start: P(gauche, yDe(v)), end: P(droite, yDe(v)), thickness: v === 0 ? 0.7 : 0.35, color: this.couleur(v === 0 ? AXE : GRILLE), opacity: v === 0 || v % 2 === 0 ? 1 : 0.55 });
       const lib = String(v);
       this.texte(lib, gauche - 21 - this.largeur(lib, 7.5, 'gras'), yDe(v) + 2.7, { taille: 7.5, police: 'gras', couleur: DOUX });
       this.meteo(v, gauche - 17, yDe(v) - 6.5, 13);
@@ -342,7 +475,7 @@ class Redacteur {
       const i = grille.findIndex((s) => s.date === d);
       const xm = n <= 2 ? xDe(i) : (xDe(i) + xDe(Math.min(i + 1, n - 1))) / 2;
       const lib = C.formatDateCourte(d).slice(0, 5);
-      this.page.drawLine({ start: P(xDe(i), bas), end: P(xDe(i), bas + 3), thickness: 0.5, color: this.couleur('#9AA5AD') });
+      this.page.drawLine({ start: P(xDe(i), bas), end: P(xDe(i), bas + 3), thickness: 0.5, color: this.couleur(AXE) });
       this.texte(lib, xm - this.largeur(lib, 8) / 2, bas + 14, { taille: 8, couleur: DOUX });
     });
     // Ligne reliant les notes de créneaux consécutifs
@@ -367,7 +500,7 @@ class Redacteur {
         if (s.creneau === 'matin') this.page.drawCircle({ ...P(x, y), size: t, color: c, borderColor: this.couleur('#FFFFFF'), borderWidth: 0.6 });
         else this.page.drawRectangle({ x: x - t, y: A4[1] - y - t, width: 2 * t, height: 2 * t, color: c, borderColor: this.couleur('#FFFFFF'), borderWidth: 0.6 });
       } else if (s.statut === 'omis') {
-        const y = bas - 8, r = 2.6, g = this.couleur('#9AA5AD');
+        const y = bas - 8, r = 2.6, g = this.couleur(AXE);
         this.page.drawLine({ start: P(x - r, y - r), end: P(x + r, y + r), thickness: 0.9, color: g });
         this.page.drawLine({ start: P(x - r, y + r), end: P(x + r, y - r), thickness: 0.9, color: g });
       }
@@ -419,7 +552,7 @@ class Redacteur {
             const l = w / vs.length;
             vs.forEach((v, q) => this.page.drawRectangle({ x: x0 + 0.7 + q * l, y: A4[1] - y0 - 9, width: Math.max(0.6, l - 0.5), height: 9, color: this.couleur(couleur(v)) }));
           } else if (vs.length) this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur(couleur(vs[0])) });
-          else this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
+          else this.page.drawRectangle({ x: x0 + 0.7, y: A4[1] - y0 - 9, width: w, height: 9, color: this.couleur(FOND), borderColor: this.couleur(FILET), borderWidth: 0.5 });
           i = j + 1;
         }
       };
@@ -434,7 +567,7 @@ class Redacteur {
     item((cx, cy) => this.page.drawCircle({ ...P(cx, cy), size: 3.4, color: this.couleur(DOUX) }), 'Note du matin');
     item((cx, cy) => this.page.drawRectangle({ x: cx - 3.2, y: A4[1] - cy - 3.2, width: 6.4, height: 6.4, color: this.couleur(DOUX) }), 'Note du soir');
     item((cx, cy) => this.page.drawSvgPath(`M ${cx} ${cy - 4} L ${cx + 4} ${cy} L ${cx} ${cy + 4} L ${cx - 4} ${cy} Z`, { x: 0, y: A4[1], borderColor: this.couleur(LAITON), borderWidth: 1.1 }), 'Note prévue');
-    item((cx, cy) => { const g = this.couleur('#9AA5AD'); this.page.drawLine({ start: P(cx - 2.6, cy - 2.6), end: P(cx + 2.6, cy + 2.6), thickness: 0.9, color: g }); this.page.drawLine({ start: P(cx - 2.6, cy + 2.6), end: P(cx + 2.6, cy - 2.6), thickness: 0.9, color: g }); }, 'Créneau omis');
+    item((cx, cy) => { const g = this.couleur(AXE); this.page.drawLine({ start: P(cx - 2.6, cy - 2.6), end: P(cx + 2.6, cy + 2.6), thickness: 0.9, color: g }); this.page.drawLine({ start: P(cx - 2.6, cy + 2.6), end: P(cx + 2.6, cy - 2.6), thickness: 0.9, color: g }); }, 'Créneau omis');
     this.y += legende;
     if (avecBandes) {
       for (const [titre, items] of [['Lieu', contexte.legendeLieux], ['Situation', contexte.legendeSituations]]) {
@@ -448,7 +581,7 @@ class Redacteur {
           if (xl + lw > MARGE + LARGEUR) { this.y += 14; xl = gauche + 50; }
           const yy = yl2();
           if (it.couleur) this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(it.couleur) });
-          else this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur('#F1F3F4'), borderColor: this.couleur(FILET), borderWidth: 0.5 });
+          else this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(FOND), borderColor: this.couleur(FILET), borderWidth: 0.5 });
           this.texte(it.libelle, xl + 12, yy + 3, { taille: 8.5, couleur: DOUX });
           xl += lw;
         }
@@ -473,7 +606,7 @@ class Redacteur {
       const titre = this.couper(e.titre, 9, 'normal', lc - 50)[0] + (this.largeur(e.titre, 9) > lc - 50 ? '…' : '');
       this.texte(titre, x + 18, y + 9, { taille: 9 });
       const fin = x + 18 + this.largeur(titre, 9) + 4, xp = x + lc - this.largeur(pg, 9, 'gras');
-      if (xp - 4 > fin) page.drawLine({ start: { x: fin, y: A4[1] - y - 8.4 }, end: { x: xp - 4, y: A4[1] - y - 8.4 }, thickness: 0.7, color: this.couleur('#AEB8BF'), dashArray: [0.7, 2.3] });
+      if (xp - 4 > fin) page.drawLine({ start: { x: fin, y: A4[1] - y - 8.4 }, end: { x: xp - 4, y: A4[1] - y - 8.4 }, thickness: 0.7, color: this.couleur(DOUX), dashArray: [0.7, 2.3] });
       this.texte(pg, xp, y + 9, { taille: 9, police: 'gras' });
       try { // lien vers la section
         const ctx = this.doc.context;
@@ -491,7 +624,7 @@ class Redacteur {
    * mode 'humeur' : valeur = moyenne sur 10, couleur du niveau, pictogramme ; la plus basse est signalée.
    * mode 'compte' : valeur = nombre, une seule couleur.
    */
-  barres(lignes, { mode = 'humeur', couleur = '#5E97C6', max = null, signalerBas = true } = {}) {
+  barres(lignes, { mode = 'humeur', couleur = BARRE_FAV, max = null, signalerBas = true } = {}) {
     if (!lignes.length) return;
     const hLigne = 21, hBarre = 11;
     const colLib = Math.min(175, Math.max(70, Math.max(...lignes.map((l) => this.largeur(l.libelle, 9, 'gras'))) + 10));
@@ -509,7 +642,7 @@ class Redacteur {
     const graduer = (yA, yB) => {
       for (let v = 0; v <= vmax; v += pasG) {
         const x = x0 + (v / vmax) * (x1 - x0);
-        this.page.drawLine({ start: { x, y: A4[1] - yA }, end: { x, y: A4[1] - yB }, thickness: v === 0 ? 0.6 : 0.3, color: this.couleur(v === 0 ? '#9AA5AD' : '#E1E6E9') });
+        this.page.drawLine({ start: { x, y: A4[1] - yA }, end: { x, y: A4[1] - yB }, thickness: v === 0 ? 0.6 : 0.3, color: this.couleur(v === 0 ? AXE : GRILLE) });
       }
     };
     for (const l of lignes) {
@@ -523,7 +656,7 @@ class Redacteur {
       if (l.valeur !== null && l.nombre > 0) {
         const w = Math.max(2, (l.valeur / vmax) * (x1 - x0));
         const coul = mode === 'humeur' ? COULEURS_NIVEAUX[Math.max(0, Math.min(10, Math.round(l.valeur)))] : couleur;
-        this.cadre(x0, yc - hBarre / 2, w, hBarre, { fond: coul, rayon: 2 });
+        this.barre(x0, yc - hBarre / 2, w, hBarre, coul);
         let xt = x0 + w + 5;
         if (mode === 'humeur') { this.meteo(Math.round(l.valeur), xt, yc - 7, 14); xt += 17; }
         const val = mode === 'humeur' ? C.nombreFr(l.valeur) : String(l.valeur);
@@ -554,7 +687,7 @@ class Redacteur {
     const centre = (x0 + x1) / 2, demi = (x1 - x0) / 2 - 34;
     const max = Math.max(1, ...lignes.flatMap((l) => [l.favorable, l.defavorable]));
     this.place(lignes.length * hLigne + 40);
-    const DEF = '#57627C', FAV = '#5E97C6';
+    const DEF = BARRE_DEF, FAV = BARRE_FAV;
     this.texte('Défavorable', centre - 8 - this.largeur('Défavorable', 8.5, 'gras'), this.y + 9, { taille: 8.5, police: 'gras', couleur: DEF });
     this.texte('Favorable', centre + 8, this.y + 9, { taille: 8.5, police: 'gras', couleur: FAV });
     this.y += 16;
@@ -564,18 +697,18 @@ class Redacteur {
       this.texte(l.libelle, MARGE, yc + 3.4, { taille: 9.5, police: 'gras' });
       const wd = (l.defavorable / max) * demi, wf = (l.favorable / max) * demi;
       if (l.defavorable) {
-        this.cadre(centre - 1 - wd, yc - hBarre / 2, wd, hBarre, { fond: DEF, rayon: 2 });
+        this.barre(centre - 1 - wd, yc - hBarre / 2, wd, hBarre, DEF);
         const t = String(l.defavorable);
         this.texte(t, centre - 1 - wd - 4 - this.largeur(t, 9, 'gras'), yc + 3.2, { taille: 9, police: 'gras' });
       }
       if (l.favorable) {
-        this.cadre(centre + 1, yc - hBarre / 2, wf, hBarre, { fond: FAV, rayon: 2 });
+        this.barre(centre + 1, yc - hBarre / 2, wf, hBarre, FAV);
         this.texte(String(l.favorable), centre + 1 + wf + 4, yc + 3.2, { taille: 9, police: 'gras' });
       }
       if (!l.defavorable && !l.favorable) this.texte('—', centre + 6, yc + 3.2, { taille: 9, couleur: DOUX });
       this.y += hLigne;
     }
-    this.page.drawLine({ start: { x: centre, y: A4[1] - yHaut + 2 }, end: { x: centre, y: A4[1] - this.y }, thickness: 0.8, color: this.couleur('#9AA5AD') });
+    this.page.drawLine({ start: { x: centre, y: A4[1] - yHaut + 2 }, end: { x: centre, y: A4[1] - this.y }, thickness: 0.8, color: this.couleur(AXE) });
     this.y += 6;
     if (total) this.paragraphe(`Nombre d'évaluations (sur ${total}) où au moins un facteur du domaine a été coché, de chaque côté.`, { taille: 8.3, couleur: DOUX });
   }
@@ -587,12 +720,12 @@ class Redacteur {
     const max = Math.max(1, ...compte);
     const pas = LARGEUR / 11, lb = Math.min(28, pas - 10);
     const base = this.y + h;
-    this.page.drawLine({ start: { x: MARGE, y: A4[1] - base }, end: { x: MARGE + LARGEUR, y: A4[1] - base }, thickness: 0.6, color: this.couleur('#9AA5AD') });
+    this.page.drawLine({ start: { x: MARGE, y: A4[1] - base }, end: { x: MARGE + LARGEUR, y: A4[1] - base }, thickness: 0.6, color: this.couleur(AXE) });
     compte.forEach((n, i) => {
       const xc = MARGE + i * pas + pas / 2;
       if (n) {
         const hb = Math.max(3, (n / max) * (h - 16));
-        this.cadre(xc - lb / 2, base - hb, lb, hb, { fond: COULEURS_NIVEAUX[i], rayon: 2 });
+        this.barre(xc - lb / 2, base - hb, lb, hb, COULEURS_NIVEAUX[i], { vertical: true });
         const t = String(n);
         this.texte(t, xc - this.largeur(t, 8.5, 'gras') / 2, base - hb - 4, { taille: 8.5, police: 'gras' });
       }
@@ -614,7 +747,7 @@ class Redacteur {
         this.page.drawImage(img, { x: MARGE, y: A4[1] - yH - h, width: l, height: h });
       } catch { fondPng = null; }
     }
-    if (!fondPng) this.page.drawRectangle({ x: MARGE, y: A4[1] - yH - h, width: l, height: h, color: this.couleur('#F4F6F7') });
+    if (!fondPng) this.page.drawRectangle({ x: MARGE, y: A4[1] - yH - h, width: l, height: h, color: this.couleur(FOND) });
     this.page.drawRectangle({ x: MARGE, y: A4[1] - yH - h, width: l, height: h, borderColor: this.couleur(FILET), borderWidth: 0.8 });
     const nmax = Math.max(...points.map((p) => p.nombre));
     const tries = [...points].sort((a, b) => b.nombre - a.nombre);
@@ -645,21 +778,22 @@ class Redacteur {
       this.cadre(xe, ye, w, 22, { fond: '#FFFFFF', bord: FILET, epaisseur: 0.4, rayon: 3 });
       // Pictogramme météo de l'humeur moyenne du lieu, en plus de la couleur du disque
       this.meteo(Math.max(0, Math.min(10, Math.round(p.moyenne))), xe + 3, ye + 3, 16);
-      this.texte(t1, xe + 23, ye + 9, { taille: 8, police: 'gras' });
-      this.texte(t2, xe + 23, ye + 18.5, { taille: 7, couleur: DOUX });
+      // Étiquettes sur fond blanc : texte foncé, quel que soit le style
+      this.texte(t1, xe + 23, ye + 9, { taille: 8, police: 'gras', couleur: '#1E2A33' });
+      this.texte(t2, xe + 23, ye + 18.5, { taille: 7, couleur: '#5E6B74' });
     }
     // Échelle et attribution
     const lat = points.reduce((a, p) => a + p.lat, 0) / points.length;
     const e = K.echelle(cadre, lat);
     const xe = MARGE + 10, ye = yH + h - 10;
     this.page.drawRectangle({ x: xe - 4, y: A4[1] - ye - 4, width: e.pixels * k + 8 + this.largeur(e.libelle, 7) + 6, height: 13, color: this.couleur('#FFFFFF'), opacity: 0.85 });
-    this.page.drawLine({ start: { x: xe, y: A4[1] - ye }, end: { x: xe + e.pixels * k, y: A4[1] - ye }, thickness: 1.6, color: this.couleur(ENCRE) });
-    this.texte(e.libelle, xe + e.pixels * k + 4, ye + 2.5, { taille: 7, couleur: ENCRE });
+    this.page.drawLine({ start: { x: xe, y: A4[1] - ye }, end: { x: xe + e.pixels * k, y: A4[1] - ye }, thickness: 1.6, color: this.couleur('#1E2A33') });
+    this.texte(e.libelle, xe + e.pixels * k + 4, ye + 2.5, { taille: 7, couleur: '#1E2A33' });
     if (fondPng) {
       const a = K.ATTRIBUTION;
       const wa = this.largeur(a, 6.5) + 6;
       this.page.drawRectangle({ x: MARGE + l - wa, y: A4[1] - yH - h, width: wa, height: 10, color: this.couleur('#FFFFFF'), opacity: 0.85 });
-      this.texte(a, MARGE + l - wa + 3, yH + h - 2.5, { taille: 6.5, couleur: DOUX });
+      this.texte(a, MARGE + l - wa + 3, yH + h - 2.5, { taille: 6.5, couleur: '#5E6B74' });
     }
     this.y = yH + h + 8;
   }
@@ -714,7 +848,9 @@ export async function genererRapport(PDFLib, donnees, options) {
 
   const toutes = donnees.evaluations;
   const evals = C.trierChrono(C.dansPeriode(toutes, debut, fin));
-  const textes = new Map(evals.map((e) => [e.id, C.textesPourRapport(e, modeTextes)]));
+  // Tous les événements notés : pour savoir si une version validée les raconte déjà (pas de doublon)
+  const evenementsTous = ((donnees.parametres || {}).evenements) || [];
+  const textes = new Map(evals.map((e) => [e.id, C.textesPourRapport(e, modeTextes, evenementsTous)]));
   const nbReformules = [...textes.values()].filter((t) => t.reformule).length;
   const modifsReelles = (e) => (e.historique || []).filter((h) => h.changements.some((c) => c.champ !== 'reformulation') && !estCompletion(h));
   const parametres = donnees.parametres || {};
@@ -756,21 +892,47 @@ export async function genererRapport(PDFLib, donnees, options) {
   doc.setLanguage('fr-LU');
   doc.setCreationDate(new Date(instant));
   doc.setModificationDate(new Date(instant));
-  const polices = {
-    normal: await doc.embedFont(PDFLib.StandardFonts.Helvetica),
-    gras: await doc.embedFont(PDFLib.StandardFonts.HelveticaBold),
-    italique: await doc.embedFont(PDFLib.StandardFonts.HelveticaOblique),
-  };
+  const theme = themeRapport();
+  appliquerTheme(theme);
+  const SF = PDFLib.StandardFonts;
+  const familles = { serif: [SF.TimesRoman, SF.TimesRomanBold, SF.TimesRomanItalic], mono: [SF.Courier, SF.CourierBold, SF.CourierOblique], sans: [SF.Helvetica, SF.HelveticaBold, SF.HelveticaOblique] };
+  const [fn, fg, fi] = familles[theme.police] || familles.sans;
+  const polices = { normal: await doc.embedFont(fn), gras: await doc.embedFont(fg), italique: await doc.embedFont(fi) };
   const periodeCourte = `Du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)}`;
   const R = new Redacteur(PDFLib, doc, polices, { gauche: `Baromètre de l'humeur – ${patient.nom ? `${patient.nom} – ` : ''}${titreDoc}`, droite: periodeCourte });
 
   // Page de garde : titre, identités, informations du rapport, chiffres clés, sommaire
   R.y = 46;
-  R.page.drawRectangle({ x: 0, y: A4[1] - 8, width: A4[0], height: 8, color: R.couleur(LAITON) });
-  R.texte('BAROMÈTRE DE L\'HUMEUR  ·  RAPPORT DE SUIVI', MARGE, R.y + 9, { taille: 8.5, police: 'gras', couleur: LAITON });
-  R.y += 18;
-  R.paragraphe(titreDoc, { taille: 24, police: 'gras', interligne: 1.15, apres: 2 });
-  R.paragraphe(`Du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`, { taille: 12, police: 'gras', couleur: DOUX, apres: 12 });
+  const periodeLongue = `Du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`;
+  if (COUVERTURE === 'bandeau') {
+    // Grand aplat de couleur en haut de la page de garde, titre en blanc
+    const lignesT = R.couper(titreDoc, 26, 'gras', LARGEUR);
+    const hB = 96 + lignesT.length * 30;
+    R.page.drawRectangle({ x: 0, y: A4[1] - hB, width: A4[0], height: hB, color: R.couleur(LAITON) });
+    R.texte('BAROMÈTRE DE L\'HUMEUR  ·  RAPPORT DE SUIVI', MARGE, 52, { taille: 8.5, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' });
+    lignesT.forEach((l, k) => R.texte(l, MARGE, 92 + k * 30, { taille: 26, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' }));
+    R.texte(periodeLongue, MARGE, 92 + lignesT.length * 30 - 4, { taille: 12, police: 'gras', couleur: FOND_PAGE || '#FFFFFF' });
+    R.y = hB + 22;
+  } else if (COUVERTURE === 'centree') {
+    // Titre centré entre deux filets, comme une une de journal ou une page sobre
+    const centre = (t, taille, police, couleur) => R.texte(t, MARGE + LARGEUR / 2 - R.largeur(t, taille, police) / 2, R.y + taille, { taille, police, couleur });
+    R.y = 54;
+    centre('BAROMÈTRE DE L\'HUMEUR', 9, 'gras', DOUX); R.y += 18;
+    R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y }, thickness: 1.6, color: R.couleur(ENCRE) });
+    R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y - 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y - 3 }, thickness: 0.4, color: R.couleur(ENCRE) });
+    R.y += 12;
+    for (const l of R.couper(titreDoc, 25, 'gras', LARGEUR)) { centre(l, 25, 'gras', ENCRE); R.y += 30; }
+    centre(periodeLongue, 11.5, 'italique', DOUX); R.y += 22;
+    R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y }, thickness: 0.4, color: R.couleur(ENCRE) });
+    R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y - 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y - 3 }, thickness: 1.6, color: R.couleur(ENCRE) });
+    R.y += 20;
+  } else {
+    R.page.drawRectangle({ x: 0, y: A4[1] - 8, width: A4[0], height: 8, color: R.couleur(LAITON) });
+    R.texte('BAROMÈTRE DE L\'HUMEUR  ·  RAPPORT DE SUIVI', MARGE, R.y + 9, { taille: 8.5, police: 'gras', couleur: LAITON });
+    R.y += 18;
+    R.paragraphe(titreDoc, { taille: 24, police: 'gras', interligne: 1.15, apres: 2 });
+    R.paragraphe(periodeLongue, { taille: 12, police: 'gras', couleur: DOUX, apres: 12 });
+  }
 
   // Identités : patient et thérapeute, dans deux cadres
   const nomTherapeute = (therapeute.nom || '').trim() || destinataire;
@@ -791,7 +953,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     const hauteurLignes = (l) => l.reduce((h, [, , tl]) => h + tl * 1.42, 0);
     const h = Math.max(hauteurLignes(lp) + (cnsVisible ? 26 : 0), hauteurLignes(lt)) + 36;
     const carte = (x, titre, l, cns) => {
-      R.cadre(x, R.y, col, h, { fond: FOND, rayon: 6 });
+      R.cadre(x, R.y, col, h, { fond: FOND, rayon: Math.min(RAYON, 9) * 0.7 });
       R.page.drawRectangle({ x, y: A4[1] - R.y - h + 6, width: 3, height: h - 12, color: R.couleur(LAITON) });
       R.texte(titre, x + 14, R.y + 18, { taille: 7.8, police: 'gras', couleur: LAITON });
       let y = R.y + 26;
@@ -823,7 +985,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.texte(lib, MARGE, R.y + 9.5, { taille: 9, couleur: DOUX });
       R.couper(val, 9.5, 'gras', LARGEUR - 120).forEach((l, k) => R.texte(l, MARGE + 120, R.y + 9.5 + k * 13, { taille: 9.5, police: 'gras' }));
       R.y += 15.5;
-      R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y + 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y + 3 }, thickness: 0.35, color: R.couleur('#E1E6E9') });
+      R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y + 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y + 3 }, thickness: 0.35, color: R.couleur(GRILLE) });
     }
     R.y += 14;
   }
@@ -852,7 +1014,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   const NB_SECTIONS = 12 + (synthese ? 1 : 0) + (avecDomaines ? 1 : 0) + (avecEvenements ? 1 : 0);
   let numSection = 0;
   const hSommaire = NB_SECTIONS * 16 + 40;
-  R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: 6 });
+  R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: Math.min(RAYON, 9) * 0.7 });
   R.texte('Sommaire', MARGE + 10, R.y + 20, { taille: 12, police: 'gras' });
   const pageSommaire = R.page, ySommaire = R.y + 30;
   R.y += hSommaire + 12;
@@ -863,7 +1025,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   const lignesAvert = R.couper(avert, 8.6, 'italique', LARGEUR - 24);
   const hAvert = lignesAvert.length * 8.6 * 1.4 + 14;
   R.place(hAvert);
-  R.cadre(MARGE, R.y, LARGEUR, hAvert, { fond: FOND, rayon: 5 });
+  R.cadre(MARGE, R.y, LARGEUR, hAvert, { fond: FOND, rayon: Math.min(RAYON, 9) * 0.6 });
   lignesAvert.forEach((l, i) => R.texte(l, MARGE + 12, R.y + 7 + 8.6 + i * 8.6 * 1.4, { taille: 8.6, police: 'italique', couleur: DOUX }));
   R.y += hAvert + 4;
 
@@ -892,8 +1054,23 @@ export async function genererRapport(PDFLib, donnees, options) {
     }
     if (evenements.length) {
       if (contexte) R.sousTitre('Événements de la période');
-      evenements.forEach((x, i) => R.evenement(i + 1, x));
-      R.paragraphe('Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s\'est passé de ce qu\'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l\'impact (positif ou négatif) est celui qu\'indique le patient.', { taille: 8.3, police: 'italique', couleur: DOUX });
+      if (type === 'synthetique') evenements.forEach((x, i) => R.evenement(i + 1, x));
+      else {
+        // Rapport complet : un tableau d'ensemble ; le texte de chaque événement figure une seule fois,
+        // avec l'évaluation qu'il concerne (annexe), ou ci-dessous s'il n'y a pas d'évaluation pour ce moment
+        R.tableau(
+          [{ titre: 'N°', part: 0.45 }, { titre: 'Moment', part: 2.2 }, { titre: 'Événement', part: 3.6 }, { titre: 'Impact', part: 1 }],
+          evenements.map((x, i) => [String(i + 1), C.majuscule(C.libelleMomentEvenement(x)), x.titre || (x.faits || '').slice(0, 80), C.IMPACTS[x.impact] ? C.IMPACTS[x.impact].replace('Impact ', '') : '—']),
+          { taille: 8.8 },
+        );
+        const avecEval = new Set(evals.map((e) => e.creneauId));
+        const orphelins = evenements.map((x, i) => ({ x, n: i + 1 })).filter(({ x }) => !avecEval.has(C.creneauEvenement(x)));
+        if (orphelins.length) {
+          R.sousTitre(orphelins.length > 1 ? 'Événements sans évaluation correspondante' : 'Événement sans évaluation correspondante');
+          orphelins.forEach(({ x, n }) => R.evenement(n, x));
+        }
+      }
+      R.paragraphe(`Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s'est passé de ce qu'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l'impact (positif ou négatif) est celui qu'indique le patient.${type === 'synthetique' ? '' : ' Le détail de chaque événement figure une seule fois, avec l\'évaluation qu\'il concerne, dans l\'annexe chronologique.'}`, { taille: 8.3, police: 'italique', couleur: DOUX });
     }
   }
 
@@ -942,11 +1119,11 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // 4. Graphique
-  R.section(++numSection, 'Graphique chronologique', 330);
+  R.section(++numSection, 'Graphique chronologique', 520);
   if (grille.length > 2 * 400) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
-    R.encadre(320, () => R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }));
+    R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }); });
     R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
   }
 
@@ -961,7 +1138,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     const max = Math.max(...freq.map((f) => f.nombre));
     const lignes = l.slice(0, type === 'synthetique' ? 10 : 20);
     R.encadre(lignes.length * 21 + 18, () => R.barres(lignes.map((f) => ({ libelle: f.libelle, valeur: f.nombre, nombre: f.nombre, detail: `${Math.round((f.nombre / evals.length) * 100)} % des évaluations` })),
-      { mode: 'compte', max, couleur: pol === 'favorable' ? '#5E97C6' : pol === 'defavorable' ? '#57627C' : '#9A9C94' }));
+      { mode: 'compte', max, couleur: pol === 'favorable' ? BARRE_FAV : pol === 'defavorable' ? BARRE_DEF : '#9A9C94' }));
     if (type === 'synthetique' && l.length > 10) R.paragraphe(`Rapport synthétique : les 10 motifs les plus fréquents sur ${l.length}.`, { taille: 8.5, couleur: DOUX });
     return true;
   };
@@ -1098,7 +1275,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     for (const e of evals) {
       R.place(80);
       R.y += 8;
-      R.cadre(MARGE, R.y, LARGEUR, 26, { fond: FOND, rayon: 4 });
+      R.cadre(MARGE, R.y, LARGEUR, 26, { fond: FOND, rayon: Math.min(RAYON, 9) * 0.45 });
       R.page.drawRectangle({ x: MARGE, y: A4[1] - R.y - 26, width: 4, height: 26, color: R.couleur(COULEURS_NIVEAUX[e.note]) });
       const tete = `${C.majuscule(C.formatDateLongue(e.date))} – ${C.LIBELLE_CRENEAU[e.creneau]}`;
       R.texte(tete, MARGE + 14, R.y + 17, { taille: 10.5, police: 'gras' });
@@ -1119,21 +1296,30 @@ export async function genererRapport(PDFLib, donnees, options) {
       }
       if (e.noteOrigine) R.paragraphe(e.noteOrigine, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
       const libMotifs = (l) => l.map((m) => `${m.libelle} (${C.LIBELLE_POLARITE[m.polarite].toLowerCase()})`).join(', ');
-      R.riche([['Motifs cochés : ', 'gras'], [e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun']]);
       const tx = textes.get(e.id);
-      if (tx.explication) { R.paragraphe(tx.reformule ? 'Description :' : 'Explication :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.explication, { taille: 9.5, apres: 3 }); }
-      if (tx.complement) { R.paragraphe('Complément :', { taille: 9.5, police: 'gras', apres: 0 }); R.paragraphe(tx.complement, { taille: 9.5, apres: 3 }); }
+      // Une version rédigée (méthode 3 et suivantes) présente déjà les motifs cochés : pas de liste en double
+      const motifsDansTexte = tx.reformule && (tx.methode || 1) >= 3;
+      if (!motifsDansTexte) R.riche([['Motifs cochés : ', 'gras'], [e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun']]);
+      // Texte sur plusieurs lignes (styles « par rubriques » ou « points clés »)
+      const texteRedige = (t) => {
+        for (const ligne of String(t).split(/\n+/).map((l) => l.trim()).filter(Boolean)) {
+          if (/^[–\-•]\s*/.test(ligne)) R.puces([ligne.replace(/^[–\-•]\s*/, '')], { taille: 9.5 });
+          else R.paragraphe(ligne, { taille: 9.5, apres: 3 });
+        }
+      };
+      if (tx.explication) { R.paragraphe(tx.reformule ? 'Description :' : 'Explication :', { taille: 9.5, police: 'gras', apres: 0 }); texteRedige(tx.explication); }
+      if (tx.complement) { R.paragraphe('Complément :', { taille: 9.5, police: 'gras', apres: 0 }); texteRedige(tx.complement); }
       if (e.prevision) {
         const p = e.prevision;
         R.riche([
           [`Prévision pour ${C.formatDateLongue(p.cible.date)}, ${C.LIBELLE_CRENEAU[p.cible.creneau].toLowerCase()} : `, 'gras'],
           [Number.isInteger(p.note) ? C.libelleNote(p.note) : 'aucune note'],
           ...(tx.prevision ? [['. Motif : ', 'gras'], [tx.prevision]] : []),
-          ...(p.motifs && p.motifs.length ? [[` (motifs associés : ${p.motifs.map((m) => m.libelle).join(', ')})`]] : []),
+          ...(p.motifs && p.motifs.length && !motifsDansTexte ? [[` (motifs associés : ${p.motifs.map((m) => m.libelle).join(', ')})`]] : []),
         ]);
       }
       if (tx.reformule) {
-        R.paragraphe(`${tx.methode >= 2 ? 'Texte rédigé à partir des saisies du patient (motifs et commentaires, orthographe corrigée, traduit en français si nécessaire)' : 'Texte corrigé et raccourci'}, relu et validé par le patient${tx.valideeLeUtc ? ` le ${C.formatDateHeure(tx.valideeLeUtc)}` : ''}.`, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
+        R.paragraphe(`${tx.methode >= 2 ? `Texte rédigé à partir des saisies du patient (motifs, commentaires${tx.evenementsIntegres ? ' et événements marquants' : ''}, orthographe corrigée, traduit en français si nécessaire)` : 'Texte corrigé et raccourci'}, relu et validé par le patient${tx.valideeLeUtc ? ` le ${C.formatDateHeure(tx.valideeLeUtc)}` : ''}.`, { taille: 8.5, police: 'italique', couleur: DOUX, apres: 3 });
         if (tx.original) {
           const o = tx.original;
           R.paragraphe('Texte original du patient :', { taille: 8.5, police: 'gras', couleur: DOUX, apres: 0 });
@@ -1144,13 +1330,17 @@ export async function genererRapport(PDFLib, donnees, options) {
         }
       }
       const evtsCreneau = evtsParCreneau.get(e.creneauId) || [];
-      if (evtsCreneau.length) {
+      if (evtsCreneau.length && tx.evenementsIntegres) {
+        // Déjà racontés dans la version rédigée : un simple renvoi aux numéros, sans redite
+        R.riche([[evtsCreneau.length > 1 ? 'Événements marquants : ' : 'Événement marquant : ', 'gras', LAITON],
+          ...evtsCreneau.flatMap(({ numero, x }, k) => [[`${k ? ' ; ' : ''}n° ${numero}${x.titre ? ` ${x.titre}` : ''}`], ...(C.IMPACTS[x.impact] ? [[` (${C.IMPACTS[x.impact].toLowerCase()})`, 'normal', COULEUR_IMPACT[x.impact]]] : [])])], { taille: 9, apres: 3 });
+      } else if (evtsCreneau.length) {
         R.y += 2;
         R.paragraphe(evtsCreneau.length > 1 ? 'Événements marquants de la période évaluée :' : 'Événement marquant de la période évaluée :', { taille: 9.5, police: 'gras', couleur: LAITON, apres: 2 });
         for (const { numero, x } of evtsCreneau) {
           R.riche([[`${numero}. ${C.majuscule(C.libelleMomentEvenement(x))}`, 'gras'], ...(x.titre ? [[` – ${x.titre}`, 'gras']] : []), ...(C.IMPACTS[x.impact] ? [[`  ·  ${C.IMPACTS[x.impact].toLowerCase()}`, 'gras', COULEUR_IMPACT[x.impact]]] : [])], { taille: 9.3, retrait: 6, apres: 2 });
           texteDetaille('Ce qui s\'est passé', x.faits);
-          texteDetaille('Vécu du patient', x.vecu, '#3B4550');
+          texteDetaille('Vécu du patient', x.vecu, DOUX);
         }
         R.y += 2;
       }

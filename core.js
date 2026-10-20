@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.20.0';
+export const VERSION_APP = '1.24.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -1158,6 +1158,58 @@ export function textesOriginaux(ev) {
  * 4 = idem, 500 caractères au plus par texte, sans redite quand des motifs se ressemblent.
  */
 export const METHODE_VERSION = 4;
+
+/**
+ * Styles de rédaction proposés au patient (Réglages). La consigne s'ajoute aux règles communes
+ * (troisième personne, français soigné, rien d'inventé, aucune redite, 500 caractères par texte).
+ * L'exemple illustre le même contenu fictif dans chaque style.
+ */
+export const STYLES_REDACTION = [
+  { id: 'sobre', libelle: 'Sobre et factuel', description: 'Phrases courtes et neutres, l\'essentiel sans effet de style.',
+    consigne: 'Style sobre et factuel : phrases courtes, neutres, sans adjectifs superflus.',
+    exemple: 'Le patient mentionne une promenade et le calme de la matinée. Il signale une dispute avec sa mère en fin de journée, qui l\'a contrarié.' },
+  { id: 'narratif', libelle: 'Récit chronologique', description: 'Raconte la période dans l\'ordre où les choses se sont passées.',
+    consigne: 'Style narratif chronologique : présente les faits dans l\'ordre où ils se sont déroulés pendant la période, avec des liaisons simples (d\'abord, ensuite, en fin de journée).',
+    exemple: 'La matinée commence calmement pour le patient, qui fait une promenade. En fin de journée, une dispute avec sa mère le contrarie.' },
+  { id: 'concis', libelle: 'Très concis', description: 'Deux ou trois phrases au plus, seulement l\'essentiel.',
+    consigne: 'Style très concis : deux ou trois phrases au plus par texte, uniquement les éléments essentiels, sans détail secondaire.',
+    exemple: 'Promenade et matinée calme ; dispute avec sa mère en fin de journée.' },
+  { id: 'rubriques', libelle: 'Par rubriques', description: 'Courtes rubriques : Contexte, Favorable, Défavorable, Ressenti.',
+    consigne: 'Style structuré par rubriques : organise l\'« explication » en rubriques courtes sur des lignes séparées, parmi « Contexte : », « Favorable : », « Défavorable : », « Ressenti : » (n\'écris que celles qui ont un contenu).',
+    exemple: 'Favorable : promenade, matinée calme.\nDéfavorable : dispute avec sa mère en fin de journée.\nRessenti : le patient se dit contrarié.' },
+  { id: 'puces', libelle: 'Points clés en liste', description: 'Une liste de points, une idée par ligne.',
+    consigne: 'Style en points clés : rédige l\'« explication » sous forme de liste, une idée par ligne, chaque ligne commençant par « – », en phrases nominales ou très courtes.',
+    exemple: '– Promenade, matinée calme.\n– Dispute avec sa mère en fin de journée.\n– Patient contrarié.' },
+  { id: 'humain', libelle: 'Bienveillant et humain', description: 'Ton chaleureux, tout en restant professionnel et factuel.',
+    consigne: 'Style bienveillant et humain : ton chaleureux et respectueux, qui reste professionnel et strictement factuel, sans jugement ni interprétation.',
+    exemple: 'Le patient a pu profiter d\'une promenade et d\'une matinée calme. La journée s\'est terminée par une dispute avec sa mère, qu\'il a vécue comme contrariante.' },
+  { id: 'ressenti', libelle: 'Centré sur le ressenti', description: 'Met en avant les émotions exprimées et leur intensité.',
+    consigne: 'Style centré sur le ressenti : mets d\'abord en avant les émotions exprimées par le patient et leur intensité, puis les faits auxquels il les associe, sans rien interpréter.',
+    exemple: 'Le patient se dit contrarié après une dispute avec sa mère en fin de journée, alors que la matinée, calme, avec une promenade, lui avait fait du bien.' },
+  { id: 'evenements', libelle: 'Faits puis effets', description: 'Ce qui s\'est passé, puis l\'effet ressenti par le patient.',
+    consigne: 'Style « faits puis effets » : pour chaque élément, écris d\'abord ce qui s\'est passé, puis l\'effet que le patient décrit, présentés comme des constats rapportés par lui, jamais comme une causalité établie.',
+    exemple: 'Promenade et matinée calme, décrites comme agréables. Dispute avec sa mère en fin de journée, après laquelle il se dit contrarié.' },
+  { id: 'paroles', libelle: 'Proche des mots du patient', description: 'Garde ses expressions marquantes entre guillemets (traduites).',
+    consigne: 'Style proche des paroles du patient : conserve entre guillemets ses expressions les plus marquantes (traduites en français si nécessaire), en les intégrant dans des phrases à la troisième personne.',
+    exemple: 'Le patient décrit une matinée « vraiment calme » et une promenade. Il évoque une dispute avec sa mère, qui l\'a « mis hors de lui ».' },
+  { id: 'detaille', libelle: 'Professionnel détaillé', description: 'Rédaction complète et nuancée, en utilisant toute la longueur permise.',
+    consigne: 'Style professionnel détaillé : rédaction complète, nuancée et fluide, qui reprend chaque élément mentionné avec précision, en utilisant si nécessaire toute la longueur permise.',
+    exemple: 'Le patient relate une matinée calme, marquée par une promenade qu\'il mentionne comme favorable. La fin de journée est marquée par une dispute avec sa mère, à la suite de laquelle il indique s\'être senti contrarié.' },
+];
+export const styleRedaction = (parametres) => (STYLES_REDACTION.find((x) => x.id === (parametres && parametres.styleRedaction)) || STYLES_REDACTION[0]);
+
+/** Événements marquants d'une évaluation transmis pour la rédaction (avec l'accord du patient), sans date ni heure. */
+function evenementsPourRedaction(ev, evenements) {
+  if (!Array.isArray(evenements)) return [];
+  return evenementsDuCreneau(evenements, ev.creneauId).filter((x) => x.rapport)
+    .map((x) => ({ titre: x.titre, description: x.faits, ressenti: x.vecu, impact: IMPACTS[x.impact] ? x.impact : 'non précisé' }));
+}
+
+/** Empreinte des événements d'une évaluation : si elle change, la version rédigée est à refaire. */
+export function empreinteEvenements(ev, evenements) {
+  const l = evenementsPourRedaction(ev, evenements);
+  return l.length ? empreinteTexte(JSON.stringify(l)) : '';
+}
 export const LONGUEUR_VERSION = 500;
 
 /** Un texte de la version dépasse la longueur permise. */
@@ -1166,16 +1218,17 @@ export function versionTropLongue(r) {
 }
 
 /** Champs qui peuvent recevoir une version : l'explication intègre aussi les motifs cochés. */
-export function champsVersion(ev) {
+export function champsVersion(ev, evenements = null) {
   const t = textesOriginaux(ev);
   const motifs = (ev.motifs || []).length + (ev.autresMotifs || []).length;
   const motifsPrev = (ev.prevision && (ev.prevision.motifs || []).length) || 0;
-  return { explication: !!(t.explication || motifs), complement: !!t.complement, prevision: !!(t.prevision || motifsPrev) };
+  const evts = evenementsPourRedaction(ev, evenements).length;
+  return { explication: !!(t.explication || motifs || evts), complement: !!t.complement, prevision: !!(t.prevision || motifsPrev) };
 }
 
 /** Évaluation qui a de la matière pour une version rédigée (commentaires ou motifs cochés). */
-export function aDesTextes(ev) {
-  const c = champsVersion(ev);
+export function aDesTextes(ev, evenements = null) {
+  const c = champsVersion(ev, Array.isArray(evenements) ? evenements : null);
   return c.explication || c.complement || c.prevision;
 }
 
@@ -1189,14 +1242,17 @@ export function versionAncienneMethode(ev) {
  * Enregistre (ou retire, avec null) une version reformulée, avec une entrée d'audit.
  * reformulation = { explication, complement, prevision, statut: 'proposee'|'validee', source: 'assistant'|'manuelle' }
  */
-export function definirReformulation(ev, reformulation, raison, instant = Date.now()) {
+export function definirReformulation(ev, reformulation, raison, instant = Date.now(), evenements = null) {
   const le = new Date(instant).toISOString();
   let apres = null;
   if (reformulation) {
     const champs = { explication: nettoyerTexte(reformulation.explication), complement: nettoyerTexte(reformulation.complement), prevision: nettoyerTexte(reformulation.prevision) };
     for (const v of Object.values(champs)) if (v.length > LIMITE_TEXTE) throw new Error('Texte reformulé trop long.');
-    const permis = champsVersion(ev);
+    const permis = champsVersion(ev, evenements);
     for (const k of Object.keys(champs)) if (champs[k] && !permis[k]) throw new Error('Une version reformulée ne peut pas ajouter un texte absent de l\'original.');
+    const prec = ev.reformulation || {};
+    const empreinte = reformulation.empreinteEvenements !== undefined ? reformulation.empreinteEvenements : prec.empreinteEvenements;
+    const style = reformulation.style !== undefined ? reformulation.style : prec.style;
     if (!champs.explication && !champs.complement && !champs.prevision) throw new Error('La version reformulée est vide.');
     const statut = reformulation.statut === 'validee' ? 'validee' : 'proposee';
     apres = {
@@ -1206,6 +1262,8 @@ export function definirReformulation(ev, reformulation, raison, instant = Date.n
       methode: reformulation.methode || (ev.reformulation && ev.reformulation.methode) || (reformulation.source === 'manuelle' ? METHODE_VERSION : 1),
       creeLeUtc: (ev.reformulation && ev.reformulation.creeLeUtc) || le,
       valideeLeUtc: statut === 'validee' ? le : null,
+      ...(empreinte ? { empreinteEvenements: empreinte } : {}),
+      ...(style ? { style } : {}),
     };
   }
   const avant = ev.reformulation ?? null;
@@ -1221,19 +1279,21 @@ export function definirReformulation(ev, reformulation, raison, instant = Date.n
 }
 
 /** Textes à utiliser dans le rapport selon le mode : 'reformule' (défaut), 'original' ou 'les-deux'. */
-export function textesPourRapport(ev, mode = 'reformule') {
+export function textesPourRapport(ev, mode = 'reformule', evenements = null) {
   const orig = textesOriginaux(ev);
   const r = ev.reformulation;
   const valide = !!(r && r.statut === 'validee');
-  if (mode === 'original' || !valide) return { ...orig, reformule: false, original: null, valideeLeUtc: null };
-  const c = champsVersion(ev);
+  if (mode === 'original' || !valide) return { ...orig, reformule: false, original: null, valideeLeUtc: null, evenementsIntegres: false };
+  const c = champsVersion(ev, evenements);
   const choix = { explication: c.explication ? (r.explication || orig.explication) : '', complement: c.complement ? (r.complement || orig.complement) : '', prevision: c.prevision ? (r.prevision || orig.prevision) : '' };
-  return { ...choix, reformule: true, original: mode === 'les-deux' ? orig : null, valideeLeUtc: r.valideeLeUtc, methode: r.methode || 1 };
+  // Les événements sont déjà racontés dans la version validée s'ils n'ont pas changé depuis
+  const emp = Array.isArray(evenements) ? empreinteEvenements(ev, evenements) : '';
+  return { ...choix, reformule: true, original: mode === 'les-deux' ? orig : null, valideeLeUtc: r.valideeLeUtc, methode: r.methode || 1, evenementsIntegres: !!emp && r.empreinteEvenements === emp };
 }
 
 /** Ce qui est transmis pour la rédaction : textes et motifs cochés, sans nom, note, date, lieu ni situation. */
-export function entreesReformulation(evaluations) {
-  return trierChrono(evaluations).filter(aDesTextes).map((e) => {
+export function entreesReformulation(evaluations, { evenements = null } = {}) {
+  return trierChrono(evaluations).filter((e) => aDesTextes(e, evenements)).map((e) => {
     const t = textesOriginaux(e);
     const tous = [...(e.motifs || []), ...(e.autresMotifs || [])];
     const parPol = (pol) => tous.filter((m) => m.polarite === pol).map((m) => m.libelle);
@@ -1242,6 +1302,7 @@ export function entreesReformulation(evaluations) {
       motifs_favorables: parPol('favorable'), motifs_defavorables: parPol('defavorable'), motifs_mixtes: parPol('mixte'),
       explication: t.explication, complement: t.complement,
       prevision: t.prevision, motifs_prevision: ((e.prevision && e.prevision.motifs) || []).map((m) => m.libelle),
+      ...(evenementsPourRedaction(e, evenements).length ? { evenements_marquants: evenementsPourRedaction(e, evenements) } : {}),
     };
   });
 }
@@ -1253,12 +1314,13 @@ export function contientPremierePersonne(texte) {
   return PREMIERE_PERSONNE.test(sansCitations);
 }
 
-export function instructionsReformulation() {
+export function instructionsReformulation({ style: idStyle = 'sobre' } = {}) {
+  const st = STYLES_REDACTION.find((x) => x.id === idStyle) || STYLES_REDACTION[0];
   const style = 'toujours à la troisième personne, en désignant l\'auteur par « le patient » (puis « il » ou « le patient »)';
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois des entrées du journal d'humeur d'un patient, destinées à son psychothérapeute. Le patient relira et validera chaque texte.
 
 Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, précise et naturelle, d'un registre professionnel, neutre et factuel :
-- « explication » : un texte complet qui présente d'abord les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), en les intégrant naturellement (par exemple « Le patient mentionne comme éléments favorables… »), puis tout le contenu du texte « explication ». S'il n'y a que des motifs, une ou deux phrases qui les présentent suffisent. S'il n'y a ni motifs ni explication, renvoie une chaîne vide.
+- « explication » : un texte complet qui présente d'abord les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), en les intégrant naturellement (par exemple « Le patient mentionne comme éléments favorables… »), puis tout le contenu du texte « explication », et les « evenements_marquants » s'il y en a (titre, description, ressenti, impact positif ou négatif indiqué par le patient). S'il n'y a que des motifs, une ou deux phrases qui les présentent suffisent. S'il n'y a ni motifs, ni explication, ni événement, renvoie une chaîne vide.
 - « complement » : tout le contenu du complément ; chaîne vide s'il est vide.
 - « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a ; chaîne vide si les deux sont vides.
 
@@ -1267,7 +1329,8 @@ Règles impératives :
 - Si un texte est rédigé en allemand, en anglais, en luxembourgeois ou dans un mélange de langues, traduis-le fidèlement en français.
 - Corrige toutes les fautes d'orthographe, de grammaire, de conjugaison, d'accord et de ponctuation.
 - Longueur : chaque texte (« explication », « complement », « prevision ») compte au maximum ${LONGUEUR_VERSION} caractères, espaces compris. Si le contenu tient dans cette limite, conserve-le en entier (faits, émotions, causes évoquées, projets, difficultés, chiffres, noms propres, lieux). Sinon, condense en gardant l'essentiel et chaque élément important, sans rien inventer.
-- Aucune redite : si plusieurs motifs ou passages expriment la même idée (par exemple « Calme et tranquillité » et « Absence de bruit », ou un motif coché que le texte répète), ne l'écris qu'une seule fois, en une formulation qui les réunit.
+- Aucune redite : si plusieurs motifs, passages ou événements expriment la même idée (par exemple « Calme et tranquillité » et « Absence de bruit », un motif coché que le texte répète, ou un événement marquant déjà raconté dans l'explication, comme une victoire du KSC à la fois cochée, racontée et notée comme événement), ne l'écris qu'une seule fois, en une formulation qui les réunit. Un événement marquant n'est jamais raconté deux fois, ni dans « explication » et « complement » à la fois.
+- ${st.consigne}
 - N'ajoute aucune information absente des entrées, aucune interprétation, aucune hypothèse, aucun vocabulaire clinique ni diagnostic.
 - Présente les motifs comme des éléments mentionnés par le patient, sans en tirer de conclusion.
 - Pour un ami, un collègue ou un proche dont le patient ne précise pas qu'il s'agit d'un homme ou d'une femme, ou qu'il désigne sans nom, emploie l'écriture neutre : « un(e) ami(e) », « un(e) collègue », « un membre de la famille ».
@@ -1281,7 +1344,7 @@ export function demandeReformulation(evaluations, options = {}) {
   return `${instructionsReformulation(options)}
 
 Entrées :
-${JSON.stringify(entreesReformulation(evaluations), null, 2)}
+${JSON.stringify(entreesReformulation(evaluations, options), null, 2)}
 `;
 }
 
@@ -1292,7 +1355,7 @@ ${JSON.stringify(entreesReformulation(evaluations), null, 2)}
 
 export const LONGUEUR_SYNTHESE = 1000;
 
-export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Date.now(), debutSuiviUtc = null }) {
+export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Date.now(), debutSuiviUtc = null, evenements = null }) {
   const evals = trierChrono(dansPeriode(evaluations, debut, fin));
   const grille = grilleCreneaux(debut, fin, evaluations, instant, debutSuiviUtc);
   const comptes = comptesCreneaux(grille);
@@ -1321,10 +1384,19 @@ export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Dat
     motifs_defavorables: freq.filter((f) => f.polarite === 'defavorable').map((f) => ({ motif: f.libelle, fois: f.nombre })),
     previsions: { comparees: prev.nombreComparees, identiques: prev.exactes, realite_superieure: prev.realiteSuperieure, realite_inferieure: prev.realiteInferieure, ecart_moyen: arrondi(prev.ecartMoyen) },
     verifications_securite: evals.filter((e) => e.securite && e.securite.declenchee).length,
+    // Avec l'accord du patient : événements marquants, rattachés à un jour numéroté (sans date ni heure)
+    ...(Array.isArray(evenements) ? (() => {
+      const l = evenementsActifs(evenements, { debut, fin, rapportSeulement: true }).map((x) => {
+        const [d, c] = creneauEvenement(x).split('_');
+        return { jour: joursEntre(debut, d) + 1, evaluation: c, titre: x.titre, description: x.faits, ressenti: x.vecu, impact: IMPACTS[x.impact] ? x.impact : 'non précisé' };
+      });
+      return l.length ? { evenements_marquants: l } : {};
+    })() : {}),
   };
 }
 
-export function instructionsSynthese() {
+export function instructionsSynthese({ style: idStyle = 'sobre' } = {}) {
+  const st = STYLES_REDACTION.find((x) => x.id === idStyle) || STYLES_REDACTION[0];
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois les données agrégées d'un journal d'humeur tenu deux fois par jour par un patient (note de 0 à 10, voir « echelle »), pour une période donnée, ainsi que ses commentaires déjà relus et validés (« texte_valide »). Le texte est destiné à son psychothérapeute ; le patient le relira et le validera.
 
 Rédige une synthèse en français, à la troisième personne (« le patient »), dans un langage professionnel mais clair, neutre et factuel, en deux parties :
@@ -1338,7 +1410,8 @@ Règles impératives :
 - Présente les liens comme des constats (« les notes les plus basses sont relevées le lundi »), jamais comme des causes.
 - Ne considère jamais qu'une note supérieure à zéro exclut un risque. Si « verifications_securite » est supérieur à 0, mentionne sobrement qu'une vérification de sécurité a été proposée ; s'il vaut 0, n'en parle pas du tout (ne dis jamais qu'aucune vérification n'a eu lieu).
 - Si les données sont trop peu nombreuses pour une conclusion, dis-le simplement.
-- Aucune redite : chaque idée n'est écrite qu'une fois.
+- Aucune redite : chaque idée n'est écrite qu'une fois. Les « evenements_marquants » peuvent déjà figurer dans les « texte_valide » : un même événement n'est mentionné qu'une fois.
+- Style souhaité par le patient (à adapter aux deux parties, sans dépasser la longueur) : ${st.consigne}
 - Pas de dates du calendrier (les jours sont numérotés) ; tu peux citer les jours de la semaine.
 
 Réponds uniquement avec du JSON valide, sans texte autour : {"synthese": "Évolution : …\\nPoints prioritaires :\\n– …\\n– …"}`;
@@ -1543,12 +1616,17 @@ export function lireFichierEvenements(texte, instant = Date.now()) {
 }
 
 /** Évaluations dont la version pour le rapport reste à préparer. */
-export function aReformuler(ev) {
-  return aDesTextes(ev) && (!ev.reformulation || ev.reformulation.statut === 'a_revoir');
+export function aReformuler(ev, evenements = null) {
+  const evts = Array.isArray(evenements) ? evenements : null;
+  if (!aDesTextes(ev, evts)) return false;
+  const r = ev.reformulation;
+  if (!r || r.statut === 'a_revoir') return true;
+  // Événements ajoutés, modifiés ou retirés depuis la rédaction : la version est à refaire
+  return !!evts && (r.empreinteEvenements || '') !== empreinteEvenements(ev, evts);
 }
 
 /** Lit la réponse de l'assistant (JSON, éventuellement entouré de texte ou de balises de code). */
-export function lireReponseReformulation(texte, evaluations) {
+export function lireReponseReformulation(texte, evaluations, evenements = null) {
   const brut = String(texte || '');
   let liste = null;
   const o1 = brut.indexOf('{'), o2 = brut.lastIndexOf('}');
@@ -1568,7 +1646,7 @@ export function lireReponseReformulation(texte, evaluations) {
   for (const x of liste) {
     const ev = x && parId.get(x.id);
     if (!ev) { ignorees.push(x && x.id); continue; }
-    const permis = champsVersion(ev);
+    const permis = champsVersion(ev, evenements);
     const prop = {};
     for (const k of ['explication', 'complement', 'prevision']) prop[k] = permis[k] ? nettoyerTexte(x[k]) : '';
     if (!prop.explication && !prop.complement && !prop.prevision) { ignorees.push(x.id); continue; }
@@ -2266,12 +2344,22 @@ export function genererScriptWindows(urlApplication, { discret = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Styles visuels du rapport PDF (couleurs, typographie, cadres), au choix du patient
+// Style visuel unique du rapport, choisi par le patient parmi dix propositions (« Tableau de bord »)
+export const THEMES_RAPPORT = [
+  { id: 'tableau', libelle: 'Tableau de bord', description: 'Bande latérale foncée sur chaque page, titres en bandeau, cartes avec ombre.',
+    police: 'sans', entete: 'bandeau', cadre: 'ombre', barre: 'pleine', couverture: 'bandeau', deco: 'bande',
+    accent: '#1F3A5F', encre: '#14202B', doux: '#56657A', filet: '#C9D3DE', fond: '#EEF2F7', tete: '#DFE7F1', fav: '#3C7DBF', def: '#5B6478', trait: '#B9C7D8', grille: '#E3E9F0', axe: '#93A3B8', rayon: 6 },
+];
+export const themeRapport = () => THEMES_RAPPORT[0];
+
+// ---------------------------------------------------------------------------
 // Synchronisation entre appareils
 // La fusion est déterministe : deux appareils qui fusionnent les mêmes données obtiennent
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction'];
 
 function empreinteTexte(s) {
   let h = 5381;

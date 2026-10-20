@@ -1158,6 +1158,8 @@ function formulaire(cible, ev) {
           await sauverEvts();
           annoncer(evtsChanges ? 'Événements marquants enregistrés.' : 'Aucun changement : l\'évaluation n\'a pas été modifiée.');
           aller(`#/evaluation/${ev.id}`);
+          // Les événements ne changent la version rédigée que si le patient a accepté de les transmettre
+          if (evtsChanges && evtsIA()) await preparerApresSaisie(etat.evaluations.find((x) => x.id === ev.id) || ev);
           return;
         }
       } else {
@@ -1228,7 +1230,7 @@ function vueFiche([id]) {
     : `<p class="doux">Aucun événement noté pour ${ev.creneau === 'matin' ? 'la soirée et la nuit précédant cette évaluation' : 'la journée de cette évaluation'}.</p>`}
         <p style="margin:8px 0 0"><a class="bouton-discret" href="#/modifier/${esc(ev.id)}">${lies.length ? 'Modifier ou ajouter (avec l\'évaluation)' : 'Ajouter un événement marquant'}</a></p></div>`;
     })()}
-    ${C.aDesTextes(ev) ? blocVersionRapport(ev) : ''}
+    ${aDesTextesIA(ev) ? blocVersionRapport(ev) : ''}
     ${ev.historique && ev.historique.length ? `<div class="bloc"><h2>Historique des modifications</h2><ol class="historique">${ev.historique.map((h) => `<li><strong>${C.formatDateHeure(h.le)}</strong> (version ${h.version})${h.raison ? ` — raison : ${esc(h.raison)}` : ''}
       <ul>${h.changements.map((c) => `<li>${esc(c.champ === 'lieux' && (c.avant || []).length <= 1 && (c.apres || []).length <= 1 ? 'Lieu' : (C.LIBELLE_CHAMP[c.champ] || c.champ))} : ${valeur(c.champ, c.avant)} → ${valeur(c.champ, c.apres)}</li>`).join('')}</ul></li>`).join('')}</ol></div>` : ''}
     <div class="rangee">
@@ -1294,7 +1296,7 @@ function vueEvenements(args = []) {
   contenu.innerHTML = `<section class="colonne-centree">
     <p><a class="bouton-discret" href="#/">‹ Aujourd'hui</a></p>
     <h1>Événements marquants</h1>
-    <p class="encre-2">Note ce qui s'est passé de marquant (un appel, une dispute, une nouvelle, un rendez-vous…), avec la date et, si tu la connais, l'heure. Sépare <strong>ce qui s'est passé</strong> de <strong>ce que tu as ressenti</strong>. Ces notes forment une section à part du rapport et sont signalées par des pastilles numérotées sur le graphique. Elles ne sont jamais envoyées à un assistant.</p>
+    <p class="encre-2">Note ce qui s'est passé de marquant (un appel, une dispute, une nouvelle, un rendez-vous…), avec la date et, si tu la connais, l'heure. Sépare <strong>ce qui s'est passé</strong> de <strong>ce que tu as ressenti</strong>. Ces notes forment une section à part du rapport et sont signalées par des pastilles numérotées sur le graphique. ${evtsIA() ? 'Avec ton accord, elles sont transmises à l\'assistant de rédaction pour être intégrées sans doublon (sans date ni heure).' : 'Elles ne sont pas envoyées à l\'assistant de rédaction (accord possible dans Réglages).'}</p>
     ${edite ? formulaire(edite) : `<p class="rangee"><a class="bouton" href="#/evenements/nouveau">Ajouter un événement</a><label class="bouton-secondaire" for="ev-fichier">Importer un fichier</label><input type="file" id="ev-fichier" accept=".json,application/json" class="visuellement-cache"></p>`}
     ${edite ? '' : `<div class="bloc"><h2>Contexte à connaître</h2>
       <p class="doux">Ce qui aide à comprendre la période : situation personnelle, traitement en cours, arrêt de travail… Apparaît en tête de la section du rapport.</p>
@@ -1653,15 +1655,21 @@ async function actionMotif(action, id) {
 // ---------------------------------------------------------------------------
 // Textes pour le rapport : version corrigée, complète, traduite en français et professionnelle
 
-const aRelire = () => etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut !== 'validee' && C.aDesTextes(e)).length;
+const aRelire = () => etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut !== 'validee' && aDesTextesIA(e)).length;
 const LIBELLES_TEXTES = { explication: 'Description (motifs et explication)', complement: 'Complément', prevision: 'Motif de la prévision' };
 
 /** Ce que le patient a saisi pour chaque champ (les motifs cochés font partie de la description). */
+/** Événements marquants transmis pour la rédaction : seulement avec l'accord spécifique du patient. */
+const evtsIA = () => (etat.parametres && etat.parametres.ia && etat.parametres.ia.consentementEvenementsUtc ? (etat.parametres.evenements || []) : null);
+const aDesTextesIA = (e) => C.aDesTextes(e, evtsIA());
+const aReformulerIA = (e) => C.aReformuler(e, evtsIA());
+
 function originalPourChamp(ev, k) {
   const t = C.textesOriginaux(ev);
   if (k === 'explication') {
     const m = [...(ev.motifs || []), ...(ev.autresMotifs || [])].map((x) => `${x.libelle} (${C.LIBELLE_POLARITE[x.polarite].toLowerCase()})`);
-    return [m.length ? `Motifs cochés : ${m.join(', ')}.` : '', t.explication].filter(Boolean).join('\n');
+    const e = evtsIA() ? C.evenementsDuCreneau(evtsIA(), ev.creneauId).filter((x) => x.rapport).map((x) => `Événement marquant : ${x.titre}${C.IMPACTS[x.impact] ? ` (${C.IMPACTS[x.impact].toLowerCase()})` : ''}${x.faits ? ` – ${x.faits}` : ''}`) : [];
+    return [m.length ? `Motifs cochés : ${m.join(', ')}.` : '', t.explication, ...e].filter(Boolean).join('\n');
   }
   if (k === 'prevision') {
     const m = ((ev.prevision && ev.prevision.motifs) || []).map((x) => x.libelle);
@@ -1703,19 +1711,21 @@ function compteVersion(texte) {
 }
 
 function vueTextes([idCible]) {
-  const tous = C.trierChrono(etat.evaluations.filter(C.aDesTextes)).reverse();
-  const aTraiter = tous.filter(C.aReformuler);
+  const tous = C.trierChrono(etat.evaluations.filter(aDesTextesIA)).reverse();
+  const aTraiter = tous.filter(aReformulerIA);
   const proposees = tous.filter((e) => e.reformulation && e.reformulation.statut === 'proposee');
-  const anciennes = tous.filter((e) => C.versionAncienneMethode(e) && !C.aReformuler(e));
+  const anciennes = tous.filter((e) => C.versionAncienneMethode(e) && !aReformulerIA(e));
+  const styleActuel = C.styleRedaction(etat.parametres);
+  const autreStyle = tous.filter((e) => e.reformulation && e.reformulation.statut === 'validee' && (e.reformulation.style || 'sobre') !== styleActuel.id && !aReformulerIA(e) && !C.versionAncienneMethode(e));
   const validees = tous.filter((e) => e.reformulation && e.reformulation.statut === 'validee');
   const cible = idCible ? tous.find((e) => e.id === idCible) : null;
   const filtre = ui.filtreTextes || 'a-faire';
   const affichees = cible ? [cible] : (filtre === 'toutes' ? tous : tous.filter((e) => !e.reformulation || e.reformulation.statut !== 'validee'));
-  const demande = aTraiter.length ? C.demandeReformulation(aTraiter) : '';
+  const demande = aTraiter.length ? C.demandeReformulation(aTraiter, { evenements: evtsIA(), style: styleActuel.id }) : '';
   const auto = iaPrete();
   const dest = (etat.parametres.destinataire || '').trim() || 'le thérapeute';
   const carte = (ev) => {
-    const permis = C.champsVersion(ev);
+    const permis = C.champsVersion(ev, evtsIA());
     const t = Object.fromEntries(Object.keys(LIBELLES_TEXTES).map((k) => [k, permis[k] ? originalPourChamp(ev, k) : '']));
     const r = ev.reformulation;
     const champs = Object.keys(LIBELLES_TEXTES).filter((k) => t[k]);
@@ -1758,6 +1768,7 @@ function vueTextes([idCible]) {
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
           ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
+          ${auto && autreStyle.length ? `<div class="bandeau"><strong>Style de rédaction : ${esc(styleActuel.libelle)}</strong>${autreStyle.length > 1 ? `${autreStyle.length} versions validées ont été rédigées` : 'Une version validée a été rédigée'} dans un autre style. Elles restent valables telles quelles ; tu peux les refaire dans le style choisi (elles redeviendront des propositions à relire). <a href="#/reglages/ia">Changer de style</a><p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-style">Refaire ${autreStyle.length > 1 ? `les ${autreStyle.length} versions` : 'cette version'} dans ce style</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
         ${aTraiter.length ? `<details class="repli" style="margin-top:14px"><summary>Ou par copier-coller dans un assistant</summary>
@@ -1802,6 +1813,14 @@ function vueTextes([idCible]) {
     ui.filtreTextes = 'a-faire';
     vueTextes([]);
   });
+  const bStyle = document.getElementById('btn-refaire-style');
+  if (bStyle) bStyle.addEventListener('click', async () => {
+    bStyle.disabled = true; bStyle.textContent = 'Rédaction en cours…';
+    const n = await preparerVersions(autreStyle, { silencieux: false, force: true });
+    if (n !== null) annoncer(`${C.pluriel(n, 'nouvelle proposition', 'nouvelles propositions')} : relis-les et valide-les.`);
+    ui.filtreTextes = 'a-faire';
+    vueTextes([]);
+  });
   const bCopier = document.getElementById('btn-copier-demande');
   if (bCopier) bCopier.addEventListener('click', async () => annoncer(await copierTexte(demande) ? 'Demande copiée : colle-la dans l\'assistant.' : 'Copie automatique impossible : sélectionne le texte de la demande et copie-le.'));
   const bImporter = document.getElementById('btn-importer-reponse');
@@ -1820,7 +1839,7 @@ function vueTextes([idCible]) {
     if (!(await confirmer('Valider toutes les propositions ?', 'Vérifie d\'abord que chaque proposition respecte le sens de ton texte original. Tu pourras encore les modifier ensuite.', 'Tout valider'))) return;
     const instant = maintenant();
     for (const ev of etat.evaluations.filter((e) => e.reformulation && e.reformulation.statut === 'proposee' && !C.versionTropLongue(e.reformulation))) {
-      const maj = C.definirReformulation(ev, { ...ev.reformulation, statut: 'validee' }, 'Version pour le rapport validée', instant);
+      const maj = C.definirReformulation(ev, { ...ev.reformulation, statut: 'validee' }, 'Version pour le rapport validée', instant, evtsIA());
       if (maj) await enregistrerEvaluation(maj);
     }
     annoncer('Propositions validées.');
@@ -1851,12 +1870,12 @@ function vueTextes([idCible]) {
         let maj;
         if (b.dataset.texte === 'retirer') {
           if (!(await confirmer('Retirer cette version ?', 'Le rapport reprendra ton texte original. Le retrait est noté dans l\'historique.', 'Retirer'))) return;
-          maj = C.definirReformulation(ev, null, 'Version pour le rapport retirée', maintenant());
+          maj = C.definirReformulation(ev, null, 'Version pour le rapport retirée', maintenant(), evtsIA());
         } else {
           const valeurs = {};
           carteEl.querySelectorAll('textarea[data-champ]').forEach((ta) => { valeurs[ta.dataset.champ] = ta.value; });
           if (C.versionTropLongue(valeurs)) { annoncer(`Chaque texte doit compter au maximum ${C.LONGUEUR_VERSION} caractères : raccourcis-le avant de valider.`); return; }
-          maj = C.definirReformulation(ev, { ...valeurs, statut: 'validee', source: ev.reformulation ? ev.reformulation.source : 'manuelle' }, 'Version pour le rapport validée', maintenant());
+          maj = C.definirReformulation(ev, { ...valeurs, statut: 'validee', source: ev.reformulation ? ev.reformulation.source : 'manuelle', ...(ev.reformulation ? {} : { style: styleActuel.id, empreinteEvenements: C.empreinteEvenements(ev, evtsIA()) }) }, 'Version pour le rapport validée', maintenant(), evtsIA());
           if (!maj) { annoncer('Cette version était déjà validée.'); return; }
         }
         if (maj) await enregistrerEvaluation(maj);
@@ -1881,20 +1900,20 @@ async function enregistrerPropositions(propositions, raison) {
   for (const p of propositions) {
     const ev = etat.evaluations.find((e) => e.id === p.id);
     if (!ev) continue;
-    const maj = C.definirReformulation(ev, { ...p, statut: 'proposee', source: 'assistant', methode: C.METHODE_VERSION }, raison, instant);
+    const maj = C.definirReformulation(ev, { ...p, statut: 'proposee', source: 'assistant', methode: C.METHODE_VERSION }, raison, instant, evtsIA());
     if (maj) await enregistrerEvaluation(maj);
   }
 }
 
 /** Retourne le nombre de propositions enregistrées, ou null en cas d'échec. */
 async function preparerVersions(evaluations, { silencieux = true, force = false } = {}) {
-  const liste = evaluations.filter((e) => C.aDesTextes(e) && (force || C.aReformuler(e)));
+  const liste = evaluations.filter((e) => aDesTextesIA(e) && (force || aReformulerIA(e)));
   if (!liste.length || !iaPrete()) return 0;
   if (ui.preparationEnCours) return 0;
   ui.preparationEnCours = true;
   try {
     const { reformuler, FOURNISSEURS: F } = await import('./ia.js');
-    const { propositions } = await reformuler(etat.parametres, liste);
+    const { propositions } = await reformuler(etat.parametres, liste, { evenements: etat.parametres.evenements || [] });
     await enregistrerPropositions(propositions, `Proposition de version professionnelle préparée automatiquement (${F[etat.parametres.ia.fournisseur].nom})`);
     return propositions.length;
   } catch (e) {
@@ -1908,7 +1927,7 @@ async function preparerVersions(evaluations, { silencieux = true, force = false 
 
 /** Après l'enregistrement d'une évaluation : préparer la version et ouvrir directement l'écran de validation. */
 async function preparerApresSaisie(ev) {
-  if (!iaPrete() || !etat.parametres.ia.automatique || !C.aReformuler(ev)) return false;
+  if (!iaPrete() || !etat.parametres.ia.automatique || !aReformulerIA(ev)) return false;
   if (!navigator.onLine) { annoncer('Hors connexion : la version pour le thérapeute sera préparée automatiquement plus tard.'); return false; }
   const dest = (etat.parametres.destinataire || '').trim() || 'le thérapeute';
   dlg.innerHTML = `<div class="dialogue-corps"><h2 id="dialogue-titre">Version pour ${esc(dest)}</h2>
@@ -1929,7 +1948,7 @@ async function preparerApresSaisie(ev) {
 /** À l'ouverture : préparer les versions restées en attente (hors connexion, échec précédent…). */
 async function rattrapageVersions() {
   if (!iaPrete() || !etat.parametres.ia.automatique || !navigator.onLine) return;
-  const enAttente = etat.evaluations.filter(C.aReformuler);
+  const enAttente = etat.evaluations.filter(aReformulerIA);
   if (!enAttente.length) return;
   const n = await preparerVersions(enAttente);
   if (n) {
@@ -1967,7 +1986,8 @@ function texteConfidentialite() {
     lieux ? '<li><strong>Recherche des lieux</strong> : pendant que tu tapes un lieu, les lettres tapées sont envoyées au service Photon (OpenStreetMap, komoot, Allemagne) pour te proposer des localités, sans aucune autre donnée. Le lieu choisi reste dans tes données.</li>' : '',
     ia ? `<li><strong>Version professionnelle automatique</strong> : le texte de tes commentaires (sans nom, notes ni dates) est envoyé à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementUtc)}.</li>` : '',
     ia && p.ia.consentementSyntheseUtc ? `<li><strong>Synthèse du rapport</strong> : seulement quand tu la demandes, les données de la période (notes sans dates, moyennes, jours, situations, lieux, activités, motifs et textes validés, sans nom, adresse ni matricule) sont envoyées à ${nomIa}, avec ton accord du ${C.formatDateHeure(p.ia.consentementSyntheseUtc)}.</li>` : '',
-    '<li><strong>Événements marquants et contexte</strong> : ces notes restent sur tes appareils (et dans la copie de synchronisation chiffrée, si elle est active) ; elles figurent dans le rapport seulement si tu le choisis, et ne sont jamais envoyées à un assistant.</li>',
+    ia && p.ia.consentementEvenementsUtc ? `<li><strong>Événements marquants</strong> : leur titre, description, ressenti et impact (sans date ni heure) sont envoyés à ${nomIa} avec tes commentaires, pour être intégrés sans doublon, avec ton accord du ${C.formatDateHeure(p.ia.consentementEvenementsUtc)}. Le « contexte à connaître » n'est jamais envoyé.</li>`
+      : '<li><strong>Événements marquants et contexte</strong> : ces notes restent sur tes appareils (et dans la copie de synchronisation chiffrée, si elle est active) ; elles figurent dans le rapport seulement si tu le choisis, et ne sont pas envoyées à un assistant.</li>',
     '<li><strong>Envoi du rapport</strong> : seulement quand tu le demandes, depuis ta propre messagerie ou par la feuille de partage (WhatsApp, Mail…). Un e-mail ordinaire n\'est pas chiffré.</li>',
   ].filter(Boolean);
   return `<p>Tes données sont enregistrées dans la base locale de ce navigateur, sur cet appareil. Le rapport PDF est calculé ici, sans service externe.${sy || push || ia || lieux ? ' Échanges réseau actuellement actifs :' : ' Aucun échange réseau n\'est actif en dehors de ce que tu déclenches toi-même :'}</p><ul class="liste-puces">${points.join('')}</ul>`;
@@ -2209,7 +2229,7 @@ async function ouvrirPdf() {
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="textes" value="les-deux"> <span>Version corrigée, suivie du texte original</span></label>
       <label class="interrupteur" style="margin-top:8px"><input type="radio" name="textes" value="original"> <span>Texte original uniquement</span></label>
     </fieldset>
-    ${(() => { const n = etat.evaluations.filter((e) => C.aDesTextes(e) && !(e.reformulation && e.reformulation.statut === 'validee')).length; return n ? `<p class="bandeau">${n > 1 ? `${n} commentaires n'ont` : 'Un commentaire n\'a'} pas encore de version corrigée validée. <a href="#/textes" data-fermer-dialogue>Préparer les textes pour le rapport</a></p>` : ''; })()}
+    ${(() => { const n = etat.evaluations.filter((e) => aDesTextesIA(e) && !(e.reformulation && e.reformulation.statut === 'validee')).length; return n ? `<p class="bandeau">${n > 1 ? `${n} commentaires n'ont` : 'Un commentaire n\'a'} pas encore de version corrigée validée. <a href="#/textes" data-fermer-dialogue>Préparer les textes pour le rapport</a></p>` : ''; })()}
     <div class="bloc-synthese" id="pdf-synthese"></div>
     <div class="bloc-synthese" id="pdf-evenements"></div>
     <div id="pdf-message" class="erreurs" hidden></div>
@@ -2265,7 +2285,7 @@ async function ouvrirPdf() {
       b.disabled = true; b.textContent = 'Rédaction en cours…';
       try {
         const { redigerSynthese } = await import('./ia.js');
-        const texte = await redigerSynthese(etat.parametres, C.donneesSynthese(etat.evaluations, etat.motifs, { debut, fin, instant: maintenant(), debutSuiviUtc: etat.parametres.debutSuiviUtc }));
+        const texte = await redigerSynthese(etat.parametres, C.donneesSynthese(etat.evaluations, etat.motifs, { debut, fin, instant: maintenant(), debutSuiviUtc: etat.parametres.debutSuiviUtc, evenements: evtsIA() }));
         await sauverSynthese({ debut, fin, texte, statut: 'proposee', source: 'assistant', creeLeUtc: new Date(maintenant()).toISOString(), valideeLeUtc: null });
         editionSynthese = true;
         annoncer('Synthèse proposée : relis-la et valide-la.');
@@ -2828,11 +2848,15 @@ function blocIA() {
       <small class="doux">À créer dans la Claude Console (console.anthropic.com, rubrique API Keys), après avoir ajouté un petit crédit. Elle reste sur cet appareil et n'est jamais incluse dans les sauvegardes. Fixe une limite de dépense mensuelle dans la Console.</small></div>
     <details class="repli" data-ia-anthropic ${ia.fournisseur === 'anthropic' ? '' : 'hidden'}><summary>Réglage avancé</summary>
       <div class="champ"><label for="ia-modele">Modèle</label><input type="text" id="ia-modele" value="${esc(!ia.modele || ia.modele === 'claude-sonnet-5-5' ? 'claude-opus-5-5' : ia.modele)}" spellcheck="false" autocapitalize="off"></div></details>
-    <p class="encre-2">Style : toujours à la troisième personne (« Le patient… »), en français soigné.</p>
+    <fieldset class="champ"><legend style="font-weight:600;margin-bottom:4px">Style de rédaction</legend>
+      <p class="doux" style="margin:0 0 8px">Toujours à la troisième personne (« Le patient… »), en français soigné, sans rien inventer ni répéter. Chaque exemple raconte la même journée fictive.</p>
+      <div class="liste-styles">${C.STYLES_REDACTION.map((st) => `<label class="choix-style"><input type="radio" name="ia-style" value="${st.id}" ${C.styleRedaction(etat.parametres).id === st.id ? 'checked' : ''}><span><strong>${esc(st.libelle)}</strong> <span class="doux">– ${esc(st.description)}</span><span class="exemple-style">${esc(st.exemple).replace(/\n/g, '<br>')}</span></span></label>`).join('')}</div>
+    </fieldset>
     <label class="interrupteur"><input type="checkbox" id="ia-auto" ${ia.automatique ? 'checked' : ''}> <span>Préparer automatiquement après chaque évaluation</span></label>
     <div class="bandeau" style="margin-top:14px"><strong>Ton accord</strong>
       <label class="interrupteur" style="margin-top:6px"><input type="checkbox" id="ia-accord" ${pret ? 'checked' : ''}> <span>J'accepte que le texte de mes commentaires et mes motifs cochés soient envoyés au service choisi ci-dessus pour préparer ces versions. Ni mon nom, ni mon adresse, ni mon matricule, ni mes notes, ni les dates, ni mes lieux ne sont envoyés, mais mes textes peuvent eux-mêmes contenir des informations personnelles. Je peux retirer cet accord à tout moment.</span></label>
-      <label class="interrupteur" style="margin-top:10px"><input type="checkbox" id="ia-accord-synthese" ${ia.consentementSyntheseUtc ? 'checked' : ''}> <span><strong>Synthèse du rapport</strong> : j'accepte aussi que, <em>seulement quand je demande une synthèse</em> dans la fenêtre du rapport, les données de la période soient envoyées à ce service : mes notes (jours numérotés, sans dates), les moyennes et tendances, les jours de la semaine, mes situations, lieux et activités, mes motifs cochés et mes textes déjà validés. Jamais mon nom, mon adresse ni mon matricule. Je peux retirer cet accord à tout moment.</span></label></div>
+      <label class="interrupteur" style="margin-top:10px"><input type="checkbox" id="ia-accord-synthese" ${ia.consentementSyntheseUtc ? 'checked' : ''}> <span><strong>Synthèse du rapport</strong> : j'accepte aussi que, <em>seulement quand je demande une synthèse</em> dans la fenêtre du rapport, les données de la période soient envoyées à ce service : mes notes (jours numérotés, sans dates), les moyennes et tendances, les jours de la semaine, mes situations, lieux et activités, mes motifs cochés et mes textes déjà validés. Jamais mon nom, mon adresse ni mon matricule. Je peux retirer cet accord à tout moment.</span></label>
+      <label class="interrupteur" style="margin-top:10px"><input type="checkbox" id="ia-accord-evenements" ${ia.consentementEvenementsUtc ? 'checked' : ''}> <span><strong>Événements marquants</strong> : j'accepte aussi que mes événements marquants (titre, description, ressenti, impact positif ou négatif) soient envoyés avec mes commentaires, pour qu'ils soient intégrés une seule fois, sans doublon, dans la version de chaque évaluation et dans la synthèse. Sans date ni heure, jamais mon nom, mon adresse ni mon matricule. Je peux retirer cet accord à tout moment.</span></label></div>
     <div class="rangee">
       <button type="submit" class="bouton">Enregistrer et tester</button>
       ${pret ? '<button type="button" class="bouton-discret" id="ia-desactiver">Désactiver et retirer mon accord</button>' : ''}
@@ -2849,10 +2873,18 @@ function brancherIA() {
   }));
   const bDes = document.getElementById('ia-desactiver');
   if (bDes) bDes.addEventListener('click', async () => {
-    await enregistrerParametres({ ia: { ...etat.parametres.ia, actif: false, consentementUtc: null, consentementFournisseur: '', consentementSyntheseUtc: null } });
+    await enregistrerParametres({ ia: { ...etat.parametres.ia, actif: false, consentementUtc: null, consentementFournisseur: '', consentementSyntheseUtc: null, consentementEvenementsUtc: null } });
     annoncer('Préparation automatique désactivée : plus aucun texte ne sera envoyé.');
     vueReglages(['ia']);
   });
+  document.getElementById('ia-accord-evenements').addEventListener('change', async (e) => {
+    await enregistrerParametres({ ia: { ...C.parametresParDefaut().ia, ...etat.parametres.ia, consentementEvenementsUtc: e.target.checked ? new Date(maintenant()).toISOString() : null } });
+    annoncer(e.target.checked ? 'Accord enregistré : les événements marquants seront intégrés aux versions rédigées.' : 'Accord retiré : les événements marquants ne seront plus envoyés.');
+  });
+  document.querySelectorAll('[name="ia-style"]').forEach((r) => r.addEventListener('change', async () => {
+    await enregistrerParametres({ styleRedaction: r.value });
+    annoncer(`Style choisi : ${C.styleRedaction(etat.parametres).libelle}. Il s'appliquera aux prochaines versions.`);
+  }));
   document.getElementById('ia-accord-synthese').addEventListener('change', async (e) => {
     await enregistrerParametres({ ia: { ...C.parametresParDefaut().ia, ...etat.parametres.ia, consentementSyntheseUtc: e.target.checked ? new Date(maintenant()).toISOString() : null } });
     annoncer(e.target.checked ? 'Accord pour la synthèse enregistré : elle ne sera rédigée que lorsque tu la demandes.' : 'Accord pour la synthèse retiré : aucune donnée ne sera envoyée pour la synthèse.');

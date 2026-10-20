@@ -64,21 +64,25 @@ async function appelerServeur(cfg, serveur, systeme, entrees, f) {
  * Demande une version professionnelle pour les évaluations données.
  * Retourne { propositions:[{id, explication, complement, prevision}], ignorees:[...] }.
  */
-export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis) } = {}) {
+export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis), evenements = null } = {}) {
   const cfg = parametres.ia || {};
   if (!cfg.actif || !cfg.consentementUtc || cfg.consentementFournisseur !== cfg.fournisseur) throw new Error('La préparation automatique n\'est pas activée (Réglages).');
   if (cfg.fournisseur === 'anthropic' && !cfg.cle) throw new Error('Clé d\'accès manquante (Réglages).');
-  const a = evaluations.filter(C.aDesTextes);
-  const systeme = C.instructionsReformulation();
+  // Événements marquants : transmis seulement avec l'accord spécifique du patient
+  const evts = cfg.consentementEvenementsUtc && Array.isArray(evenements) ? evenements : null;
+  const style = C.styleRedaction(parametres).id;
+  const a = evaluations.filter((e) => C.aDesTextes(e, evts));
+  const systeme = C.instructionsReformulation({ style });
+  const entreesDe = (l) => C.entreesReformulation(l, { evenements: evts });
   const propositions = [];
   const ignorees = [];
   for (let i = 0; i < a.length; i += TAILLE_LOT) {
     const lot = a.slice(i, i + TAILLE_LOT);
-    const entrees = C.entreesReformulation(lot);
+    const entrees = entreesDe(lot);
     const texte = cfg.fournisseur === 'serveur'
       ? await appelerServeur(cfg, parametres.serveurRappels, systeme, entrees, f)
       : await appelerAnthropic(cfg, systeme, entrees, f);
-    const r = C.lireReponseReformulation(texte, lot);
+    const r = C.lireReponseReformulation(texte, lot, evts);
     // Contrôle : une proposition encore à la première personne est redemandée une fois, avec un rappel
     // (et une proposition trop longue)
     const premiere = (p) => ['explication', 'complement', 'prevision'].some((k) => C.contientPremierePersonne(p[k]));
@@ -91,13 +95,19 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
       const rappel = `${systeme}\n\nATTENTION : ${consignes.join(' ; de plus, ')}.`;
       try {
         const texte2 = cfg.fournisseur === 'serveur'
-          ? await appelerServeur(cfg, parametres.serveurRappels, rappel, C.entreesReformulation(lot2), f)
-          : await appelerAnthropic(cfg, rappel, C.entreesReformulation(lot2), f);
-        for (const p of C.lireReponseReformulation(texte2, lot2).propositions) {
+          ? await appelerServeur(cfg, parametres.serveurRappels, rappel, entreesDe(lot2), f)
+          : await appelerAnthropic(cfg, rappel, entreesDe(lot2), f);
+        for (const p of C.lireReponseReformulation(texte2, lot2, evts).propositions) {
           const i = r.propositions.findIndex((x) => x.id === p.id);
           if (i >= 0) r.propositions[i] = p;
         }
       } catch { /* on garde la première proposition : le patient la relit de toute façon */ }
+    }
+    // Style et événements pris en compte : mémorisés avec la proposition
+    for (const p of r.propositions) {
+      const ev = lot.find((e) => e.id === p.id);
+      p.style = style;
+      p.empreinteEvenements = ev ? C.empreinteEvenements(ev, evts) : '';
     }
     propositions.push(...r.propositions);
     ignorees.push(...r.ignorees);
@@ -128,7 +138,7 @@ export async function redigerSynthese(parametres, donnees, { fetch: f = globalTh
   const appeler = (systeme) => (cfg.fournisseur === 'serveur'
     ? appelerServeur(cfg, parametres.serveurRappels, systeme, donnees, f)
     : appelerAnthropic(cfg, systeme, donnees, f));
-  const systeme = C.instructionsSynthese();
+  const systeme = C.instructionsSynthese({ style: C.styleRedaction(parametres).id });
   let texte = C.lireReponseSynthese(await appeler(systeme));
   if (texte.length > C.LONGUEUR_SYNTHESE) {
     try {
