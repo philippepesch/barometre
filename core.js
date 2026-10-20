@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.18.1';
+export const VERSION_APP = '1.19.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -333,7 +333,11 @@ export function domaineMotif(m, bibliotheque = []) {
 // Simplification proposée de la bibliothèque (octobre 2026) : motifs proches réunis sous un libellé court.
 // L'ordre compte : un motif est rangé dans le premier groupe dont un mot-clé correspond (sans accents ni casse).
 export const PLAN_MOTIFS = [
-  // Facteurs extérieurs (aucune influence possible) : en tête, pour être reconnus avant les autres groupes
+  // Plan en miroir : dans chaque domaine, le n-ième motif favorable a pour pendant le n-ième motif défavorable.
+  // L'ordre compte aussi pour reconnaître les anciens motifs : le premier groupe qui correspond l'emporte.
+  // « anciens » : libellés d'avant un renommage (le motif garde son identité et ses évaluations).
+
+  // 1. Facteurs extérieurs (aucune influence possible)
   { libelle: 'Météo agréable', polarite: 'favorable', domaine: 'exterieur', cles: [/meteo/, /soleil/, /ensoleill/, /beau temps/], description: 'Soleil, temps doux ou agréable.' },
   {
     libelle: 'Bons résultats sportifs', polarite: 'favorable', domaine: 'exterieur', questionSous: 'Lesquels ?', cles: [/victoire/, /gagn/, /bons? resultats?/, /bonnes? performances?/],
@@ -354,24 +358,108 @@ export const PLAN_MOTIFS = [
     ],
   },
   { libelle: 'Baisse de mes placements', polarite: 'defavorable', domaine: 'exterieur', cles: [/placement/, /bourse/, /portefeuille/, /valeurs? financ/, /baisse/], description: 'Mauvaise évolution de mes placements, de la bourse ou de mes valeurs financières.' },
-  { libelle: 'Calme et solitude', polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.' },
-  { libelle: 'Liberté, sans contraintes', polarite: 'favorable', domaine: 'obligations', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
+
+  // 2. Corps
+  { libelle: 'Bon sommeil', polarite: 'favorable', domaine: 'corps', cles: [/sommeil/, /dormi/], description: 'Nuit réparatrice, bien dormi.' },
+  { libelle: 'Activité physique, promenade', polarite: 'favorable', domaine: 'corps', cles: [/promenade/, /activite physique/, /sport/], description: 'Promenade, sport ou toute activité physique, même avec peu de motivation.' },
+  { libelle: 'Santé : soin ou bonne nouvelle', polarite: 'favorable', domaine: 'corps', cles: [/diagnostic/, /pedicure/, /medecin/, /sante/, /soin/], description: 'Soin reçu ou bonne nouvelle médicale : diagnostic clair, pédicure médicale…' },
+  {
+    libelle: 'Sevrage : progrès', polarite: 'favorable', domaine: 'corps', questionSous: 'Quoi ?', cles: [/sevrage/, /benzo/, /palier/],
+    description: 'Le sevrage du médicament avance : dose baissée, stabilisation ou bonne tolérance. Précise (facultatif).',
+    sous: [
+      { libelle: 'Dose baissée', cles: [/baiss/, /palier/, /descendu/], description: 'J\'ai pu descendre d\'un palier.' },
+      { libelle: 'Stabilisé à la dose actuelle', cles: [/stabilis/], description: 'Je me suis stabilisé à la dose actuelle.' },
+      { libelle: 'Sevrage bien supporté', cles: [/supporte/, /tolere/], description: 'Peu ou pas de symptômes de sevrage.' },
+    ],
+  },
+  { libelle: 'Fatigue, mauvais repos', polarite: 'defavorable', domaine: 'corps', cles: [/fatigue/, /repos/, /recuper/], description: 'Fatigue, difficulté à se reposer et à récupérer.' },
+  { libelle: 'Peu bougé, inactivité', polarite: 'defavorable', domaine: 'corps', cles: [/inactiv/, /pas bouge/, /peu bouge/, /sedentar/], description: 'Peu ou pas d\'activité physique, journée sans bouger.' },
+  { libelle: 'Santé : douleurs, peur de la maladie', polarite: 'defavorable', domaine: 'corps', cles: [/douleur/, /cancer/, /maladie/], description: 'Douleurs physiques, peur du cancer ou de la maladie.' },
+  {
+    libelle: 'Sevrage : difficultés', polarite: 'defavorable', domaine: 'corps', questionSous: 'Quoi ?', cles: [/sevrage/, /benzo/],
+    description: 'Le sevrage du médicament est difficile : dose remontée, pas pu baisser, ou symptômes. Précise (facultatif).',
+    sous: [
+      { libelle: 'Dose remontée', cles: [/remont/, /augment/], description: 'J\'ai dû remonter la dose.' },
+      { libelle: 'Pas pu baisser, seulement maintenu', cles: [/maintenu/, /pas pu baisser/], description: 'J\'ai seulement pu maintenir la dose au lieu de la baisser.' },
+      { libelle: 'Symptômes de sevrage', cles: [/symptome/, /effets?/], description: 'Symptômes ressentis pendant la diminution du médicament.' },
+    ],
+  },
+
+  // 3. Relations
   {
     libelle: 'Encouragements, retours positifs', polarite: 'favorable', domaine: 'relations', questionSous: 'De qui, ou sur quoi ?',
     cles: [/retour positif/, /encourag/, /compliment/, /\blob\b/, /felicit/, /reconnaissance/, /feedback/, /eloge/],
     description: 'Un compliment, un encouragement, un retour positif ou des félicitations reçus. Précise de qui ou sur quoi (facultatif).',
     sous: [
-      { libelle: 'De mes proches', cles: [/famill/, /enfant/, /\bfils\b/, /\bfille\b/, /epouse/, /\bfemme\b/, /\bmere\b/, /\bpere\b/, /parents/, /couple/], description: 'De ma famille : ma femme, mes enfants, mes parents…' },
-      { libelle: 'D\'un ami ou d\'un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'D\'un ami ou d\'un collègue.' },
-      { libelle: 'D\'un professionnel (médecin, thérapeute…)', cles: [/medecin/, /therapeut/, /docteur/, /professionnel/], description: 'D\'un médecin, de mon thérapeute ou d\'un autre professionnel.' },
-      { libelle: 'Sur mes travaux ou mes projets', cles: [/travaux/, /recherche/, /projet/, /application/], description: 'Un retour positif sur mes recherches, mes applications ou mes projets.' },
-      { libelle: 'D\'une autre personne', cles: [/autre personne/, /inconnu/, /en ligne/], description: 'De quelqu\'un d\'autre, sans préciser.' },
+      { libelle: 'Encouragé par mes proches', anciens: ['De mes proches'], cles: [/famill/, /enfant/, /\bfils\b/, /\bfille\b/, /epouse/, /\bfemme\b/, /\bmere\b/, /\bpere\b/, /parents/, /couple/], description: 'Par ma femme, mes enfants, mes parents…' },
+      { libelle: 'Encouragé par un ami, un collègue', anciens: ['D\'un ami ou d\'un collègue'], cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Par un ami ou un collègue.' },
+      { libelle: 'Encouragé par un professionnel', anciens: ['D\'un professionnel (médecin, thérapeute…)'], cles: [/medecin/, /therapeut/, /docteur/, /professionnel/], description: 'Par un médecin, mon thérapeute ou un autre professionnel.' },
+      { libelle: 'Encouragé par une autre personne', anciens: ['D\'une autre personne'], cles: [/autre personne/, /inconnu/, /en ligne/], description: 'Par quelqu\'un d\'autre.' },
+      { libelle: 'Retour positif sur mes travaux', anciens: ['Sur mes travaux ou mes projets'], cles: [/travaux/, /recherche/, /projet/, /application/], description: 'Un retour positif sur mes recherches, mes applications ou mes projets.' },
     ],
   },
+  {
+    libelle: 'Moments avec mes proches', polarite: 'favorable', domaine: 'relations', questionSous: 'Avec qui ?', cles: [/enfant/, /(^|\s)ami/, /proches/, /famill/],
+    description: 'Moments partagés avec ma femme, mes enfants, ma famille ou des amis. Précise avec qui (facultatif).',
+    sous: [
+      { libelle: 'Bon moment avec ma femme', cles: [/couple/, /epouse/, /\bfemme\b/, /compagne/], description: 'Avec ma femme.' },
+      { libelle: 'Bon moment avec mes enfants', cles: [/enfant/, /\bfils\b/, /\bfille\b/], description: 'Avec mon fils ou mes enfants.' },
+      { libelle: 'Bon moment en famille', cles: [/famill/, /\bmere\b/, /\bpere\b/, /parents/], description: 'Avec mes parents ou d\'autres membres de la famille.' },
+      { libelle: 'Bon moment entre amis, collègues', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Avec des amis ou des collègues.' },
+      { libelle: 'Bon moment avec quelqu\'un d\'autre', cles: [/autre personne/, /quelqu.un/], description: 'Avec quelqu\'un d\'autre.' },
+    ],
+  },
+  { libelle: 'Couple : complicité, soutien', polarite: 'favorable', domaine: 'relations', cles: [/complicit/, /soutenu/, /tendresse/], description: 'Proximité, complicité ou soutien ressentis avec ma femme.' },
+  { libelle: 'Mes enfants : fierté, être présent', polarite: 'favorable', domaine: 'relations', cles: [/\bfier/, /bon pere/, /present pour/], description: 'Fier de mes enfants, ou le sentiment d\'être présent et d\'avoir pu leur donner quelque chose.' },
+  {
+    libelle: 'Critiques, reproches', polarite: 'defavorable', domaine: 'relations', questionSous: 'De qui, ou sur quoi ?', cles: [/critiqu/, /reproche/, /jugement/, /jug(e|ee) /],
+    description: 'Une critique, un reproche ou un jugement reçus. Précise de qui ou sur quoi (facultatif).',
+    sous: [
+      { libelle: 'Critiqué par mes proches', cles: [/famill/, /enfant/, /\bfils\b/, /\bfille\b/, /epouse/, /\bfemme\b/, /\bmere\b/, /\bpere\b/, /parents/, /couple/], description: 'Par ma femme, mes enfants, mes parents…' },
+      { libelle: 'Critiqué par un ami, un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Par un ami ou un collègue.' },
+      { libelle: 'Critiqué par un professionnel', cles: [/medecin/, /therapeut/, /docteur/, /professionnel/], description: 'Par un médecin ou un autre professionnel.' },
+      { libelle: 'Critiqué par une autre personne', cles: [/autre personne/, /inconnu/, /en ligne/], description: 'Par quelqu\'un d\'autre.' },
+      { libelle: 'Critique de mes travaux', cles: [/travaux/, /recherche/, /projet/, /application/], description: 'Une critique de mes recherches, mes applications ou mes projets.' },
+    ],
+  },
+  {
+    libelle: 'Conflits personnels', polarite: 'defavorable', domaine: 'relations', questionSous: 'Avec qui ?', cles: [/conflit/, /dispute/, /streit/, /couple/], description: 'Dispute ou tension avec une personne proche. Précise avec qui (facultatif).',
+    sous: [
+      { libelle: 'Conflit dans le couple', cles: [/couple/, /conjoint/, /partenaire/, /compagne/, /epouse/, /\bfemme\b/], description: 'Avec ma femme.' },
+      { libelle: 'Conflit avec mes enfants', cles: [/\bfils\b/, /\bfille\b/, /enfant/], description: 'Avec mon fils ou mes enfants.' },
+      { libelle: 'Conflit avec mes parents ou ma famille', cles: [/\bmere\b/, /maman/, /\bpere\b/, /papa/, /parents/, /\bsoeur\b/, /\bfrere\b/, /oncle/, /tante/], description: 'Avec ma mère, mon père ou un autre membre de la famille.' },
+      { libelle: 'Conflit avec un ami ou un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Avec un bon ami ou un collègue proche.' },
+      { libelle: 'Conflit avec une autre personne', cles: [/autre personne/, /quelqu.un/], description: 'Avec quelqu\'un d\'autre, sans préciser.' },
+    ],
+  },
+  { libelle: 'Couple : distance, se sentir seul', polarite: 'defavorable', domaine: 'relations', cles: [/distance/, /seul dans (le|mon) couple/, /plus soutenu/, /eloignement/], description: 'Distance émotionnelle avec ma femme, se sentir seul ou peu soutenu dans le couple, sans dispute.' },
+  {
+    libelle: 'Mes enfants : manque, culpabilité', anciens: ['Mes enfants (manque, culpabilité)'], polarite: 'defavorable', domaine: 'relations', questionSous: 'Plutôt :', cles: [/enfant/, /culpabilit/],
+    description: 'Les enfants manquent, ou culpabilité de ne pas assez s\'investir auprès d\'eux. Précise (facultatif).',
+    sous: [
+      { libelle: 'Ils me manquent', cles: [/manque/], description: 'Mes enfants me manquent.' },
+      { libelle: 'Culpabilité envers eux', cles: [/culpabil/, /investi/], description: 'Culpabilité de ne pas assez m\'investir auprès d\'eux.' },
+    ],
+  },
+
+  // 4. Obligations
+  { libelle: 'Liberté, sans contraintes', polarite: 'favorable', domaine: 'obligations', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
+  { libelle: 'Travail : perspective rassurante', polarite: 'favorable', domaine: 'obligations', cles: [/perspective/, /travail rassurant/, /reprise rassurante/], description: 'Une perspective rassurante pour le travail : échange positif, reprise envisagée sereinement…' },
+  { libelle: 'Démarches réglées, bonne nouvelle d\'argent', polarite: 'favorable', domaine: 'obligations', cles: [/demarche/, /rembourse/, /bonne nouvelle (financ|administr|d.argent)/, /regle/], description: 'Une démarche réglée, un papier en ordre, un remboursement ou une bonne nouvelle financière.' },
+  { libelle: 'Contraintes familiales (organisation)', polarite: 'defavorable', domaine: 'obligations', cles: [/contraintes? famil/, /logisti/, /organisation famil/], description: 'Stress d\'organisation dans la famille : rendez-vous, horaires, logistique (sans conflit).' },
+  { libelle: 'Peur du retour au travail', polarite: 'defavorable', domaine: 'obligations', cles: [/bureau/, /retour (potentiel )?(au|a) (travail|bureau)/, /retour au travail/], description: 'Appréhension d\'un retour possible au bureau.' },
+  { libelle: 'Soucis financiers ou administratifs', polarite: 'defavorable', domaine: 'obligations', cles: [/financ/, /courrier/, /administrat/, /facture/], description: 'Préoccupations d\'argent, courrier désagréable (rétention, pénalité, facture, résultats d\'analyses).' },
+
+  // 5. Environnement
+  { libelle: 'Calme et solitude', polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.' },
+  { libelle: 'Lieu qui fait du bien', polarite: 'favorable', domaine: 'environnement', cles: [/nature/, /lieu agreable/, /fait du bien/], description: 'Un endroit où je me sens bien : nature, maison de week-end, lieu apaisant…' },
+  { libelle: 'Bruit et désordre au domicile', polarite: 'defavorable', domaine: 'environnement', cles: [/bruit/, /travaux/, /domicile/, /desordre/], description: 'Bruit, travaux, stress ou désordre visuel au domicile.' },
+  { libelle: 'Lieu qui pèse', polarite: 'defavorable', domaine: 'environnement', cles: [/lieu (qui )?pese/, /boule au ventre/, /tension en arrivant/], description: 'Un endroit où la tension monte dès que j\'y arrive (« boule au ventre »).' },
+
+  // 6. Activités
   { libelle: 'Réussite personnelle', anciens: ['Réussite ou retour positif'], polarite: 'favorable', domaine: 'activites', cles: [/application/, /reussite/, /abouti/, /finalis/, /termine/], description: 'Un travail abouti ou une chose menée à bien : application créée, finalisée ou améliorée, étape franchie…' },
-  { libelle: 'Projets personnels (recherches, photo…)', polarite: 'favorable', domaine: 'activites', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…' },
   { libelle: 'Journée utile et occupée', polarite: 'favorable', domaine: 'activites', cles: [/occupe/, /utile/], description: 'Sentiment d\'avoir été occupé de manière constructive, journée utile.' },
-  { libelle: 'Activité physique, promenade', polarite: 'favorable', domaine: 'corps', cles: [/promenade/, /activite physique/, /sport/], description: 'Promenade, sport ou toute activité physique, même avec peu de motivation.' },
+  { libelle: 'Projets personnels (recherches, photo…)', polarite: 'favorable', domaine: 'activites', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…' },
   {
     libelle: 'Football (KSC, équipe nationale)', polarite: 'favorable', domaine: 'activites', cles: [/fanclub/, /karlsruhe/, /\bksc\b/, /football/, /foot\b/, /equipe nationale/, /stade de luxembourg/], questionSous: 'Quoi ?',
     description: 'Le Karlsruher SC (KSC) et l\'équipe nationale de football du Luxembourg. Précise quoi (facultatif).',
@@ -383,31 +471,19 @@ export const PLAN_MOTIFS = [
       { libelle: 'Encore heureux d\'un match de l\'équipe nationale', cles: [/(nationale|stade de luxembourg)/], description: 'Un match de l\'équipe nationale au Stade de Luxembourg qui fait encore du bien après coup.' },
     ],
   },
-  { libelle: 'Moments avec mes proches', polarite: 'favorable', domaine: 'relations', cles: [/enfant/, /(^|\s)ami/, /proches/, /famill/], description: 'Moments partagés avec les enfants, la famille ou des amis.' },
-  { libelle: 'Santé : soin ou bonne nouvelle', polarite: 'favorable', domaine: 'corps', cles: [/diagnostic/, /pedicure/, /medecin/, /sante/, /soin/], description: 'Soin reçu ou bonne nouvelle médicale : diagnostic clair, pédicure médicale…' },
-  { libelle: 'Bon sommeil', polarite: 'favorable', domaine: 'corps', cles: [/sommeil/, /dormi/], description: 'Nuit réparatrice, bien dormi.' },
-  { libelle: 'Peur du retour au travail', polarite: 'defavorable', domaine: 'obligations', cles: [/bureau/, /retour (potentiel )?(au|a) (travail|bureau)/, /retour au travail/], description: 'Appréhension d\'un retour possible au bureau.' },
-  { libelle: 'Contraintes familiales (organisation)', polarite: 'defavorable', domaine: 'obligations', cles: [/contraintes? famil/, /logisti/, /organisation famil/], description: 'Stress d\'organisation dans la famille : rendez-vous, horaires, logistique (sans conflit).' },
-  {
-    libelle: 'Conflits personnels', polarite: 'defavorable', domaine: 'relations', questionSous: 'Avec qui ?', cles: [/conflit/, /dispute/, /streit/, /couple/], description: 'Dispute ou tension avec une personne proche. Précise avec qui (facultatif).',
-    sous: [
-      { libelle: 'Conflit dans le couple', cles: [/couple/, /conjoint/, /partenaire/, /compagne/, /epouse/, /\bfemme\b/], description: 'Avec ma femme.' },
-      { libelle: 'Conflit avec mes enfants', cles: [/\bfils\b/, /\bfille\b/, /enfant/], description: 'Avec mon fils ou mes enfants.' },
-      { libelle: 'Conflit avec mes parents ou ma famille', cles: [/\bmere\b/, /maman/, /\bpere\b/, /papa/, /parents/, /\bsoeur\b/, /\bfrere\b/, /oncle/, /tante/], description: 'Avec ma mère, mon père ou un autre membre de la famille.' },
-      { libelle: 'Conflit avec un ami ou un collègue', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Avec un bon ami ou un collègue proche.' },
-      { libelle: 'Conflit avec une autre personne', cles: [/autre personne/, /quelqu.un/], description: 'Avec quelqu\'un d\'autre, sans préciser.' },
-    ],
-  },
-  { libelle: 'Mes enfants (manque, culpabilité)', polarite: 'defavorable', domaine: 'relations', cles: [/enfant/, /culpabilit/], description: 'Les enfants manquent, ou culpabilité de ne pas assez s\'investir auprès d\'eux.' },
-  { libelle: 'Bruit et désordre au domicile', polarite: 'defavorable', domaine: 'environnement', cles: [/bruit/, /travaux/, /domicile/, /desordre/], description: 'Bruit, travaux, stress ou désordre visuel au domicile.' },
-  { libelle: 'Soucis financiers ou administratifs', polarite: 'defavorable', domaine: 'obligations', cles: [/financ/, /courrier/, /administrat/, /facture/], description: 'Préoccupations d\'argent, courrier désagréable (rétention, pénalité, facture, résultats d\'analyses).' },
-  { libelle: 'Fatigue, mauvais repos', polarite: 'defavorable', domaine: 'corps', cles: [/fatigue/, /repos/, /recuper/], description: 'Fatigue, difficulté à se reposer et à récupérer.' },
+  { libelle: 'Échec, chose non aboutie', polarite: 'defavorable', domaine: 'activites', cles: [/echec/, /pas abouti/, /non abouti/], description: 'Quelque chose qui n\'a pas marché ou que je n\'ai pas pu mener à bien.' },
+  { libelle: 'Journée vide, ennui', polarite: 'defavorable', domaine: 'activites', cles: [/ennui/, /journee vide/, /desoeuvr/], description: 'Journée sans occupation qui ait du sens, ennui.' },
   { libelle: 'Trop d\'écran', polarite: 'defavorable', domaine: 'activites', cles: [/ecran/], description: 'Temps excessif passé devant un écran.' },
-  { libelle: 'Santé : douleurs, peur de la maladie', polarite: 'defavorable', domaine: 'corps', cles: [/douleur/, /cancer/, /maladie/], description: 'Douleurs physiques, peur du cancer ou de la maladie.' },
-  { libelle: 'Manque d\'organisation ou de motivation', polarite: 'defavorable', domaine: 'obligations', cles: [/organis/, /motiv/, /equilibre/], description: 'Difficulté à s\'organiser, à se motiver (activité physique) ou à trouver un équilibre de vie sain.' },
+
+  // 7. État d'esprit
+  { libelle: 'Apaisement, confiance', polarite: 'favorable', domaine: 'esprit', cles: [/apais/, /serein/, /confiance/], description: 'Se sentir apaisé, serein, en confiance.' },
+  { libelle: 'Élan, motivation', polarite: 'favorable', domaine: 'esprit', cles: [/\belan\b/, /envie de faire/, /energi/], description: 'Avoir de l\'élan, de l\'envie et de l\'énergie pour faire les choses.' },
+  { libelle: 'Esprit clair, disponible', polarite: 'favorable', domaine: 'esprit', cles: [/esprit clair/, /disponible/, /concentr/], description: 'Tête claire, capable de me concentrer et de faire une chose à la fois.' },
+  { libelle: 'Petits plaisirs du quotidien', polarite: 'favorable', domaine: 'esprit', cles: [/plaisir/, /petit bonheur/], description: 'Petits moments agréables : un bon repas, un café tranquille, une musique, un imprévu sympathique…' },
+  { libelle: 'Anxiété, préoccupations', polarite: 'defavorable', domaine: 'esprit', cles: [/anxi/, /preoccup/, /angoiss/], description: 'Anxiété diffuse, préoccupations personnelles.' },
+  { libelle: 'Manque d\'organisation ou de motivation', polarite: 'defavorable', domaine: 'esprit', cles: [/organis/, /motiv/, /equilibre/], description: 'Difficulté à s\'organiser, à se motiver (activité physique) ou à trouver un équilibre de vie sain.' },
   { libelle: 'Surcharge mentale', polarite: 'defavorable', domaine: 'esprit', cles: [/stimul/, /court.?circuit/, /surcharge/], description: 'Trop de sollicitations en même temps, sensation de court-circuit mental.' },
   { libelle: 'Contrariétés du quotidien', polarite: 'defavorable', domaine: 'esprit', cles: [/flash/, /trop vite/, /contrariet/], description: 'Petits événements contrariants : excès de vitesse flashé, objet perdu, imprévu agaçant…' },
-  { libelle: 'Anxiété, préoccupations', polarite: 'defavorable', domaine: 'esprit', cles: [/anxi/, /preoccup/, /angoiss/], description: 'Anxiété diffuse, préoccupations personnelles.' },
 ];
 
 /**
@@ -450,7 +526,7 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
     (groupes[i].reclasses = groupes[i].reclasses || []).push(m);
   }
   let changements = 0;
-  for (const g of groupes) {
+  for (const [ig, g] of groupes.entries()) {
     const k = normaliserLibelle(g.cible.libelle);
     g.principal = g.membres.find((m) => normaliserLibelle(m.libelle) === k)
       || g.membres.find((m) => (g.cible.anciens || []).some((a) => normaliserLibelle(a) === normaliserLibelle(m.libelle)))
@@ -458,7 +534,8 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
     g.aCreer = !g.principal;
     const p = g.principal;
     const parent = g.cible.parent === null ? null : groupes[g.cible.parent].principal;
-    if (!p || p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (g.cible.parent !== null && (!parent || p.parentId !== parent.id)) || (g.cible.domaine || '') !== (p.domaine || '') || (g.cible.questionSous || '') !== (p.questionSous || '')) changements++;
+    // L'ordre suit le plan : les paires favorable / défavorable apparaissent au même rang
+    if (!p || p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (g.cible.parent !== null && (!parent || p.parentId !== parent.id)) || (g.cible.domaine || '') !== (p.domaine || '') || (g.cible.questionSous || '') !== (p.questionSous || '') || (p.ordre ?? null) !== ig) changements++;
     changements += g.membres.filter((m) => m !== p).length;
   }
   // Un motif regroupé ne change que si sa racine actuelle n'est pas déjà le motif retenu pour ce groupe
@@ -477,14 +554,13 @@ export function appliquerSimplification(motifs, plan, instant = Date.now()) {
   const le = new Date(instant).toISOString();
   const sortie = [];
   const finaux = [];
-  let ordre = Math.max(0, ...motifs.map((m) => m.ordre ?? 0));
   plan.groupes.forEach((g, i) => {
     const parent = g.cible.parent === null ? null : finaux[g.cible.parent];
     let p = g.principal;
     if (!p) {
-      p = { ...creerMotif(g.cible.libelle, g.cible.polarite, instant, ++ordre, g.cible.description), ...(parent ? { parentId: parent.id } : {}), ...(g.cible.domaine ? { domaine: g.cible.domaine } : {}), ...(g.cible.questionSous ? { questionSous: g.cible.questionSous } : {}) };
+      p = { ...creerMotif(g.cible.libelle, g.cible.polarite, instant, i, g.cible.description), ...(parent ? { parentId: parent.id } : {}), ...(g.cible.domaine ? { domaine: g.cible.domaine } : {}), ...(g.cible.questionSous ? { questionSous: g.cible.questionSous } : {}) };
       sortie.push(p);
-    } else if (p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (parent ? p.parentId !== parent.id : !!p.parentId) || (g.cible.domaine || '') !== (p.domaine || '') || (g.cible.questionSous || '') !== (p.questionSous || '')) {
+    } else if (p.libelle !== g.cible.libelle || (p.description || '') !== g.cible.description || (parent ? p.parentId !== parent.id : !!p.parentId) || (g.cible.domaine || '') !== (p.domaine || '') || (g.cible.questionSous || '') !== (p.questionSous || '') || (p.ordre ?? null) !== i) {
       const { parentId: _ancien, domaine: _ancienDomaine, questionSous: _ancienneQuestion, ...sansParent } = p;
       p = { ...sansParent, libelle: g.cible.libelle, description: g.cible.description, ordre: i, ...(parent ? { parentId: parent.id } : {}), ...(g.cible.domaine ? { domaine: g.cible.domaine } : {}), ...(g.cible.questionSous ? { questionSous: g.cible.questionSous } : {}), modifieLeUtc: le };
       sortie.push(p);
