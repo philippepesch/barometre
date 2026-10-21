@@ -1,6 +1,6 @@
 // Service worker : fonctionnement hors ligne et notifications.
 // Changer VERSION à chaque mise à jour des fichiers de l'application.
-const VERSION = 'barometre-humeur-1.26.0';
+const VERSION = 'barometre-humeur-1.27.0';
 const FICHIERS = [
   './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'meteo.js', 'carte.js', 'pdf-lib.min.js',
   'manifest.webmanifest', 'icone-32.png', 'icone-192.png', 'icone-512.png', 'icone-maskable-512.png',
@@ -8,7 +8,9 @@ const FICHIERS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FICHIERS)));
+  // « reload » : toujours les fichiers neufs du serveur, jamais une copie gardée par le navigateur
+  // (sinon, deux mises à jour rapprochées peuvent mélanger deux versions)
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FICHIERS.map((f) => new Request(f, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {

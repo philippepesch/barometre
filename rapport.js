@@ -1111,7 +1111,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     const infos = [
       ['Période analysée', `du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)} (${C.pluriel(nbJours, 'jour')})`],
       precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
-      prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : null,
+      prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : (parametres.seanceAConvenir ? ['Prochaine séance', 'pas encore convenue'] : null),
       ['Type de rapport', type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
       ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
     ].filter(Boolean);

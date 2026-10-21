@@ -553,3 +553,12 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .choix-ligne:has(input:not(:checked)) textarea { opacity: 0.72; }
 .choix-ajout { margin-top: 8px; flex-wrap: nowrap; }
 .choix-ajout input { flex: 1; min-width: 0; }
+
+/* Séance annulée : barrée dans la liste, avec un badge */
+.seance-annulee s { color: var(--encre-2, #5e6b74); }
+.badge-annulee { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--fond-doux, #eef1f4); color: var(--encre-2, #5e6b74); margin-left: 4px; }
+
+/* « Autre… » sous les sous-catégories d'un motif */
+.sous-autre { display: inline-flex; gap: 4px; align-items: center; flex: 1 1 180px; max-width: 320px; }
+.sous-autre input { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 999px; font-size: .9rem; }
+.sous-autre .bouton-discret { padding: 6px 8px; }

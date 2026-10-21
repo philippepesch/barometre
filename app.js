@@ -35,31 +35,54 @@ const seances = () => C.seancesDepuisParametres(etat.parametres || {});
 async function enregistrerSeances(liste) {
   const triees = C.trierSeances(liste);
   const proch = C.prochaineSeance(triees, maintenant());
-  await enregistrerParametres({ seances: triees, prochaineSeance: proch ? proch.date : '' });
+  // Une séance à venir est connue : « pas encore convenue » n'a plus lieu d'être
+  await enregistrerParametres({ seances: triees, prochaineSeance: proch ? proch.date : '', ...(proch ? { seanceAConvenir: false } : {}) });
+}
+
+/** Plus de séance prévue pour l'instant : l'accueil l'indique calmement, sans redemander la date. */
+async function seancePasEncoreConvenue() {
+  await enregistrerParametres({ seanceAConvenir: true });
+  annoncer('Prochaine séance : pas encore convenue. Tu pourras l\'ajouter dès qu\'elle sera fixée.');
 }
 
 /** Fenêtre d'ajout ou de modification d'une séance. Retourne la séance enregistrée, ou null. */
 async function dialogueSeance(existante = null) {
   const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
   for (;;) {
+    const enregistree = existante && existante.id && seances().some((x) => x.id === existante.id);
     const r = await dialogue(`<h2 id="dialogue-titre">${existante ? 'Modifier la séance' : `Prochaine séance avec ${esc(dest)}`}</h2>
+      ${existante && existante.annulee ? '<p class="bandeau">Cette séance est marquée comme <strong>annulée</strong>.</p>' : ''}
       <div class="champ"><label for="s-date">Date</label><input type="date" id="s-date" name="date" value="${esc(existante ? existante.date : '')}" required autofocus></div>
       <div class="rangee" style="align-items:flex-start">
         <div class="champ" style="flex:1;min-width:120px"><label for="s-debut">De</label><input type="time" id="s-debut" name="debut" value="${esc(existante ? existante.debut : '')}" step="300"></div>
         <div class="champ" style="flex:1;min-width:120px"><label for="s-fin">À</label><input type="time" id="s-fin" name="fin" value="${esc(existante ? existante.fin : '')}" step="300"></div>
       </div>
       <p class="doux">Heure de Luxembourg. Les heures sont facultatives.</p>
-      <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+      ${enregistree ? `<div class="rangee" style="margin:4px 0 6px">${existante.annulee
+    ? '<button class="bouton-secondaire" value="retablir" formnovalidate>Rétablir la séance</button>'
+    : '<button class="bouton-secondaire" value="annulee" formnovalidate>Séance annulée</button>'}</div>
+      <p class="doux" style="margin-top:0">« Séance annulée » : elle reste dans la liste, barrée, mais ne compte ni comme prochaine ni comme dernière séance.</p>` : `<p style="margin:4px 0 6px"><button class="bouton-discret" value="a-convenir" formnovalidate>Pas encore convenue</button></p>`}
+      <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Fermer</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+    if (r.valeur === 'a-convenir') { await seancePasEncoreConvenue(); return { aConvenir: true }; }
+    if (r.valeur === 'annulee' || r.valeur === 'retablir') {
+      const sea = C.normaliserSeance({ ...existante, annulee: r.valeur === 'annulee', annuleeLeUtc: new Date(maintenant()).toISOString() });
+      await enregistrerSeances([...seances().filter((x) => x.id !== sea.id), sea]);
+      if (r.valeur === 'annulee') {
+        if (!C.prochaineSeance(seances(), maintenant())) await enregistrerParametres({ seanceAConvenir: true });
+        annoncer(`Séance du ${C.libelleSeance(sea, { court: true })} annulée.${C.prochaineSeance(seances(), maintenant()) ? '' : ' Prochaine séance : pas encore convenue.'}`);
+      } else annoncer(`Séance du ${C.libelleSeance(sea, { court: true })} rétablie.`);
+      return sea;
+    }
     if (r.valeur !== 'oui') return null;
     try {
-      const sea = C.normaliserSeance({ id: existante ? existante.id : undefined, date: r.donnees.get('date'), debut: r.donnees.get('debut'), fin: r.donnees.get('fin') });
+      const sea = C.normaliserSeance({ id: existante ? existante.id : undefined, date: r.donnees.get('date'), debut: r.donnees.get('debut'), fin: r.donnees.get('fin'), annulee: existante && existante.annulee, annuleeLeUtc: existante && existante.annuleeLeUtc });
       const liste = seances().filter((x) => x.id !== sea.id);
       await enregistrerSeances([...liste, sea]);
       annoncer(`Séance enregistrée : ${C.libelleSeance(sea)}.`);
       return sea;
     } catch (e) {
       annoncer(e.message);
-      existante = { id: existante ? existante.id : undefined, date: r.donnees.get('date') || '', debut: r.donnees.get('debut') || '', fin: r.donnees.get('fin') || '' };
+      existante = { ...(existante || {}), id: existante ? existante.id : undefined, date: r.donnees.get('date') || '', debut: r.donnees.get('debut') || '', fin: r.donnees.get('fin') || '' };
     }
   }
 }
@@ -381,6 +404,7 @@ function vueAccueil() {
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
     ${bandeauContexte()}
+    ${bandeauPrecisionsMotifs()}
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
@@ -422,15 +446,37 @@ function bandeauContexte() {
     <span class="rangee"><a class="bouton-secondaire" href="#/contexte">Compléter</a><button type="button" class="bouton-discret" data-action="masquer-contexte">Plus tard</button></span></div>`;
 }
 
+/** Bibliothèque déjà organisée selon le plan : seules de nouvelles précisions (sous-catégories) restent à ajouter. */
+function nouvellesPrecisions(plan = C.planSimplification(etat.motifs)) {
+  const racines = plan.groupes.filter((g) => g.cible.parent === null);
+  const conformes = racines.filter((g) => g.principal && C.normaliserLibelle(g.principal.libelle) === C.normaliserLibelle(g.cible.libelle)).length;
+  if (!racines.length || conformes < racines.length * 0.7) return null;
+  const nouvelles = plan.groupes.filter((g) => g.cible.parent !== null && g.aCreer);
+  const deplaces = plan.groupes.reduce((n, g) => n + (g.reclasses || []).length + (g.cible.parent !== null ? g.membres.filter((m) => m !== g.principal).length : 0), 0);
+  if (!nouvelles.length && !deplaces) return null;
+  const parents = [...new Set(nouvelles.map((g) => plan.groupes[g.cible.parent].cible.libelle))];
+  return { nouvelles, deplaces, parents };
+}
+
+function bandeauPrecisionsMotifs() {
+  if (etat.parametres.precisionsMotifsPlusTard === C.VERSION_APP) return '';
+  const n = nouvellesPrecisions();
+  if (!n || !n.nouvelles.length) return '';
+  return `<div class="bandeau bandeau-laiton rangee-espacee"><span><strong>Nouvelles précisions pour tes motifs</strong>${C.pluriel(n.nouvelles.length, 'sous-catégorie', 'sous-catégories')} à cocher si tu veux préciser : ${esc(n.parents.slice(0, 4).join(' · '))}${n.parents.length > 4 ? '…' : ''}. Rien n'est supprimé.</span>
+    <span class="rangee"><button type="button" class="bouton-secondaire" data-action="voir-precisions-motifs">Voir</button><button type="button" class="bouton-discret" data-action="precisions-plus-tard">Plus tard</button></span></div>`;
+}
+
 function bandeauSeance() {
   const p = etat.parametres;
   const dest = (p.destinataire || '').trim() || 'ton thérapeute';
   const liste = seances();
   const proch = C.prochaineSeance(liste, maintenant());
   if (!proch) {
+    // « Pas encore convenue » : ligne calme sous l'état du jour (voir ligneProchaineSeance), pas de bandeau
+    if (p.seanceAConvenir) return '';
     const passee = C.seancesPassees(liste, maintenant())[0];
     if (!passee) return '';
-    return `<div class="bandeau rangee-espacee"><span>Ta séance du ${esc(C.libelleSeance(passee, { court: true }))} est passée. Indique la prochaine séance avec ${esc(dest)}.</span><button type="button" class="bouton-secondaire" data-action="ajouter-seance">Ajouter la prochaine séance</button></div>`;
+    return `<div class="bandeau rangee-espacee"><span>Ta séance du ${esc(C.libelleSeance(passee, { court: true }))} est passée. Indique la prochaine séance avec ${esc(dest)}.</span><span class="rangee"><button type="button" class="bouton-secondaire" data-action="ajouter-seance">Ajouter la prochaine séance</button><button type="button" class="bouton-discret" data-action="seance-a-convenir">Pas encore convenue</button></span></div>`;
   }
   const seance = proch.date;
   const auj = aujourdhui();
@@ -444,8 +490,10 @@ function bandeauSeance() {
 
 function ligneProchaineSeance() {
   const proch = C.prochaineSeance(seances(), maintenant());
-  if (!proch) return '';
   const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
+  if (!proch) {
+    return etat.parametres.seanceAConvenir ? `<p class="etat-creneau">Prochaine séance avec ${esc(dest)} : <strong>pas encore convenue</strong>. <button type="button" class="bouton-discret" data-action="ajouter-seance">Ajouter</button></p>` : '';
+  }
   return `<p class="etat-creneau">Prochaine séance avec ${esc(dest)} : <strong>${esc(C.libelleSeance(proch))}</strong>. <button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(proch.id)}">Modifier</button></p>`;
 }
 
@@ -815,8 +863,34 @@ function brancherExplicationsMotifs(racine) {
       b.setAttribute('aria-pressed', String(!!(x && x.checked)));
     });
   });
+  // « Autre… » sous un motif : nouvelle sous-catégorie enregistrée, cochée tout de suite
+  const ajouterPrecision = async (champ) => {
+    const parent = etat.motifs.find((m) => m.id === champ.dataset.autreSous);
+    const groupe = champ.closest('.motifs-zone');
+    if (!parent || !groupe || !champ.value.trim()) { champ.focus(); return; }
+    const nom = groupe.dataset.motifs;
+    try {
+      const { motif, nouveau, reactive } = C.creerSousMotifPropre(parent, champ.value, etat.motifs, maintenant());
+      if (nouveau || reactive) await enregistrerMotif(motif);
+      let caseM = groupe.querySelector(`[name="${nom}"][value="${CSS.escape(motif.id)}"]`);
+      if (!caseM) {
+        const modele = document.createElement('div');
+        modele.innerHTML = `<label class="puce"${motif.description ? ` title="${esc(motif.description)}"` : ''}><input type="checkbox" name="${nom}" value="${esc(motif.id)}"><span><span class="pastille ${motif.polarite}" aria-hidden="true"></span>${esc(motif.libelle)}<span class="visuellement-cache"> (${C.LIBELLE_POLARITE[motif.polarite].toLowerCase()})</span></span></label>`;
+        champ.closest('.sous-autre').before(modele.firstElementChild);
+        caseM = groupe.querySelector(`[name="${nom}"][value="${CSS.escape(motif.id)}"]`);
+      }
+      if (!caseM.checked) { caseM.checked = true; caseM.dispatchEvent(new Event('change', { bubbles: true })); }
+      champ.value = '';
+      annoncer(nouveau ? `« ${motif.libelle} » ajouté : il sera proposé les prochaines fois.` : `« ${motif.libelle} » coché.`);
+    } catch (err) { annoncer(err.message); }
+  };
+  racine.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.dataset && e.target.dataset.autreSous) { e.preventDefault(); ajouterPrecision(e.target); }
+  });
   // Raccourci : coche ou décoche le motif dans son domaine
   racine.addEventListener('click', (e) => {
+    const bAutre = e.target.closest('[data-ajouter-sous]');
+    if (bAutre) { ajouterPrecision(bAutre.parentElement.querySelector('[data-autre-sous]')); return; }
     const b = e.target.closest('[data-raccourci]');
     if (!b) return;
     const groupe = b.closest('.motifs-zone');
@@ -838,7 +912,9 @@ function pucesMotifs(nom, selection, extra = []) {
   const coche = (m) => selection.has(m.id) || tous.some((x) => x.parentId === m.id && selection.has(x.id));
   const blocs = (liste) => liste.map((m) => {
     const sous = tous.filter((x) => x.parentId === m.id);
-    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}</div>` : '');
+    // « Autre… » : une précision écrite ici devient une sous-catégorie, proposée ensuite comme les autres
+    const autre = `<span class="sous-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-ajouter-sous="${esc(m.id)}">Ajouter</button></span>`;
+    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}${autre}</div>` : '');
   }).join('');
   const ordre = (a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr');
   const racines = tous.filter((m) => !estSous(m));
@@ -1512,11 +1588,16 @@ function vueCalendrier([mois]) {
 // ---------------------------------------------------------------------------
 // Bibliothèque de motifs
 
-function vueMotifs() {
+function usageMotifs() {
   const usage = new Map();
   for (const e of etat.evaluations) {
     for (const m of [...e.motifs, ...(e.prevision ? e.prevision.motifs : [])]) usage.set(m.id, (usage.get(m.id) || 0) + 1);
   }
+  return usage;
+}
+
+function vueMotifs() {
+  const usage = usageMotifs();
   const parId = motifParId();
   const ligne = (m) => {
     const enfants = etat.motifs.filter((x) => x.regroupeDans === m.id);
@@ -1536,10 +1617,13 @@ function vueMotifs() {
   const inactifs = etat.motifs.filter((m) => !m.actif || m.regroupeDans).sort((a, b) => a.libelle.localeCompare(b.libelle, 'fr'));
   const plan = C.planSimplification(etat.motifs, usage);
   const proposerSimplification = plan.changements > 0 && plan.groupes.filter((g) => g.membres.length).length >= 5;
+  const precisions = proposerSimplification ? nouvellesPrecisions(plan) : null;
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Bibliothèque de motifs</h1>
     <p class="encre-2">Les motifs proposés à la question 2. Les modifier, les regrouper ou les supprimer ne change jamais les évaluations déjà enregistrées : chacune conserve les motifs tels qu'ils ont été cochés. Un motif regroupé est compté avec son motif principal dans les statistiques.</p>
-    ${proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Organiser la bibliothèque</h2>
+    ${precisions ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Nouvelles précisions</h2>
+      <p>${precisions.nouvelles.length ? `${C.pluriel(precisions.nouvelles.length, 'nouvelle sous-catégorie', 'nouvelles sous-catégories')} (${esc(precisions.parents.join(' · '))})` : 'Des précisions'}${precisions.deplaces ? `, et ${C.pluriel(precisions.deplaces, 'ancien motif rangé', 'anciens motifs rangés')} dans la sous-catégorie qui lui correspond` : ''}. Les sous-catégories restent facultatives. Rien n'est supprimé ; tes évaluations passées gardent ce que tu avais coché.</p>
+      <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Organiser la bibliothèque</h2>
       <p>Proposition : ranger tes motifs en ${C.DOMAINES.length} domaines (${C.DOMAINES.map((d) => d.libelle).join(', ')}) selon d'où vient l'influence, et réunir ceux qui se ressemblent en ${plan.groupes.filter((g) => g.cible.parent === null).length} motifs courts et clairs, chacun avec une courte description. Rien n'est supprimé : les anciens motifs sont regroupés et comptés avec leur nouveau motif.</p>
       <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : ''}
     <form class="bloc" id="form-motif">
@@ -2771,13 +2855,14 @@ async function vueReglages([section] = []) {
       ${(() => {
     const liste = seances();
     const proch = C.prochaineSeance(liste, maintenant());
-    const futures = liste.filter((x) => C.bornesSeance(x).fin > maintenant());
-    const passees = C.seancesPassees(liste, maintenant());
-    const ligne = (x) => `<li><span>${esc(C.libelleSeance(x))}</span><span><button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(x.id)}">Modifier</button><button type="button" class="bouton-discret" data-action="supprimer-seance" data-id="${esc(x.id)}">Supprimer</button></span></li>`;
-    return `<p>${proch ? `Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong>.` : 'Aucune séance à venir.'} La veille et le jour même, l'accueil te rappelle de préparer le rapport ; une fois la séance passée, il te propose d'indiquer la suivante.</p>
-      <p><button type="button" class="bouton" data-action="ajouter-seance">Ajouter une séance</button></p>
+    const futures = liste.filter((x) => !x.annulee && C.bornesSeance(x).fin > maintenant());
+    // Passées : celles qui ont eu lieu et celles qui ont été annulées, de la plus récente à la plus ancienne
+    const passees = liste.filter((x) => x.annulee || C.bornesSeance(x).fin <= maintenant()).reverse();
+    const ligne = (x) => `<li${x.annulee ? ' class="seance-annulee"' : ''}><span>${x.annulee ? `<s>${esc(C.libelleSeance(x))}</s> <span class="badge-annulee">annulée</span>` : esc(C.libelleSeance(x))}</span><span><button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(x.id)}">Modifier</button><button type="button" class="bouton-discret" data-action="supprimer-seance" data-id="${esc(x.id)}">Supprimer</button></span></li>`;
+    return `<p>${proch ? `Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong>.` : `Prochaine séance : <strong>${etat.parametres.seanceAConvenir ? 'pas encore convenue' : 'aucune séance à venir'}</strong>.`} La veille et le jour même, l'accueil te rappelle de préparer le rapport ; une fois la séance passée, il te propose d'indiquer la suivante.</p>
+      <p class="rangee"><button type="button" class="bouton" data-action="ajouter-seance">Ajouter une séance</button>${!proch && !etat.parametres.seanceAConvenir ? '<button type="button" class="bouton-discret" data-action="seance-a-convenir">Pas encore convenue</button>' : ''}</p>
       ${futures.length ? `<h3>À venir</h3><ul class="liste-simple">${futures.map(ligne).join('')}</ul>` : ''}
-      ${passees.length ? `<h3 style="margin-top:14px">Passées</h3><ul class="liste-simple">${passees.slice(0, 12).map(ligne).join('')}</ul>` : ''}`;
+      ${passees.length ? `<h3 style="margin-top:14px">${passees.some((x) => x.annulee) ? 'Passées et annulées' : 'Passées'}</h3><ul class="liste-simple">${passees.slice(0, 12).map(ligne).join('')}</ul>` : ''}`;
   })()}
     </div>
 
@@ -3124,6 +3209,9 @@ document.addEventListener('click', (e) => {
   if (action === 'ouvrir-pdf') { e.preventDefault(); ouvrirPdf(); return; }
   if (action === 'aide') { e.preventDefault(); ouvrirAide(); return; }
   if (action === 'ajouter-seance') { dialogueSeance().then((x) => { if (x) router(); }); return; }
+  if (action === 'voir-precisions-motifs') { aller('#/motifs'); setTimeout(() => dialogueSimplification(C.planSimplification(etat.motifs, usageMotifs())), 50); return; }
+  if (action === 'precisions-plus-tard') { enregistrerParametres({ precisionsMotifsPlusTard: C.VERSION_APP }).then(() => router()); return; }
+  if (action === 'seance-a-convenir') { seancePasEncoreConvenue().then(() => router()); return; }
   if (action === 'modifier-seance' || action === 'supprimer-seance') {
     const sea = seances().find((x) => x.id === id);
     if (!sea) return;
