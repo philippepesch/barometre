@@ -1,6 +1,6 @@
 // Service worker : fonctionnement hors ligne et notifications.
 // Changer VERSION à chaque mise à jour des fichiers de l'application.
-const VERSION = 'barometre-humeur-1.30.0';
+const VERSION = 'barometre-humeur-1.31.0';
 const FICHIERS = [
   './', 'index.html', 'styles.css', 'app.js', 'core.js', 'db.js', 'rapport.js', 'ia.js', 'sync.js', 'lieux.js', 'meteo.js', 'carte.js', 'pdf-lib.min.js',
   'manifest.webmanifest', 'icone-32.png', 'icone-192.png', 'icone-512.png', 'icone-maskable-512.png',
@@ -71,6 +71,13 @@ const lireEnregistrement = (db, magasin, cle, index) => new Promise((ok) => {
     r.onerror = () => ok(null);
   } catch { ok(null); }
 });
+/** Créneaux prévus ce jour-là (rythme choisi dans l'application ; sans rythme : matin et soir). */
+function creneauxDuJour(rythme, date) {
+  let c = ['matin', 'soir'];
+  for (const r of Array.isArray(rythme) ? rythme : []) if (r && typeof r.depuis === 'string' && r.depuis <= date && Array.isArray(r.creneaux) && r.creneaux.length) c = r.creneaux;
+  return c;
+}
+
 function jourPrecedent(date) {
   const d = new Date(`${date}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
@@ -86,13 +93,19 @@ async function creneauManque(creneau, date) {
     const actif = await lireEnregistrement(db, 'parametres', 'alerteManquee');
     if (actif && actif.valeur === false) return null;
     const debut = await lireEnregistrement(db, 'parametres', 'debutSuiviUtc');
+    const rythme = await lireEnregistrement(db, 'parametres', 'rythme');
     const jour = date || dateLux(new Date());
-    const precedent = creneau === 'soir' ? { date: jour, creneau: 'matin' } : { date: jourPrecedent(jour), creneau: 'soir' };
+    // Créneau attendu précédent selon le rythme (une évaluation par jour le soir : celle de la veille au soir)
+    const prevu = (c) => creneauxDuJour(rythme && rythme.valeur, c.date).includes(c.creneau);
+    const avant = (c) => (c.creneau === 'soir' ? { date: c.date, creneau: 'matin' } : { date: jourPrecedent(c.date), creneau: 'soir' });
+    let precedent = avant({ date: jour, creneau });
+    for (let i = 0; i < 4 && !prevu(precedent); i++) precedent = avant(precedent);
     // Fin du créneau précédent = maintenant (heure du rappel) ; s'il s'est terminé avant le début du suivi, rien à signaler
     if (debut && debut.valeur && Date.parse(debut.valeur) > Date.now() - 60000) return null;
     const ev = await lireEnregistrement(db, 'evaluations', `${precedent.date}_${precedent.creneau}`, 'creneauId');
     if (ev) return null;
-    return { ...precedent, limite: precedent.creneau === 'matin' ? 'demain à 18:00' : 'ce soir à 18:00' };
+    // Limite de rattrapage : 24 h après le rappel qui a clos le créneau (c'est-à-dire maintenant)
+    return { ...precedent, limite: creneau === 'matin' ? 'demain à 06:00' : 'demain à 18:00' };
   } finally { db.close(); }
 }
 

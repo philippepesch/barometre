@@ -23,6 +23,12 @@ const estInstallee = () => window.matchMedia('(display-mode: standalone)').match
 async function chargerEtat() {
   const [p, evaluations, motifs, archives] = await Promise.all([DB.lireParametres(), DB.tout('evaluations'), DB.tout('motifs'), DB.tout('archives')]);
   etat.parametres = p ? { ...C.parametresParDefaut(), ...p } : null;
+  C.configurerRythme(etat.parametres && etat.parametres.rythme);
+  // Rythme reçu d'un autre appareil : le service de rappels de CET appareil en est informé une fois
+  if (etat.parametres && JSON.stringify(C.rythmeActuel()) !== (etat.parametres.rythmeEnvoye || '[]')) {
+    const r = JSON.stringify(C.rythmeActuel());
+    setTimeout(() => majAbonnementRythme().then(() => DB.ecrireParametres({ rythmeEnvoye: r })).then(() => { etat.parametres.rythmeEnvoye = r; }).catch(() => {}), 0);
+  }
   etat.evaluations = evaluations;
   etat.motifs = motifs;
   etat.archives = archives;
@@ -94,6 +100,7 @@ async function enregistrerParametres(modifs) {
   const partage = Object.keys(modifs).some((k) => C.PARAMETRES_PARTAGES.includes(k));
   if (partage) modifs = { ...modifs, reglagesModifiesLeUtc: new Date(maintenant()).toISOString() };
   etat.parametres = { ...etat.parametres, ...modifs };
+  if ('rythme' in modifs) C.configurerRythme(modifs.rythme);
   await DB.ecrireParametres(modifs);
   if (partage) planifierSynchro();
 }
@@ -286,6 +293,7 @@ function router() {
   const [route, ...args] = morceaux;
   document.body.classList.toggle('sans-navigation', !etat.parametres);
   if (!etat.parametres) { vueBienvenue(); marquerOnglet(''); return; }
+  C.configurerRythme(etat.parametres.rythme);
   const vue = VUES[route] || vueAccueil;
   marquerOnglet(['modifier', 'evaluation', 'textes', 'contexte', 'evenements'].includes(route) ? '' : route);
   try { vue(args); } catch (e) { console.error(e); contenu.innerHTML = `<div class="erreurs"><p>Une erreur est survenue : ${esc(e.message)}</p><p><a href="#/">Retour à l'accueil</a></p></div>`; }
@@ -408,7 +416,7 @@ function vueAccueil() {
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
-        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}<p class="lien-evenements"><a class="bouton-discret" href="#/evenements">Noter un événement marquant</a>${(() => { const n = C.evenementsActifs(etat.parametres.evenements).length; return n ? ` <span class="doux">(${C.pluriel(n, 'événement noté', 'événements notés')})</span>` : ''; })()}</p></section>
+        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneRythme()}${ligneProchaineSeance()}<p class="lien-evenements"><a class="bouton-discret" href="#/evenements">Noter un événement marquant</a>${(() => { const n = C.evenementsActifs(etat.parametres.evenements).length; return n ? ` <span class="doux">(${C.pluriel(n, 'événement noté', 'événements notés')})</span>` : ''; })()}</p></section>
         ${manquants.length ? `<section class="bloc"><h2>Créneaux à rattraper</h2>
           <p class="doux">Tu peux encore les remplir pendant ${C.DELAI_RATTRAPAGE_H} heures après la fin du créneau : la saisie sera signalée en retard. Au-delà, le créneau est compté comme omis.</p>
           <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('a_rattraper', `jusqu'au ${C.formatDateHeure(C.limiteSaisie(s.date, s.creneau))}`)}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
@@ -486,6 +494,15 @@ function bandeauSeance() {
   if (dr && dr.genereLeUtc && C.dateLocale(Date.parse(dr.genereLeUtc)) >= veille) return '';
   const heure = proch.debut ? ` à ${proch.debut.replace(':', ' h ').replace(/ h 00$/, ' h').replace(/^0/, '')}` : '';
   return `<div class="bandeau bandeau-laiton rangee-espacee"><span>Séance avec ${esc(dest)} ${auj === seance ? 'aujourd\'hui' : 'demain'}${heure} : prépare ton rapport.</span><button type="button" class="bouton" data-action="ouvrir-pdf">Générer le rapport</button></div>`;
+}
+
+/** Rythme d'une seule évaluation par jour : rappelé discrètement à l'accueil. */
+function ligneRythme() {
+  const r = C.rythmeActuel();
+  const c = C.creneauxDuJour(aujourdhui());
+  if (c.length !== 1) return '';
+  const regle = [...r].reverse().find((x) => x.depuis <= aujourdhui());
+  return `<p class="etat-creneau doux">Une évaluation par jour, ${c[0] === 'soir' ? 'le soir' : 'le matin'}${regle ? ` (depuis le ${esc(C.formatDateCourte(regle.depuis))})` : ''}. <a class="bouton-discret" href="#/reglages/questionnaire">Modifier</a></p>`;
 }
 
 function ligneProchaineSeance() {
@@ -1887,8 +1904,8 @@ function vueCalendrier([mois]) {
   let cases = '';
   for (let i = 0; i < decalage; i++) cases += '<div class="cal-case hors-mois" aria-hidden="true"></div>';
   for (let d = premier; d <= dernier; d = C.ajouterJours(d, 1)) {
-    const j = parJour.get(d);
-    cases += `<div class="cal-case${d === auj ? ' aujourdhui' : ''}"><span class="cal-num">${Number(d.slice(8))}</span>${caseCreneau(j.matin)}${caseCreneau(j.soir)}</div>`;
+    const j = parJour.get(d) || {};
+    cases += `<div class="cal-case${d === auj ? ' aujourdhui' : ''}"><span class="cal-num">${Number(d.slice(8))}</span>${j.matin ? caseCreneau(j.matin) : '<span class="cal-creneau cal-sans" aria-hidden="true"></span>'}${j.soir ? caseCreneau(j.soir) : '<span class="cal-creneau cal-sans" aria-hidden="true"></span>'}</div>`;
   }
   const comptes = C.comptesCreneaux(grille);
   const omis = grille.filter((s) => s.statut === 'omis');
@@ -3108,6 +3125,24 @@ function cleVersOctets(b64) {
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
 }
 
+/**
+ * Rythme changé : le service de rappels est informé (sans aucune donnée de santé) pour ne plus envoyer
+ * de rappel aux créneaux qui ne sont plus prévus. Rien à faire si les rappels ne sont pas activés ici.
+ */
+async function majAbonnementRythme() {
+  const serv = etat.parametres.serveurRappels || {};
+  if (!serv.actif || !serv.url || !('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const abonnement = reg.pushManager && await reg.pushManager.getSubscription();
+    if (!abonnement) return;
+    await fetch(`${serv.url.replace(/\/+$/, '')}/abonnements`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${serv.jeton}` },
+      body: JSON.stringify({ abonnement: abonnement.toJSON(), discret: !!etat.parametres.titreRappelDiscret, appareil: estIOS ? 'iPhone' : navigator.platform || 'ordinateur', rythme: C.rythmeActuel() }),
+    });
+  } catch { /* hors connexion : les rappels du matin s'affichent encore, l'évaluation reste facultative */ }
+}
+
 async function activerServeur(url, jeton) {
   const base = url.replace(/\/+$/, '');
   if (!/^https:\/\//.test(base)) throw new Error('L\'adresse du service doit commencer par https://');
@@ -3129,7 +3164,7 @@ async function activerServeur(url, jeton) {
   if (!abonnement) abonnement = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: cleVersOctets(cle) });
   const r2 = await fetch(`${base}/abonnements`, {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${jeton}` },
-    body: JSON.stringify({ abonnement: abonnement.toJSON(), discret: !!etat.parametres.titreRappelDiscret, appareil: estIOS ? 'iPhone' : navigator.platform || 'ordinateur' }),
+    body: JSON.stringify({ abonnement: abonnement.toJSON(), discret: !!etat.parametres.titreRappelDiscret, appareil: estIOS ? 'iPhone' : navigator.platform || 'ordinateur', rythme: C.rythmeActuel() }),
   });
   if (!r2.ok) throw new Error(await erreurService(r2));
   await enregistrerParametres({ serveurRappels: { url: base, jeton, actif: true } });
@@ -3225,6 +3260,20 @@ async function vueReglages([section] = []) {
     </div>
 
     <div class="bloc" id="questionnaire"><h2>Questionnaire</h2>
+      ${(() => {
+    const r = C.rythmeActuel();
+    const actuel = C.creneauxDuJour(aujourdhui());
+    const valeur = actuel.length === 2 ? 'deux' : actuel[0];
+    const histo = r.map((x) => `<li>Depuis le ${esc(C.formatDateCourte(x.depuis))} : ${esc(C.libelleRythme(x.creneaux))}</li>`).join('');
+    return `<fieldset class="champ" id="bloc-rythme" style="margin-bottom:14px"><legend style="font-weight:600;margin-bottom:6px">Rythme des évaluations</legend>
+        <label class="interrupteur"><input type="radio" name="rythme" value="deux" ${valeur === 'deux' ? 'checked' : ''}> <span><strong>Deux par jour</strong> <span class="doux">– le matin (06:00) et le soir (18:00)</span></span></label>
+        <label class="interrupteur" style="margin-top:8px"><input type="radio" name="rythme" value="soir" ${valeur === 'soir' ? 'checked' : ''}> <span><strong>Une par jour, le soir</strong> <span class="doux">– rappel à 18:00 ; elle porte sur toute la journée, et la prévision sur le soir suivant</span></span></label>
+        <label class="interrupteur" style="margin-top:8px"><input type="radio" name="rythme" value="matin" ${valeur === 'matin' ? 'checked' : ''}> <span><strong>Une par jour, le matin</strong> <span class="doux">– rappel à 06:00</span></span></label>
+        <div class="rangee" style="margin-top:10px;align-items:flex-end"><div class="champ" style="margin:0"><label for="rythme-depuis">À partir du</label><input type="date" id="rythme-depuis" value="${aujourdhui()}"></div><button type="button" class="bouton-secondaire" id="btn-rythme">Enregistrer le rythme</button></div>
+        ${histo ? `<ul class="doux" style="margin:10px 0 0;padding-left:18px">${histo}</ul>` : ''}
+        <p class="doux" style="margin:8px 0 0">Les jours d'avant gardent leur rythme : le rapport ne compte comme attendues que les évaluations prévues par le rythme de chaque jour, et l'indique en tête.</p>
+      </fieldset>`;
+  })()}
       <fieldset class="champ" style="margin-bottom:12px"><legend style="font-weight:600;margin-bottom:6px">Pour une nouvelle évaluation, ouvrir</legend>
         <label class="interrupteur"><input type="radio" name="mode-saisie" value="questions" ${p.modeSaisie !== 'formulaire' ? 'checked' : ''}> <span><strong>Les questions guidées</strong> <span class="doux">– une question à la fois, réponses en un geste, dans l'ordre qui compte le plus pour toi (environ une minute)</span></span></label>
         <label class="interrupteur" style="margin-top:8px"><input type="radio" name="mode-saisie" value="formulaire" ${p.modeSaisie === 'formulaire' ? 'checked' : ''}> <span><strong>Le formulaire complet</strong> <span class="doux">– toutes les questions sur une page</span></span></label>
@@ -3337,6 +3386,18 @@ async function vueReglages([section] = []) {
   if (caseAlerte) caseAlerte.addEventListener('change', async (e) => {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
+  });
+  document.getElementById('btn-rythme').addEventListener('click', async () => {
+    const choix = document.querySelector('[name="rythme"]:checked').value;
+    const depuis = document.getElementById('rythme-depuis').value;
+    if (!C.estDateValide(depuis)) { annoncer('Choisis la date à partir de laquelle ce rythme s\'applique.'); return; }
+    const creneaux = choix === 'deux' ? ['matin', 'soir'] : [choix];
+    // Les règles à partir de cette date sont remplacées ; celles d'avant restent (le passé garde son rythme)
+    const liste = C.normaliserRythme([...(etat.parametres.rythme || []).filter((x) => x.depuis < depuis), { depuis, creneaux }]);
+    await enregistrerParametres({ rythme: liste });
+    await majAbonnementRythme();
+    annoncer(`Rythme enregistré : ${C.libelleRythme(creneaux)}, à partir du ${C.formatDateCourte(depuis)}.`);
+    vueReglages(['questionnaire']);
   });
   document.querySelectorAll('[name="mode-saisie"]').forEach((r) => r.addEventListener('change', async () => {
     await enregistrerParametres({ modeSaisie: r.value });

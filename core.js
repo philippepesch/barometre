@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.30.0';
+export const VERSION_APP = '1.31.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -156,11 +156,55 @@ export function idCreneau(date, creneau) { return `${date}_${creneau}`; }
 
 export function heurePrevue(date, creneau) { return localVersUtc(date, HEURES_RAPPEL[creneau]); }
 
-export function creneauSuivant({ date, creneau }) {
-  return creneau === 'matin' ? { date, creneau: 'soir' } : { date: ajouterJours(date, 1), creneau: 'matin' };
+// Rythme des évaluations : deux par jour (matin et soir) ou une seule (par exemple le soir), à partir d'une date.
+// Liste [{ depuis: 'AAAA-MM-JJ', creneaux: ['soir'] }] ; avant la première date : matin et soir.
+let RYTHME = [];
+export function normaliserRythme(liste) {
+  const ok = (Array.isArray(liste) ? liste : []).filter((r) => r && estDateValide(r.depuis) && Array.isArray(r.creneaux))
+    .map((r) => ({ depuis: r.depuis, creneaux: CRENEAUX.filter((c) => r.creneaux.includes(c)) })).filter((r) => r.creneaux.length);
+  // Une seule règle par date (la dernière saisie l'emporte), dans l'ordre chronologique
+  const parDate = new Map(ok.map((r) => [r.depuis, r]));
+  return [...parDate.values()].sort((a, b) => a.depuis.localeCompare(b.depuis));
 }
-export function creneauPrecedent({ date, creneau }) {
-  return creneau === 'soir' ? { date, creneau: 'matin' } : { date: ajouterJours(date, -1), creneau: 'soir' };
+/** Rythme utilisé par les calculs de créneaux (appelé au chargement et à chaque changement de réglage). */
+export function configurerRythme(liste) { RYTHME = normaliserRythme(liste); return RYTHME; }
+export function rythmeActuel() { return RYTHME; }
+/** Créneaux attendus ce jour-là selon le rythme. */
+export function creneauxDuJour(date, rythme = RYTHME) {
+  let c = CRENEAUX;
+  for (const r of rythme) if (r.depuis <= date) c = r.creneaux;
+  return c;
+}
+export function estCreneauAttendu({ date, creneau }, rythme = RYTHME) { return creneauxDuJour(date, rythme).includes(creneau); }
+
+const suivantBrut = ({ date, creneau }) => (creneau === 'matin' ? { date, creneau: 'soir' } : { date: ajouterJours(date, 1), creneau: 'matin' });
+const precedentBrut = ({ date, creneau }) => (creneau === 'soir' ? { date, creneau: 'matin' } : { date: ajouterJours(date, -1), creneau: 'soir' });
+/** Créneau attendu suivant (une seule évaluation le soir : du soir au soir suivant). */
+export function creneauSuivant(c) {
+  let s = suivantBrut(c);
+  for (let i = 0; i < 6 && !estCreneauAttendu(s); i++) s = suivantBrut(s);
+  return s;
+}
+export function creneauPrecedent(c) {
+  let s = precedentBrut(c);
+  for (let i = 0; i < 6 && !estCreneauAttendu(s); i++) s = precedentBrut(s);
+  return s;
+}
+
+/** Description du rythme pour une période (texte du rapport), ou '' s'il est resté de deux évaluations par jour. */
+export function libelleRythme(c) { return c.length === 2 ? 'deux évaluations par jour (matin et soir)' : `une évaluation par jour (${c[0] === 'soir' ? 'le soir, qui porte sur l\'ensemble de la journée' : 'le matin, qui porte sur la soirée et la nuit'})`; }
+export function rythmePeriode(debut, fin, rythme = RYTHME) {
+  const morceaux = [];
+  let courant = creneauxDuJour(debut, rythme);
+  let depuis = debut;
+  for (const r of rythme) {
+    if (r.depuis <= debut || r.depuis > fin) continue;
+    if (r.creneaux.join() === courant.join()) continue;
+    morceaux.push({ depuis, jusquau: ajouterJours(r.depuis, -1), creneaux: courant });
+    courant = r.creneaux; depuis = r.depuis;
+  }
+  morceaux.push({ depuis, jusquau: fin, creneaux: courant });
+  return morceaux;
 }
 export function expiration(date, creneau) {
   const s = creneauSuivant({ date, creneau });
@@ -183,9 +227,13 @@ function minutesDuJour(hhmm) { const [h, m] = hhmm.split(':').map(Number); retur
 export function creneauOuvert(instant) {
   const p = partiesLocales(instant);
   const min = p.heure * 60 + p.minute;
-  if (min >= minutesDuJour(HEURES_RAPPEL.soir)) return { date: p.date, creneau: 'soir' };
-  if (min >= minutesDuJour(HEURES_RAPPEL.matin)) return { date: p.date, creneau: 'matin' };
-  return { date: ajouterJours(p.date, -1), creneau: 'soir' };
+  let c;
+  if (min >= minutesDuJour(HEURES_RAPPEL.soir)) c = { date: p.date, creneau: 'soir' };
+  else if (min >= minutesDuJour(HEURES_RAPPEL.matin)) c = { date: p.date, creneau: 'matin' };
+  else c = { date: ajouterJours(p.date, -1), creneau: 'soir' };
+  // Créneau non attendu (rythme d'une évaluation par jour) : la fenêtre ouverte est celle du créneau attendu précédent
+  for (let i = 0; i < 6 && !estCreneauAttendu(c); i++) c = precedentBrut(c);
+  return c;
 }
 
 export function prochainCreneau(instant) {
@@ -223,6 +271,8 @@ export function grilleCreneaux(debut, fin, evaluations, instant, debutSuiviUtc) 
     for (const c of CRENEAUX) {
       const id = idCreneau(d, c);
       const ev = parCreneau.get(id) || null;
+      // Créneau non prévu par le rythme : seulement s'il a quand même reçu une évaluation
+      if (!ev && !estCreneauAttendu({ date: d, creneau: c })) continue;
       res.push({
         id, date: d, creneau: c,
         prevuUtc: heurePrevue(d, c), expireUtc: expiration(d, c),
@@ -1651,6 +1701,8 @@ export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Dat
   });
   return {
     periode: { jours: joursEntre(debut, fin) + 1 },
+    // Rythme : jours numérotés, sans dates
+    rythme: rythmePeriode(debut, fin).map((r) => ({ du_jour: joursEntre(debut, r.depuis) + 1, au_jour: joursEntre(debut, r.jusquau) + 1, evaluations_par_jour: r.creneaux.length === 2 ? 'deux (matin et soir)' : `une (${r.creneaux[0]})` })),
     evaluations: { attendues: comptes.attendues, completees: comptes.completees, omises: comptes.omises, en_retard: comptes.enRetard },
     moyennes: { generale: arrondi(st.moyenne), matin: arrondi(st.moyenneMatin), soir: arrondi(st.moyenneSoir), min: st.nombre ? st.min : null, max: st.nombre ? st.max : null },
     echelle: NIVEAUX.map((n, i) => `${i} = ${n}`).join(' ; '),
@@ -1678,7 +1730,7 @@ export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Dat
 
 export function instructionsSynthese({ style: idStyle = 'sobre' } = {}) {
   const st = STYLES_REDACTION.find((x) => x.id === idStyle) || STYLES_REDACTION[0];
-  return `Tu es un rédacteur francophone de très haut niveau. Tu reçois les données agrégées d'un journal d'humeur tenu deux fois par jour par un patient (note de 0 à 10, voir « echelle »), pour une période donnée, ainsi que ses commentaires déjà relus et validés (« texte_valide »). Le texte est destiné à son psychothérapeute ; le patient le relira et le validera.
+  return `Tu es un rédacteur francophone de très haut niveau. Tu reçois les données agrégées d'un journal d'humeur tenu chaque jour par un patient, le matin et le soir ou une seule fois par jour selon la période (voir « rythme ») (note de 0 à 10, voir « echelle »), pour une période donnée, ainsi que ses commentaires déjà relus et validés (« texte_valide »). Le texte est destiné à son psychothérapeute ; le patient le relira et le validera.
 
 Rédige en français, à la troisième personne (« le patient »), dans un langage professionnel mais clair, neutre et factuel :
 « evolution » : quelques phrases (${LONGUEUR_EVOLUTION} caractères au plus) qui présentent l'évolution de l'humeur pendant la période (niveau général, tendance, variations, moments, jours, situations, lieux, activités ou événements associés aux notes les plus basses ou les plus hautes). Ce texte sert d'aperçu dans l'introduction du rapport.
@@ -1892,10 +1944,14 @@ export function evenementsActifs(liste, { debut = null, fin = null, rapportSeule
  */
 export function creneauEvenement(x) {
   if (x.creneauId) return x.creneauId;
-  if (!x.heure) return idCreneau(x.date, 'soir');
-  if (x.heure < HEURES_RAPPEL.matin) return idCreneau(x.date, 'matin');
-  if (x.heure < HEURES_RAPPEL.soir) return idCreneau(x.date, 'soir');
-  return idCreneau(ajouterJours(x.date, 1), 'matin');
+  let c;
+  if (!x.heure) c = { date: x.date, creneau: 'soir' };
+  else if (x.heure < HEURES_RAPPEL.matin) c = { date: x.date, creneau: 'matin' };
+  else if (x.heure < HEURES_RAPPEL.soir) c = { date: x.date, creneau: 'soir' };
+  else c = { date: ajouterJours(x.date, 1), creneau: 'matin' };
+  // Une seule évaluation par jour : l'événement revient à la prochaine évaluation prévue
+  if (!estCreneauAttendu(c)) c = creneauSuivant(c);
+  return idCreneau(c.date, c.creneau);
 }
 
 export function libelleMomentEvenement(x) {
@@ -2741,7 +2797,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme'];
 
 function empreinteTexte(s) {
   let h = 5381;

@@ -682,7 +682,7 @@ class Redacteur {
   dessinerSommaire(page, yHaut, colonnes = 1) {
     const ici = this.page;
     this.page = page;
-    const pas = 16;
+    const pas = 14;
     const parCol = Math.ceil(this.sommaire.length / colonnes);
     const lc = (LARGEUR - 20 - (colonnes - 1) * 18) / colonnes;
     this.sommaire.forEach((e, i) => {
@@ -974,6 +974,16 @@ export async function genererRapport(PDFLib, donnees, options) {
   const nbReformules = [...textes.values()].filter((t) => t.reformule).length;
   const modifsReelles = (e) => (e.historique || []).filter((h) => h.changements.some((c) => c.champ !== 'reformulation') && !estCompletion(h));
   const parametres = donnees.parametres || {};
+  // Rythme des évaluations (deux par jour, ou une seule à partir d'une date) : utilisé par tous les calculs de créneaux
+  if ('rythme' in parametres) C.configurerRythme(parametres.rythme);
+  const morceauxRythme = C.rythmePeriode(debut, fin);
+  const changementRythme = morceauxRythme.length > 1 || morceauxRythme[0].creneaux.length === 1;
+  // Phrase courte : « Depuis le 23/10/2026, une seule évaluation par jour, le soir, qui porte sur l'ensemble de la journée. »
+  const phraseRythme = () => morceauxRythme.map((m, k) => {
+    const libre = C.libelleRythme(m.creneaux);
+    if (morceauxRythme.length === 1) return `Sur toute la période, ${libre}.`;
+    return k === 0 ? `Jusqu'au ${C.formatDateCourte(m.jusquau)}, ${libre}.` : `Depuis le ${C.formatDateCourte(m.depuis)}, ${libre.replace(/^une évaluation/, 'une seule évaluation')}.`;
+  }).join(' ');
   const patient = parametres.patient || {};
   const therapeute = parametres.therapeute || {};
   const destinataire = (parametres.destinataire || '').trim() || (therapeute.nom || '').trim();
@@ -1108,12 +1118,14 @@ export async function genererRapport(PDFLib, donnees, options) {
       precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
       prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : (parametres.seanceAConvenir ? ['Prochaine séance', 'pas encore convenue'] : null),
       ['Type de rapport', type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
+      changementRythme ? ['Rythme', morceauxRythme.map((m, k) => (morceauxRythme.length === 1 ? C.libelleRythme(m.creneaux) : k === 0 ? `${C.libelleRythme(m.creneaux)} jusqu'au ${C.formatDateCourte(m.jusquau)}` : `depuis le ${C.formatDateCourte(m.depuis)} : ${C.libelleRythme(m.creneaux)}`)).join(' ; ').replace(/, qui porte sur l'ensemble de la journée/, '')] : null,
       ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
     ].filter(Boolean);
     for (const [lib, val] of infos) {
       R.texte(lib, MARGE, R.y + 9.5, { taille: 9, couleur: DOUX });
-      R.couper(val, 9.5, 'gras', LARGEUR - 120).forEach((l, k) => R.texte(l, MARGE + 120, R.y + 9.5 + k * 13, { taille: 9.5, police: 'gras' }));
-      R.y += 15.5;
+      const lignesVal = R.couper(val, 9.5, 'gras', LARGEUR - 120);
+      lignesVal.forEach((l, k) => R.texte(l, MARGE + 120, R.y + 9.5 + k * 13, { taille: 9.5, police: 'gras' }));
+      R.y += 15.5 + (lignesVal.length - 1) * 13;
       R.page.drawLine({ start: { x: MARGE, y: A4[1] - R.y + 3 }, end: { x: MARGE + LARGEUR, y: A4[1] - R.y + 3 }, thickness: 0.35, color: R.couleur(GRILLE) });
     }
     R.y += 14;
@@ -1142,7 +1154,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   // 5 parties + 13 sections, plus les événements marquants et les facteurs par domaine s'il y en a
   const NB_SECTIONS = 5 + 13 + (evenements.length ? 1 : 0) + (avecDomaines ? 1 : 0);
   let numSection = 0;
-  const hSommaire = NB_SECTIONS * 16 + 40;
+  const hSommaire = NB_SECTIONS * 14 + 40;
   R.cadre(MARGE, R.y, LARGEUR, hSommaire, { bord: FILET, epaisseur: 0.8, rayon: Math.min(RAYON, 9) * 0.7 });
   R.texte('Sommaire', MARGE + 10, R.y + 20, { taille: 12, police: 'gras' });
   const pageSommaire = R.page, ySommaire = R.y + 30;
@@ -1177,7 +1189,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   R.section(++numSection, 'Introduction', 120);
   {
     const nbJours = C.joursEntre(debut, fin) + 1;
-    R.paragraphe(`Ce rapport présente le suivi de l'humeur du patient du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)} (${C.pluriel(nbJours, 'jour')}). L'humeur est évaluée deux fois par jour, le matin et le soir, sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil). Chaque évaluation peut comporter des motifs cochés (favorables ou défavorables), un commentaire, le ou les lieux, la situation professionnelle et une prévision pour le créneau suivant ; le patient peut aussi noter des événements marquants.`, { taille: 10, apres: 6 });
+    R.paragraphe(`Ce rapport présente le suivi de l'humeur du patient du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)} (${C.pluriel(nbJours, 'jour')}). ${changementRythme ? `L'humeur est évaluée sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil). ${phraseRythme()}` : 'L\'humeur est évaluée deux fois par jour, le matin et le soir, sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil).'} Chaque évaluation peut comporter des motifs cochés (favorables ou défavorables), un commentaire, le ou les lieux, la situation professionnelle et une prévision pour le créneau suivant ; le patient peut aussi noter des événements marquants.`, { taille: 10, apres: 6 });
     R.paragraphe('Le rapport comprend cinq parties : I. Introduction ; II. Évaluations jour par jour ; III. Impacts : événements marquants et facteurs ; IV. Analyse ; V. Conclusion et points à aborder.', { taille: 10, apres: 6 });
   }
   if (synthese) {
@@ -1202,7 +1214,8 @@ export async function genererRapport(PDFLib, donnees, options) {
     { valeur: String(comptes.enAttente + comptes.aRattraper), libelle: comptes.aRattraper ? 'en attente ou à rattraper' : 'en attente de réponse' },
   ]);
   const det = [];
-  det.push(`Deux créneaux par jour : matin (rappel à 06:00) et soir (rappel à 18:00), heure de Luxembourg. Un créneau reste ouvert jusqu'au rappel suivant ; il peut ensuite encore être rempli pendant ${C.DELAI_RATTRAPAGE_H} heures (saisie signalée en retard). Au-delà, il est compté comme omis s'il n'a pas reçu de réponse.`);
+  if (changementRythme) det.push(`${phraseRythme()} Seules les évaluations prévues par le rythme de chaque jour sont comptées comme attendues.`);
+  det.push(`${changementRythme ? 'Rappels' : 'Deux créneaux par jour'} : matin (rappel à 06:00) et soir (rappel à 18:00), heure de Luxembourg${changementRythme ? ', selon le rythme' : ''}. Un créneau reste ouvert jusqu'au rappel suivant ; il peut ensuite encore être rempli pendant ${C.DELAI_RATTRAPAGE_H} heures (saisie signalée en retard). Au-delà, il est compté comme omis s'il n'a pas reçu de réponse.`);
   const partsCompl = [];
   if (comptes.aLHeure) partsCompl.push(`${comptes.aLHeure} dans le créneau`);
   if (comptes.enRetard) partsCompl.push(`${comptes.enRetard} après la fin du créneau (saisie rétrospective)`);
@@ -1425,7 +1438,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   } else {
     await chapitre('Graphique chronologique', {
       blocs: [() => R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }); })],
-      apres: () => R.paragraphe(`Chaque position horizontale correspond à un créneau (matin puis soir). La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX }),
+      apres: () => R.paragraphe(`Chaque position horizontale correspond à un créneau ${changementRythme ? 'prévu (matin puis soir, ou une seule évaluation par jour selon le rythme)' : '(matin puis soir)'}. La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX }),
     });
   }
 
