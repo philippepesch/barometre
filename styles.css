@@ -562,3 +562,50 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .sous-autre { display: inline-flex; gap: 4px; align-items: center; flex: 1 1 180px; max-width: 320px; }
 .sous-autre input { flex: 1; min-width: 0; padding: 6px 10px; border-radius: 999px; font-size: .9rem; }
 .sous-autre .bouton-discret { padding: 6px 8px; }
+
+/* Questions guidées : une question par écran, réponses en un geste */
+.guide { max-width: 560px; }
+.guide-haut { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: .9rem; }
+.guide-progression { display: flex; gap: 4px; margin: 8px 0 14px; }
+.guide-progression span { flex: 1; height: 4px; border-radius: 2px; background: var(--filet); }
+.guide-progression span.fait { background: var(--laiton); }
+.guide-question { font-size: 1.45rem; line-height: 1.25; margin: 0 0 6px; outline: none; }
+.guide-aide { margin: 0 0 12px; font-size: .92rem; }
+.guide-corps { margin-top: 12px; }
+.guide-sous { font-weight: 600; margin: 14px 0 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.guide-ou { margin: 12px 0 4px; }
+.guide-bas { margin-top: 22px; }
+.choix-liste { display: flex; flex-direction: column; gap: 10px; }
+.choix { font: inherit; color: var(--encre); background: var(--surface); border: 1px solid var(--filet-fort); border-radius: 14px; cursor: pointer; text-align: left; }
+.choix:active { transform: scale(.99); }
+.choix-large { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 56px; padding: 12px 16px; font-size: 1.05rem; width: 100%; }
+.choix-large .doux { flex-basis: 100%; font-size: .9rem; }
+.choix-principal { border-color: var(--laiton); border-width: 2px; }
+.choix-neutre { color: var(--encre-2); }
+.choix .pastille { width: 12px; height: 12px; flex: 0 0 auto; }
+.grille-notes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.choix-note { display: grid; grid-template-columns: 34px 30px 1fr; align-items: center; gap: 6px; min-height: 52px; padding: 6px 10px; }
+.gn-icone { display: inline-flex; }
+.gn-note { font-size: 1.3rem; font-weight: 700; text-align: center; }
+.gn-nom { font-size: .85rem; color: var(--encre-2); }
+.gn-marque { grid-column: 1 / -1; font-size: .75rem; color: var(--laiton); font-weight: 600; }
+.choix-marque { border-color: var(--laiton); border-width: 2px; }
+.choix-puces { display: flex; flex-wrap: wrap; gap: 8px; }
+.puce-choix { font: inherit; font-size: .95rem; min-height: 42px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--filet-fort); background: var(--surface); color: var(--encre); cursor: pointer; }
+.puce-choix[aria-pressed="true"] { background: var(--laiton-fond, #f3ead8); border-color: var(--laiton); font-weight: 600; }
+.puce-choix[aria-pressed="true"]::before { content: "✓ "; color: var(--laiton); }
+.puce-autre { border-style: dashed; color: var(--encre-2); }
+.guide-precision + .guide-precision { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--filet); }
+.guide-autre { margin-top: 10px; max-width: none; width: 100%; }
+.guide-resume { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; margin: 0; }
+.guide-resume dt { font-weight: 600; color: var(--encre-2); }
+.guide-resume dd { margin: 0; }
+.guide-resume ul { margin: 0; padding: 0; list-style: none; }
+.guide-resume li { margin-bottom: 4px; }
+@media (max-width: 420px) { .grille-notes { grid-template-columns: 1fr 1fr; } .guide-question { font-size: 1.3rem; } }
+
+/* Doublons possibles dans la bibliothèque de motifs */
+.liste-doublons { list-style: none; padding: 0; margin: 8px 0 0; }
+.liste-doublons li { padding: 8px 0; border-top: 1px solid var(--filet); }
+.liste-doublons li p { margin: 0 0 6px; }
+.liste-doublons .rangee { flex-wrap: wrap; gap: 6px; }

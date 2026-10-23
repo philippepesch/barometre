@@ -1024,17 +1024,12 @@ export async function genererRapport(PDFLib, donnees, options) {
   // Page de garde : titre, identités, informations du rapport, chiffres clés, sommaire
   R.y = 46;
   const periodeLongue = `Du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)}`;
-  // Logo de l'application en haut à droite de la page de garde, avec la mention choisie dans les Réglages
-  const dessinerLogo = async (couleurTexte) => {
-    const mention = C.mentionRapport(parametres);
+  // Logo de l'application en haut à droite de la page de garde (sans mention de copyright)
+  const dessinerLogo = async () => {
     const taille = 40, xL = A4[0] - MARGE - taille + 6, yL = 26;
     let logo = null;
     if (options.logoPng) { try { logo = await doc.embedPng(options.logoPng); } catch { logo = null; } }
     if (logo) R.page.drawImage(logo, { x: xL, y: A4[1] - yL - taille, width: taille, height: taille });
-    if (mention) {
-      const tl = 8.5, xT = (logo ? xL - 8 : A4[0] - MARGE) - R.largeur(mention, tl, 'gras');
-      R.texte(mention, xT, yL + taille / 2 + 3, { taille: tl, police: 'gras', couleur: couleurTexte });
-    }
   };
   if (COUVERTURE === 'bandeau') {
     // Grand aplat de couleur en haut de la page de garde, titre en blanc
@@ -1245,7 +1240,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       [{ titre: 'Créneau', part: 1.3 }, { titre: 'Note', part: 1.3 }, { titre: 'Saisie', part: 1.3 }, { titre: 'Motifs et commentaire', part: 4.2 }],
       evals.map((e) => [
         [libCreneau(e), e.lieu ? libLieux(e) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
-        [[...e.motifs, ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' ')),
+        [[...C.libellesGroupes(e.motifs, donnees.motifs || []), ...e.autresMotifs].map((m) => m.libelle).join(', '), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' ')),
           (evtsParCreneau.get(e.creneauId) || []).map((v) => `Événement n° ${v.numero}${v.x.titre ? ` : ${v.x.titre}` : ''}${C.IMPACTS[v.x.impact] ? ` (${C.IMPACTS[v.x.impact].toLowerCase()})` : ''}`).join(' ; ')].filter(Boolean).join(' — ') || '—',
       ]),
       { taille: 8.5 },
@@ -1279,7 +1274,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       const tx = textes.get(e.id);
       // Une version rédigée (méthode 3 et suivantes) présente déjà les motifs cochés : pas de liste en double
       const motifsDansTexte = tx.reformule && (tx.methode || 1) >= 3;
-      if (!motifsDansTexte) R.riche([['Motifs cochés : ', 'gras'], [e.motifs.length || e.autresMotifs.length ? libMotifs([...e.motifs, ...e.autresMotifs]) : 'aucun']]);
+      if (!motifsDansTexte) R.riche([['Motifs cochés : ', 'gras'], [e.motifs.length || e.autresMotifs.length ? libMotifs([...C.libellesGroupes(e.motifs, donnees.motifs || []), ...e.autresMotifs]) : 'aucun']]);
       // Texte sur plusieurs lignes (styles « par rubriques » ou « points clés »)
       const texteRedige = (t) => {
         for (const ligne of String(t).split(/\n+/).map((l) => l.trim()).filter(Boolean)) {

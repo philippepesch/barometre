@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.27.0';
+export const VERSION_APP = '1.30.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -370,8 +370,7 @@ export const PLAN_MOTIFS = [
       { libelle: 'Dose baissée', cles: [/baiss/, /palier/, /descendu/], description: 'J\'ai pu descendre d\'un palier.' },
       { libelle: 'Stabilisé à la dose actuelle', cles: [/stabilis/], description: 'Je me suis stabilisé à la dose actuelle.' },
       { libelle: 'Sevrage bien supporté', cles: [/supporte/, /tolere/], description: 'Peu ou pas de symptômes de sevrage.' },
-      { libelle: 'Dose respectée, sous contrôle', cles: [/sous controle/, /respecte/], description: 'J\'ai pris exactement la dose prévue.' },
-      { libelle: 'Pas eu besoin de prise supplémentaire', cles: [/pas eu besoin/, /sans prise supplementaire/], description: 'Aucune prise en plus du schéma prévu.' },
+      { libelle: 'Dose respectée, sans prise en plus', anciens: ['Dose respectée, sous contrôle', 'Pas eu besoin de prise supplémentaire'], cles: [/sous controle/, /respecte/, /pas eu besoin/, /sans prise/], description: 'J\'ai pris exactement la dose prévue, sans prise en plus.' },
     ],
   },
   { libelle: 'Fatigue, mauvais repos', polarite: 'defavorable', domaine: 'corps', cles: [/fatigue/, /repos/, /recuper/], description: 'Fatigue, difficulté à se reposer et à récupérer.' },
@@ -403,21 +402,19 @@ export const PLAN_MOTIFS = [
     ],
   },
   {
-    libelle: 'Moments avec mes proches', polarite: 'favorable', domaine: 'relations', questionSous: 'Avec qui ?', cles: [/enfant/, /(^|\s)ami/, /proches/, /famill/],
-    description: 'Moments partagés avec ma femme, mes enfants, ma famille ou des amis. Précise avec qui (facultatif).',
+    libelle: 'Moments avec mes proches', polarite: 'favorable', domaine: 'relations', questionSous: 'Avec qui ?', cles: [/(^|\s)ami/, /proches/, /famill/],
+    description: 'Moments partagés avec ma famille ou des amis. Précise avec qui (facultatif). Ma femme : « Couple » ; mes enfants : « Mes enfants ».',
     sous: [
-      { libelle: 'Bon moment avec ma femme', cles: [/couple/, /epouse/, /\bfemme\b/, /compagne/], description: 'Avec ma femme.' },
-      { libelle: 'Bon moment avec mes enfants', cles: [/enfant/, /\bfils\b/, /\bfille\b/], description: 'Avec mon fils ou mes enfants.' },
       { libelle: 'Bon moment en famille', cles: [/famill/, /\bmere\b/, /\bpere\b/, /parents/], description: 'Avec mes parents ou d\'autres membres de la famille.' },
       { libelle: 'Bon moment entre amis, collègues', cles: [/(^|\s)ami/, /collegue/, /copain/], description: 'Avec des amis ou des collègues.' },
       { libelle: 'Bon moment avec quelqu\'un d\'autre', cles: [/autre personne/, /quelqu.un/], description: 'Avec quelqu\'un d\'autre.' },
     ],
   },
-  { libelle: 'Couple : complicité, soutien', polarite: 'favorable', domaine: 'relations', cles: [/complicit/, /soutenu/, /tendresse/], description: 'Proximité, complicité ou soutien ressentis avec ma femme.' },
-  { libelle: 'Mes enfants : fierté, être présent', polarite: 'favorable', domaine: 'relations', cles: [/\bfier/, /bon pere/, /present pour/], description: 'Fier de mes enfants, ou le sentiment d\'être présent et d\'avoir pu leur donner quelque chose.', questionSous: 'Plutôt :',
+  { libelle: 'Couple : complicité, soutien', anciens: ['Bon moment avec ma femme'], polarite: 'favorable', domaine: 'relations', cles: [/complicit/, /soutenu/, /tendresse/], description: 'Proximité, complicité ou soutien ressentis avec ma femme.' },
+  { libelle: 'Mes enfants : ce qui fait du bien', anciens: ['Mes enfants : fierté, être présent'], polarite: 'favorable', domaine: 'relations', cles: [/\bfier/, /bon pere/, /present pour/, /enfant/, /\bfils\b/], description: 'Ce qui fait du bien avec mes enfants : être présent, faire quelque chose ensemble, être fier d\'eux. Précise (facultatif).', questionSous: 'Plutôt :',
     sous: [
       { libelle: 'Présent et disponible pour eux', cles: [/present/, /disponible/], description: 'J\'ai été là pour eux, disponible et attentif.' },
-      { libelle: 'Fait quelque chose ensemble', cles: [/ensemble/], description: 'Une activité ou un moment partagé avec eux.' },
+      { libelle: 'Fait quelque chose ensemble', anciens: ['Bon moment avec mes enfants'], cles: [/ensemble/, /reunis/], description: 'Une activité ou un bon moment partagé avec eux.' },
       { libelle: 'Fier d\'eux', cles: [/\bfier/], description: 'Fier de mes enfants.' },
     ],
   },
@@ -444,11 +441,11 @@ export const PLAN_MOTIFS = [
   },
   { libelle: 'Couple : distance, se sentir seul', polarite: 'defavorable', domaine: 'relations', cles: [/distance/, /seul dans (le|mon) couple/, /plus soutenu/, /eloignement/], description: 'Distance émotionnelle avec ma femme, se sentir seul ou peu soutenu dans le couple, sans dispute.' },
   {
-    libelle: 'Mes enfants : manque, culpabilité', anciens: ['Mes enfants (manque, culpabilité)'], polarite: 'defavorable', domaine: 'relations', questionSous: 'Plutôt :', cles: [/enfant/, /culpabilit/],
-    description: 'Mes enfants me manquent quand je ne suis pas là, ou je culpabilise envers eux. Précise (facultatif).',
+    libelle: 'Mes enfants : ce qui me pèse', anciens: ['Mes enfants : manque, culpabilité', 'Mes enfants (manque, culpabilité)'], polarite: 'defavorable', domaine: 'relations', questionSous: 'Plutôt :', cles: [/enfant/, /culpabilit/],
+    description: 'Ce qui me pèse avec mes enfants : ils me manquent, ou je culpabilise (isolement, pas assez fait, mes problèmes ressentis). Précise (facultatif).',
     sous: [
-      { libelle: 'Ils me manquent', cles: [/manque/], description: 'Mes enfants me manquent quand je ne suis pas avec eux.' },
-      { libelle: 'Culpabilité : je me suis retiré', cles: [/retir/, /repli/], description: 'Je me suis replié sur moi-même, retiré d\'eux.' },
+      { libelle: 'Ils me manquent', cles: [/manque/], description: 'Mes enfants me manquent parce que je ne suis pas avec eux (pas de culpabilité).' },
+      { libelle: 'Culpabilité : je me suis isolé', anciens: ['Culpabilité : je me suis retiré'], cles: [/isol/, /retir/, /repli/], description: 'Ils étaient là, mais je me suis isolé (par exemple dans mon bureau) ou replié sur moi-même.' },
       { libelle: 'Culpabilité : pas assez fait avec eux', anciens: ['Culpabilité envers eux'], cles: [/culpabil/, /investi/, /implique/], description: 'Le sentiment de ne pas avoir assez fait avec eux, de ne pas m\'être assez impliqué.' },
       { libelle: 'Culpabilité : ils ont senti mes problèmes', cles: [/senti/, /mes problemes/], description: 'Ils ont ressenti mes difficultés sans que je le veuille.' },
     ],
@@ -457,7 +454,7 @@ export const PLAN_MOTIFS = [
   // 4. Obligations
   { libelle: 'Liberté, sans contraintes', polarite: 'favorable', domaine: 'obligations', cles: [/liberte/, /autonomie/, /contrainte/], description: 'Se sentir libre et autonome, sans obligations ni contraintes.' },
   { libelle: 'Travail : perspective rassurante', polarite: 'favorable', domaine: 'obligations', cles: [/perspective/, /travail rassurant/, /reprise rassurante/], description: 'Une perspective rassurante pour le travail : échange positif, reprise envisagée sereinement…' },
-  { libelle: 'Démarches réglées, bonne nouvelle d\'argent', polarite: 'favorable', domaine: 'obligations', cles: [/demarche/, /rembourse/, /bonne nouvelle (financ|administr|d.argent)/, /regle/], description: 'Une démarche réglée, un papier en ordre, un remboursement ou une bonne nouvelle financière.', questionSous: 'Quoi ?',
+  { libelle: 'Démarches et argent : bonne nouvelle', anciens: ['Démarches réglées, bonne nouvelle d\'argent'], polarite: 'favorable', domaine: 'obligations', cles: [/demarche/, /rembourse/, /bonne nouvelle (financ|administr|d.argent)/, /regle/], description: 'Une démarche réglée, un papier en ordre, un remboursement ou une bonne nouvelle financière.', questionSous: 'Quoi ?',
     sous: [
       { libelle: 'Démarche réglée, papiers en ordre', cles: [/demarche/, /papier/, /administr/, /dossier/], description: 'Une démarche administrative aboutie, un papier ou un dossier en ordre.' },
       { libelle: 'Bonne nouvelle d\'argent', cles: [/rembourse/, /argent/, /financ/, /virement/], description: 'Un remboursement, une rentrée d\'argent ou une bonne nouvelle financière.' },
@@ -465,7 +462,7 @@ export const PLAN_MOTIFS = [
   },
   { libelle: 'Contraintes familiales (organisation)', polarite: 'defavorable', domaine: 'obligations', cles: [/contraintes? famil/, /logisti/, /organisation famil/], description: 'Stress d\'organisation dans la famille : rendez-vous, horaires, logistique (sans conflit).' },
   { libelle: 'Peur du retour au travail', polarite: 'defavorable', domaine: 'obligations', cles: [/bureau/, /retour (potentiel )?(au|a) (travail|bureau)/, /retour au travail/], description: 'Appréhension d\'un retour possible au bureau.' },
-  { libelle: 'Soucis financiers ou administratifs', polarite: 'defavorable', domaine: 'obligations', cles: [/financ/, /courrier/, /administrat/, /facture/], description: 'Préoccupations d\'argent, courrier désagréable (rétention, pénalité, facture, résultats d\'analyses).', questionSous: 'Quoi ?',
+  { libelle: 'Démarches et argent : soucis', anciens: ['Soucis financiers ou administratifs'], polarite: 'defavorable', domaine: 'obligations', cles: [/financ/, /courrier/, /administrat/, /facture/], description: 'Préoccupations d\'argent, courrier désagréable (rétention, pénalité, facture, résultats d\'analyses).', questionSous: 'Quoi ?',
     sous: [
       { libelle: 'Souci administratif, courrier', cles: [/courrier/, /administr/, /demarche/, /papier/], description: 'Un courrier désagréable, une démarche qui bloque, un papier à régler.' },
       { libelle: 'Souci d\'argent', cles: [/facture/, /penalit/, /argent/, /financ/, /retention/], description: 'Une facture, une pénalité, une retenue ou une inquiétude d\'argent.' },
@@ -473,7 +470,7 @@ export const PLAN_MOTIFS = [
   },
 
   // 5. Environnement
-  { libelle: 'Calme et solitude', polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Calme, tranquillité, absence de bruit, solitude appréciée.', questionSous: 'Plutôt :',
+  { libelle: 'À la maison : ce qui fait du bien', anciens: ['Calme et solitude'], polarite: 'favorable', domaine: 'environnement', cles: [/calme/, /tranquill/, /absence de bruit/, /solitude/], description: 'Ce qui fait du bien à la maison : le calme, un moment à moi, un intérieur agréable. Précise (facultatif).', questionSous: 'Plutôt :',
     sous: [
       { libelle: 'Calme, pas de bruit', cles: [/calme/, /bruit/, /tranquill/], description: 'Le calme, la tranquillité, pas de bruit autour de moi.' },
       { libelle: 'Moment seul, temps pour moi', cles: [/solitude/, /seul/, /temps pour moi/], description: 'Un moment de solitude apprécié, du temps pour moi.' },
@@ -481,7 +478,7 @@ export const PLAN_MOTIFS = [
     ],
   },
   { libelle: 'Lieu qui fait du bien', polarite: 'favorable', domaine: 'environnement', cles: [/nature/, /lieu agreable/, /fait du bien/], description: 'Un endroit où je me sens bien : nature, maison de week-end, lieu apaisant…' },
-  { libelle: 'Bruit et désordre au domicile', polarite: 'defavorable', domaine: 'environnement', cles: [/bruit/, /travaux/, /domicile/, /desordre/], description: 'Bruit, travaux, stress ou désordre visuel au domicile.', questionSous: 'Plutôt :',
+  { libelle: 'À la maison : ce qui pèse', anciens: ['Bruit et désordre au domicile'], polarite: 'defavorable', domaine: 'environnement', cles: [/bruit/, /travaux/, /domicile/, /desordre/], description: 'Ce qui pèse à la maison : bruit ou travaux, stress, pas de moment à moi, désordre. Précise (facultatif).', questionSous: 'Plutôt :',
     sous: [
       { libelle: 'Bruit, travaux', cles: [/bruit/, /travaux/], description: 'Du bruit ou des travaux au domicile ou autour.' },
       { libelle: 'Pas de moment à moi', cles: [/pas de moment/, /jamais seul/], description: 'Pas de calme ni de moment seul, agitation à la maison.' },
@@ -493,7 +490,7 @@ export const PLAN_MOTIFS = [
   // 6. Activités
   { libelle: 'Réussite personnelle', anciens: ['Réussite ou retour positif'], polarite: 'favorable', domaine: 'activites', cles: [/application/, /reussite/, /abouti/, /finalis/, /termine/], description: 'Un travail abouti ou une chose menée à bien : application créée, finalisée ou améliorée, étape franchie…' },
   { libelle: 'Journée utile et occupée', polarite: 'favorable', domaine: 'activites', cles: [/occupe/, /utile/], description: 'Sentiment d\'avoir été occupé de manière constructive, journée utile.' },
-  { libelle: 'Projets personnels (recherches, photo…)', polarite: 'favorable', domaine: 'activites', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…', questionSous: 'Lequel ?',
+  { libelle: 'Projets personnels', anciens: ['Projets personnels (recherches, photo…)'], polarite: 'favorable', domaine: 'activites', cles: [/projet/, /genealog/, /histoire/, /recherche/, /photo/], description: 'Projets créatifs et personnels : recherches généalogiques, histoire d\'Arsdorf, photographie…', questionSous: 'Lequel ?',
     sous: [
       { libelle: 'Généalogie, histoire', cles: [/genealog/, /histoire/, /arsdorf/], description: 'Recherches généalogiques, histoire d\'Arsdorf.' },
       { libelle: 'Photo', cles: [/photo/], description: 'Photographie.' },
@@ -572,10 +569,14 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
   const regroupes = motifs.filter((m) => m.regroupeDans && !estPrecisionPropre(m));
   for (const m of regroupes) {
     const n = normaliserLibelle(m.libelle);
-    let i = cibles.findIndex((g) => g.parent === null && g.polarite === m.polarite && g.cles.some((r) => r.test(n)));
-    if (i < 0) continue;
-    const sous = cibles.findIndex((g) => g.parent === i && g.cles.some((r) => r.test(n)));
-    if (sous >= 0) i = sous;
+    // Ancien libellé d'un motif du plan (renommé puis réuni) : sa place est connue, pas de mot-clé à deviner
+    let i = cibles.findIndex((g) => g.polarite === m.polarite && (normaliserLibelle(g.libelle) === n || (g.anciens || []).some((x) => normaliserLibelle(x) === n)));
+    if (i < 0) {
+      i = cibles.findIndex((g) => g.parent === null && g.polarite === m.polarite && g.cles.some((r) => r.test(n)));
+      if (i < 0) continue;
+      const sous = cibles.findIndex((g) => g.parent === i && g.cles.some((r) => r.test(n)));
+      if (sous >= 0) i = sous;
+    }
     (groupes[i].reclasses = groupes[i].reclasses || []).push(m);
   }
   let changements = 0;
@@ -605,6 +606,64 @@ export function planSimplification(motifs, usage = new Map(), plan = PLAN_MOTIFS
 /** Précision ajoutée par le patient sous un motif (jamais réorganisée par le plan). */
 export function estPrecisionPropre(m) { return !!(m && (m.propre || m.origine === 'precision')); }
 
+// Doublons : deux libellés qui disent la même chose, même formulés un peu autrement
+const MOTS_VIDES = new Set(['a', 'au', 'aux', 'avec', 'd', 'de', 'des', 'du', 'en', 'et', 'l', 'la', 'le', 'les', 'ma', 'mes', 'mon', 'ou', 'par', 'pour', 'sur', 'un', 'une', 'je', 'j', 'me', 'm', 'ce', 'qui', 'que', 'pas', 'tres', 'trop', 'peu', 'plus', 'bien', 'bon', 'bonne', 'mauvais', 'mauvaise']);
+/** Mots porteurs de sens d'un libellé, sans accents, pluriels ni petits mots. */
+export function motsCles(libelle) {
+  return [...new Set(normaliserLibelle(libelle).replace(/[^a-z0-9]+/g, ' ').split(' ').filter((m) => m && !MOTS_VIDES.has(m))
+    .map((m) => (m.length > 4 ? m.replace(/[sx]$/, '').replace(/e$/, '') : m)))];
+}
+/** Deux libellés (presque) identiques : mêmes mots porteurs de sens, à un mot près. */
+export function libellesSemblables(a, b) {
+  const x = motsCles(a), y = motsCles(b);
+  if (!x.length || !y.length) return false;
+  const commun = x.filter((m) => y.includes(m)).length;
+  const union = new Set([...x, ...y]).size;
+  return commun === union || (commun >= 2 && commun / union >= 0.66) || (Math.min(x.length, y.length) === 1 && commun === 1 && union <= 2);
+}
+/**
+ * Doublons possibles dans la bibliothèque (motifs actifs de même sens : favorable, défavorable ou mixte).
+ * Un motif et sa propre sous-catégorie ne sont pas comparés.
+ */
+export function doublonsProbables(bibliotheque) {
+  const actifs = (bibliotheque || []).filter((m) => m.actif && !m.regroupeDans);
+  const res = [];
+  for (let i = 0; i < actifs.length; i++) {
+    for (let j = i + 1; j < actifs.length; j++) {
+      const a = actifs[i], b = actifs[j];
+      if (a.polarite !== b.polarite || a.parentId === b.id || b.parentId === a.id) continue;
+      if (libellesSemblables(a.libelle, b.libelle)) res.push([a, b]);
+    }
+  }
+  return res;
+}
+
+/**
+ * Libellés à afficher pour les motifs d'une évaluation : une sous-catégorie est présentée avec son motif
+ * (« Mes enfants : ce qui me pèse – Culpabilité : je me suis isolé »), sans répéter le motif seul ;
+ * le libellé actuel de la bibliothèque est utilisé quand le motif y existe encore.
+ */
+export function libellesGroupes(motifs, bibliotheque = []) {
+  const parId = new Map((bibliotheque || []).map((m) => [m.id, m]));
+  const resolus = (motifs || []).map((m) => {
+    const r = parId.has(m.id) ? racineMotif(m.id, bibliotheque) : null;
+    return { m, r: r && r.actif !== false ? r : null };
+  });
+  const ids = new Set(resolus.map((x) => (x.r ? x.r.id : x.m.id)));
+  const parentsAvecSous = new Set(resolus.filter((x) => x.r && x.r.parentId && ids.has(x.r.parentId)).map((x) => x.r.parentId));
+  const vus = new Set();
+  const sortie = [];
+  for (const { m, r } of resolus) {
+    const id = r ? r.id : m.id;
+    if (vus.has(id) || parentsAvecSous.has(id)) continue;
+    vus.add(id);
+    const parent = r && r.parentId && parId.has(r.parentId) ? racineMotif(r.parentId, bibliotheque) : null;
+    const libelle = r ? (parent && ids.has(parent.id) ? `${parent.libelle} – ${r.libelle}` : r.libelle) : m.libelle;
+    sortie.push({ id, libelle, polarite: r ? r.polarite : m.polarite });
+  }
+  return sortie;
+}
+
 /** Identifiant stable d'un motif créé par le plan (même résultat sur chaque appareil). */
 export function idMotifPlan(parentId, libelle, polarite) {
   let h = 0x811c9dc5;
@@ -620,7 +679,9 @@ export function creerSousMotifPropre(parent, libelle, bibliotheque, instant = Da
   const l = String(libelle || '').replace(/\s+/g, ' ').trim().slice(0, 120);
   if (!l) throw new Error('Écris d\'abord la précision à ajouter.');
   if (!parent) throw new Error('Motif introuvable.');
-  const existant = bibliotheque.find((m) => m.parentId === parent.id && normaliserLibelle(m.libelle) === normaliserLibelle(l));
+  const sousDe = bibliotheque.filter((m) => m.parentId === parent.id);
+  const existant = sousDe.find((m) => normaliserLibelle(m.libelle) === normaliserLibelle(l))
+    || sousDe.find((m) => m.actif && !m.regroupeDans && libellesSemblables(m.libelle, l));
   if (existant) return { motif: existant.actif && !existant.regroupeDans ? existant : { ...existant, actif: true, regroupeDans: null, modifieLeUtc: new Date(instant).toISOString() }, nouveau: false, reactive: !(existant.actif && !existant.regroupeDans) };
   const ordre = Math.max(1000, ...bibliotheque.filter((m) => m.parentId === parent.id).map((m) => (m.ordre ?? 0) + 1));
   return { motif: { ...creerMotif(l, parent.polarite, instant, ordre), parentId: parent.id, propre: true, origine: 'precision' }, nouveau: true };
@@ -707,6 +768,132 @@ export function motifsFrequents(evaluations, bibliotheque, { nombre = 6, jours =
 /** Sous-motifs actifs d'un motif (affichés quand le motif est coché). */
 export function sousMotifs(m, bibliotheque) {
   return bibliotheque.filter((x) => x.parentId === m.id && x.actif && !x.regroupeDans);
+}
+
+// ---------------------------------------------------------------------------
+// Questions guidées : une question fermée par écran. Chaque paire en miroir (favorable / défavorable
+// au même rang d'un domaine) devient une question ; l'ordre s'adapte aux réponses passées du patient
+// (motifs qu'il coche souvent, pour une note proche, au même moment de la journée) et à celles qu'il
+// vient de donner (motifs souvent cochés ensemble). Rien n'est deviné : seules ses réponses sont enregistrées.
+
+/** Question posée pour chaque paire, d'après le libellé de son motif favorable (ou du motif seul). */
+export const QUESTIONS_PAIRES = {
+  'Météo agréable': 'La météo ?',
+  'Bons résultats sportifs': 'Les résultats du KSC ou de l\'équipe nationale ?',
+  'Hausse de mes placements': 'Tes placements ?',
+  'Bon sommeil': 'Ton sommeil, ton repos ?',
+  'Activité physique, promenade': 'Ton activité physique ?',
+  'Santé : soin ou bonne nouvelle': 'Ta santé ?',
+  'Sevrage : progrès': 'Le sevrage ?',
+  'Encouragements, retours positifs': 'Ce que les autres t\'ont dit ?',
+  'Moments avec mes proches': 'Famille et amis : bons moments ou conflits ?',
+  'Couple : complicité, soutien': 'Ton couple ?',
+  'Mes enfants : ce qui fait du bien': 'Tes enfants ?',
+  'Liberté, sans contraintes': 'Liberté ou contraintes ?',
+  'Travail : perspective rassurante': 'Le travail ?',
+  'Démarches et argent : bonne nouvelle': 'Démarches et argent ?',
+  'À la maison : ce qui fait du bien': 'À la maison : calme ou bruit ?',
+  'Lieu qui fait du bien': 'Un lieu en particulier ?',
+  'Réussite personnelle': 'Réussite ou échec ?',
+  'Journée utile et occupée': 'Ta journée : occupée ou vide ?',
+  'Projets personnels': 'Projets personnels ou écrans ?',
+  'Football (KSC, équipe nationale)': 'Le football comme activité (fanclub, matchs, Karlsruhe) ?',
+  'Apaisement, confiance': 'Apaisé ou anxieux ?',
+  'Élan, motivation': 'Ton élan, ta motivation ?',
+  'Esprit clair, disponible': 'Esprit clair ou surchargé ?',
+  'Petits plaisirs du quotidien': 'Petits plaisirs ou contrariétés ?',
+};
+
+/** Ordre de départ, avant que l'application connaisse les habitudes du patient. */
+const PRIORITE_DEPART = ['Bon sommeil', 'Sevrage : progrès', 'Apaisement, confiance', 'Moments avec mes proches', 'Journée utile et occupée', 'Activité physique, promenade', 'Mes enfants : ce qui fait du bien', 'Élan, motivation'];
+
+/**
+ * Paires de questions d'après la bibliothèque : dans chaque domaine, le n-ième motif favorable et le n-ième
+ * défavorable (dans l'ordre du plan). Un motif sans pendant (ou mixte) forme une question à lui seul.
+ */
+export function pairesQuestions(bibliotheque) {
+  const racines = (bibliotheque || []).filter((m) => m.actif && !m.regroupeDans && !m.parentId);
+  const paires = [];
+  const ordre = (a, b) => (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr');
+  const domaines = [...DOMAINES.map((d) => d.id), ''];
+  for (const d of domaines) {
+    const dans = racines.filter((m) => (domaineMotif(m, bibliotheque) || '') === d);
+    const fav = dans.filter((m) => m.polarite === 'favorable').sort(ordre);
+    const def = dans.filter((m) => m.polarite === 'defavorable').sort(ordre);
+    const mix = dans.filter((m) => m.polarite === 'mixte').sort(ordre);
+    for (let i = 0; i < Math.max(fav.length, def.length); i++) {
+      const f = fav[i] || null, g = def[i] || null;
+      const q = (f && QUESTIONS_PAIRES[f.libelle]) || (g && QUESTIONS_PAIRES[g.libelle]) || `${[f, g].filter(Boolean).map((m) => m.libelle).join(' ou ')} ?`;
+      paires.push({ cle: `${f ? f.id : ''}|${g ? g.id : ''}`, domaine: d, question: q, favorable: f, defavorable: g, mixte: null });
+    }
+    for (const m of mix) paires.push({ cle: `|||${m.id}`, domaine: d, question: `${m.libelle} ?`, favorable: null, defavorable: null, mixte: m });
+  }
+  return paires;
+}
+
+/** Motifs principaux (racines, puis parent d'une sous-catégorie) cochés dans une évaluation. */
+export function racinesCochees(ev, bibliotheque) {
+  const parId = new Map(bibliotheque.map((m) => [m.id, m]));
+  const res = new Set();
+  for (const m of ev.motifs || []) {
+    const r = parId.has(m.id) ? racineMotif(m.id, bibliotheque) : null;
+    if (!r) continue;
+    res.add(r.id);
+    if (r.parentId && parId.has(r.parentId)) res.add(racineMotif(r.parentId, bibliotheque).id);
+  }
+  return res;
+}
+
+const motifsDePaire = (p) => [p.favorable, p.defavorable, p.mixte].filter(Boolean).map((m) => m.id);
+
+/**
+ * Questions restantes, de la plus pertinente à la moins pertinente pour ce patient et ce moment.
+ * score = habitudes (90 derniers jours, pondérées par la proximité de la note, le moment et l'ancienneté)
+ *       + motifs souvent cochés avec ceux qu'il vient de choisir + petite priorité de départ.
+ */
+export function classerQuestions(paires, evaluations, bibliotheque, { note = null, creneau = null, instant = Date.now(), deja = new Set(), choisis = [] } = {}) {
+  const limite = dateLocale(instant - 90 * 864e5), recent = dateLocale(instant - 30 * 864e5);
+  const historique = (evaluations || []).filter((e) => e.date >= limite).map((e) => ({ e, r: racinesCochees(e, bibliotheque) }));
+  const racineChoisie = new Set(choisis.map((id) => { const r = racineMotif(id, bibliotheque); const p = r && r.parentId ? racineMotif(r.parentId, bibliotheque) : null; return (p || r || { id }).id; }));
+  return paires.filter((p) => !deja.has(p.cle)).map((p) => {
+    const ids = motifsDePaire(p);
+    let habitude = 0, ensemble = 0;
+    for (const { e, r } of historique) {
+      if (!ids.some((id) => r.has(id))) continue;
+      const ecart = Number.isInteger(note) ? Math.abs(e.note - note) : 3;
+      habitude += (e.date >= recent ? 1 : 0.5) * (1 + (ecart <= 1 ? 1 : ecart <= 2 ? 0.5 : 0)) * (creneau && e.creneau === creneau ? 1.2 : 1);
+      if (racineChoisie.size && [...racineChoisie].some((id) => r.has(id))) ensemble += 1;
+    }
+    const k = PRIORITE_DEPART.indexOf((p.favorable || p.defavorable || p.mixte).libelle);
+    const depart = k >= 0 ? (PRIORITE_DEPART.length - k) * 0.05 : 0;
+    return { ...p, score: habitude + 1.5 * ensemble + depart, habitude, ensemble };
+  }).sort((a, b) => b.score - a.score);
+}
+
+/** Sous-catégories d'un motif, les plus souvent cochées d'abord (puis dans l'ordre du plan). */
+export function sousMotifsParUsage(parent, bibliotheque, evaluations) {
+  const compte = new Map();
+  for (const e of evaluations || []) for (const m of e.motifs || []) compte.set(m.id, (compte.get(m.id) || 0) + 1);
+  return sousMotifs(parent, bibliotheque).sort((a, b) => (compte.get(b.id) || 0) - (compte.get(a.id) || 0) || (a.ordre ?? 0) - (b.ordre ?? 0));
+}
+
+/** Lieux proposés en un geste : ceux de la dernière évaluation, puis les lieux les plus fréquents (sans activité). */
+export function lieuxProposes(evaluations, cible, nombre = 4) {
+  const id = idCreneau(cible.date, cible.creneau);
+  const avant = trierChrono(evaluations || []).filter((e) => e.creneauId < id);
+  const derniere = [...avant].reverse().find((e) => lieuxDe(e).length);
+  const compte = new Map();
+  for (const e of avant.slice(-120)) {
+    for (const l of lieuxDe(e)) {
+      const sans = lieuSansActivite(l);
+      const k = cleLieu(sans);
+      const x = compte.get(k) || { lieu: sans, n: 0 };
+      x.n++;
+      compte.set(k, x);
+    }
+  }
+  const frequents = [...compte.values()].sort((a, b) => b.n - a.n).map((x) => x.lieu).slice(0, nombre);
+  return { derniers: derniere ? lieuxDe(derniere).map(lieuSansActivite) : [], frequents };
 }
 
 // ---------------------------------------------------------------------------
@@ -947,7 +1134,9 @@ export function suggestionContexte(evaluations, { date, creneau }) {
   // Là où la période précédente s'est terminée (hors itinérance), sans l'activité
   const precedente = avant.find((e) => lieuxDe(e).some((l) => !estItinerance(l)));
   const lieu = precedente ? lieuSansActivite(lieuxDe(precedente).filter((l) => !estItinerance(l)).at(-1)) : null;
-  const sit = avant.find((e) => e.situation && (e.date === date || estWeekend(e.date) === estWeekend(date)));
+  // Congé (maladie ou non) : vaut aussi le week-end ; une situation de travail ne passe pas de la semaine au week-end
+  const sansJour = (st) => st === 'conge_maladie' || st === 'conge';
+  const sit = avant.find((e) => e.situation && (e.date === date || estWeekend(e.date) === estWeekend(date) || sansJour(e.situation.statut)));
   return { lieu, situation: sit ? sit.situation : null };
 }
 
@@ -1235,7 +1424,7 @@ export function textesOriginaux(ev) {
  * Méthode de rédaction des versions pour le thérapeute : 3 = complète, motifs intégrés, traduite, toujours « le patient » ;
  * 4 = idem, 500 caractères au plus par texte, sans redite quand des motifs se ressemblent.
  */
-export const METHODE_VERSION = 4;
+export const METHODE_VERSION = 5;
 
 /**
  * Styles de rédaction proposés au patient (Réglages). La consigne s'ajoute aux règles communes
@@ -1313,7 +1502,10 @@ export function aDesTextes(ev, evenements = null) {
 /** Version préparée avec une méthode antérieure (à refaire pour bénéficier de la nouvelle rédaction). */
 export function versionAncienneMethode(ev) {
   const r = ev.reformulation;
-  return !!(r && ((r.methode || 1) < 3 || versionTropLongue(r)));
+  if (!r) return false;
+  // Une version écrite par le patient lui-même n'est jamais proposée à refaire
+  if (r.source === 'manuelle') return versionTropLongue(r);
+  return (r.methode || 1) < METHODE_VERSION || versionTropLongue(r);
 }
 
 /**
@@ -1370,10 +1562,11 @@ export function textesPourRapport(ev, mode = 'reformule', evenements = null) {
 }
 
 /** Ce qui est transmis pour la rédaction : textes et motifs cochés, sans nom, note, date, lieu ni situation. */
-export function entreesReformulation(evaluations, { evenements = null } = {}) {
+export function entreesReformulation(evaluations, { evenements = null, bibliotheque = [] } = {}) {
   return trierChrono(evaluations).filter((e) => aDesTextes(e, evenements)).map((e) => {
     const t = textesOriginaux(e);
-    const tous = [...(e.motifs || []), ...(e.autresMotifs || [])];
+    // Sous-catégorie présentée avec son motif, sans le motif seul (pas de « manque » si seule la culpabilité est cochée)
+    const tous = [...libellesGroupes(e.motifs || [], bibliotheque), ...(e.autresMotifs || [])];
     const parPol = (pol) => tous.filter((m) => m.polarite === pol).map((m) => m.libelle);
     return {
       id: e.id,
@@ -1398,9 +1591,13 @@ export function instructionsReformulation({ style: idStyle = 'sobre' } = {}) {
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois des entrées du journal d'humeur d'un patient, destinées à son psychothérapeute. Le patient relira et validera chaque texte.
 
 Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, précise et naturelle, d'un registre professionnel, neutre et factuel :
-- « explication » : un texte complet qui présente d'abord les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), en les intégrant naturellement (par exemple « Le patient mentionne comme éléments favorables… »), puis tout le contenu du texte « explication », et les « evenements_marquants » s'il y en a (titre, description, ressenti, impact positif ou négatif indiqué par le patient). S'il n'y a que des motifs, une ou deux phrases qui les présentent suffisent. S'il n'y a ni motifs, ni explication, ni événement, renvoie une chaîne vide.
-- « complement » : tout le contenu du complément ; chaîne vide s'il est vide.
-- « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a ; chaîne vide si les deux sont vides.
+- « explication » : un seul texte, organisé par thème, qui réunit les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), le contenu du texte « explication » et les « evenements_marquants » s'il y en a (titre, description, ressenti, impact positif ou négatif indiqué par le patient). Méthode :
+  1. Repère les thèmes : chaque motif coché est un thème ; un passage du commentaire ou un événement qui parle du même sujet appartient à ce thème (par exemple le motif « Sevrage : difficultés – Prise au besoin » et la phrase « j'ai dû prendre un comprimé en plus ce soir »).
+  2. Écris chaque thème une seule fois, en une phrase qui fusionne le motif et les détails du commentaire ou de l'événement (« Le patient signale des difficultés de sevrage : il a dû prendre un comprimé supplémentaire au besoin dans la soirée »), au lieu de citer le motif puis de le répéter avec les mots du commentaire.
+  3. Les motifs dont le commentaire ne dit rien sont présentés brièvement, regroupés (favorables ensemble, défavorables ensemble) ; le contenu du commentaire qui ne correspond à aucun motif est ensuite repris en entier.
+  Une sous-catégorie est donnée avec son motif sous la forme « motif – précision » : n'écris que ce que dit la précision (par exemple « Mes enfants : ce qui me pèse – Culpabilité : je me suis isolé » signifie seulement que le patient s'est isolé et en éprouve de la culpabilité, sans manque). S'il n'y a que des motifs, une ou deux phrases suffisent. S'il n'y a ni motifs, ni explication, ni événement, renvoie une chaîne vide.
+- « complement » : le contenu du complément qui n'est pas déjà dans « explication » ; chaîne vide s'il est vide ou si tout y figure déjà.
+- « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a, sans répéter ce qui est déjà dit dans « explication » ; chaîne vide si les deux sont vides.
 
 Règles impératives :
 - Écris exclusivement à la troisième personne : jamais « je », « j' », « me », « moi », « mon », « ma », « mes », « nous ». Même si le patient écrit « je », transpose systématiquement (« je suis fatigué » devient « Le patient se dit fatigué » ou « Le patient est fatigué »). Chaque texte commence par « Le patient » ou « Il ».
@@ -1412,6 +1609,7 @@ Règles impératives :
 - N'ajoute aucune information absente des entrées, aucune interprétation, aucune hypothèse, aucun vocabulaire clinique ni diagnostic.
 - Présente les motifs comme des éléments mentionnés par le patient, sans en tirer de conclusion.
 - Pour un ami, un collègue ou un proche dont le patient ne précise pas qu'il s'agit d'un homme ou d'une femme, ou qu'il désigne sans nom, emploie l'écriture neutre : « un(e) ami(e) », « un(e) collègue », « un membre de la famille ».
+- Avant de répondre, relis chaque entrée en entier (« explication », « complement » et « prevision » ensemble) : si un même fait, une même cause ou un même ressenti apparaît deux fois, même formulé autrement, fusionne-les en une seule mention.
 - Conserve exactement chaque « id ».
 
 Réponds uniquement avec du JSON valide, sans texte autour, sous cette forme exacte :
@@ -2543,7 +2741,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores'];
 
 function empreinteTexte(s) {
   let h = 5381;

@@ -816,7 +816,327 @@ function vueEvaluer(args) {
       <p><a class="bouton-secondaire" href="#/">Retour à l'accueil</a></p></section>`;
     return;
   }
-  formulaire(cible, null);
+  // Questions guidées (par défaut) ou formulaire complet
+  const formulaireDemande = args[2] === 'formulaire' || (etat.parametres.modeSaisie === 'formulaire' && args[2] !== 'questions');
+  if (formulaireDemande) formulaire(cible, null);
+  else questionsGuidees(cible);
+}
+
+// ---------------------------------------------------------------------------
+// Questions guidées : une question fermée par écran, choisie d'après les réponses précédentes
+
+function questionsGuidees(cible) {
+  const NB_AUTO = 6; // questions posées d'office ; les autres restent accessibles par « Autre chose ? »
+  const idCible = C.idCreneau(cible.date, cible.creneau);
+  const t0 = maintenant();
+  const suivant = C.creneauSuivant(cible);
+  const prevLib = creneauRelatif(suivant);
+  const paires = C.pairesQuestions(etat.motifs);
+  const proposition = C.suggestionContexte(etat.evaluations, cible);
+  const lieuxP = C.lieuxProposes(etat.evaluations, cible);
+  const exigerTout = etat.parametres.saisieComplete !== false;
+  // État des réponses ; « pile » garde les états précédents pour revenir en arrière
+  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, prevNote: null, mot: '', retourAutre: false };
+  const pile = [];
+  let champLieuGuide = null;
+  const copie = (x) => JSON.parse(JSON.stringify(x));
+  const avancer = (modifs) => { pile.push(copie(w)); w = { ...w, ...modifs }; rendre(); };
+  const parId = () => motifParId();
+  const libSituation = (sit) => (sit ? C.libelleSituation(sit) : '');
+  const retro = t0 > C.expiration(cible.date, cible.creneau);
+
+  // La question suivante dépend des réponses déjà données (x : état des réponses)
+  function prochaineQuestion(x = w) {
+    const deja = new Set(x.reponses.map((r) => r.cle));
+    const classees = C.classerQuestions(paires, etat.evaluations, etat.motifs, { note: x.note, creneau: cible.creneau, instant: t0, deja, choisis: x.choisis });
+    return classees[0] || null;
+  }
+  function apresPaire(x = w) {
+    // Après une question : la suivante d'office (jusqu'à NB_AUTO), sinon « Autre chose ? »
+    if (x.retourAutre || x.auto >= NB_AUTO) return { etape: 'autre', paire: null, choixPaire: null, retourAutre: false };
+    const q = prochaineQuestion(x);
+    return q ? { etape: 'paire', paire: q.cle, choixPaire: null, auto: x.auto + 1 } : { etape: 'autre', paire: null, choixPaire: null };
+  }
+  const bouton = (attrs, contenuB, classe = 'choix') => `<button type="button" class="${classe}" ${attrs}>${contenuB}</button>`;
+  const pastille = (pol) => `<span class="pastille ${pol}" aria-hidden="true"></span>`;
+  const grilleNotes = (attr, actuelle = null) => `<div class="grille-notes">${Array.from({ length: 11 }, (_, n) => n).reverse().map((n) => bouton(`${attr}="${n}" aria-label="${n} sur 10, ${esc(C.nomNiveau(n))}"`, `<span class="gn-icone">${iconeMeteo(n, { taille: 30 })}</span><span class="gn-note">${n}</span><span class="gn-nom">${esc(C.nomNiveau(n))}</span>${actuelle === n ? '<span class="gn-marque">comme maintenant</span>' : ''}`, `choix choix-note${actuelle === n ? ' choix-marque' : ''}`)).join('')}</div>`;
+
+  function ecran(titreQ, corps, { aide = '' } = {}) {
+    const etapes = { note: 1, contexte: 2, paire: 3, autre: 3, evenement: 4, prevision: 5, mot: 6, resume: 7 };
+    const k = etapes[w.etape] || 1;
+    contenu.innerHTML = `<section class="colonne-centree guide" id="guide">
+      <div class="guide-haut"><span class="doux">${esc(C.majuscule(C.formatDateLongue(cible.date)))} · ${cible.creneau === 'matin' ? 'matin' : 'soir'}${retro ? ' · saisie en retard' : ''}</span>
+        <a class="bouton-discret" href="#/evaluer/${cible.date}/${cible.creneau}/formulaire" data-guide="formulaire">Formulaire complet</a></div>
+      <div class="guide-progression" aria-hidden="true">${Array.from({ length: 7 }, (_, i) => `<span class="${i < k ? 'fait' : ''}"></span>`).join('')}</div>
+      <h1 class="guide-question" tabindex="-1">${titreQ}</h1>
+      ${aide ? `<p class="doux guide-aide">${aide}</p>` : ''}
+      <div class="guide-corps">${corps}</div>
+      ${pile.length ? '<p class="guide-bas"><button type="button" class="bouton-discret" data-guide="retour">← Retour</button></p>' : ''}
+    </section>`;
+    const h = contenu.querySelector('.guide-question');
+    if (h) h.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }
+
+  function rendre() {
+    const P = parId();
+    if (w.etape === 'note') {
+      ecran('Comment te sens-tu en ce moment ?', `${grilleNotes('data-note')}
+        <div class="securite" id="guide-securite" ${w.note === 0 ? '' : 'hidden'}>
+          <p><strong>Merci de l'avoir indiqué.</strong> Si tu te sens en danger ou si tu penses à te faire du mal, appelle le <a href="tel:112"><strong>112</strong></a> ou parle à quelqu'un maintenant.</p>
+          <p class="rangee"><button type="button" class="bouton-secondaire" data-action="aide">Voir les aides disponibles</button><button type="button" class="bouton" data-guide="apres-zero">Continuer</button></p>
+        </div>`);
+      return;
+    }
+    if (w.etape === 'contexte') {
+      const habituel = proposition.lieu ? [proposition.lieu] : lieuxP.derniers.slice(-1);
+      const sitHab = proposition.situation;
+      const lieuxChoisis = w.lieux || [];
+      const sitChoisie = w.situation;
+      const cles = new Set(lieuxChoisis.map(C.cleLieu));
+      const autresLieux = [...lieuxChoisis, ...lieuxP.frequents, ...lieuxP.derniers].filter((l, i, a) => a.findIndex((x) => C.cleLieu(x) === C.cleLieu(l)) === i);
+      const besoinModalite = sitChoisie && C.SITUATIONS_AVEC_MODALITE.includes(sitChoisie.statut);
+      ecran('Où étais-tu, et quelle est ta situation ?', `
+        ${habituel.length && !w.lieux ? `<div class="choix-liste">${bouton('data-guide="habituel"', `<strong>Comme d'habitude</strong><span class="doux">${esc(C.libelleLieux(habituel))}${sitHab ? ` · ${esc(libSituation(sitHab))}` : ' · situation à choisir'}</span>`, 'choix choix-large choix-principal')}</div><p class="doux guide-ou">ou précise :</p>` : ''}
+        <p class="guide-sous">Lieu${lieuxChoisis.length > 1 ? 'x' : ''} <span class="doux">(touche-en un ou plusieurs)</span></p>
+        <div class="choix-puces">${autresLieux.map((l) => bouton(`data-lieu="${esc(C.cleLieu(l))}" aria-pressed="${cles.has(C.cleLieu(l))}"`, esc(C.libelleLieu(l)), 'puce-choix')).join('')}
+          ${w.champLieu ? '' : bouton('data-guide="autre-lieu"', 'Autre lieu…', 'puce-choix puce-autre')}</div>
+        ${w.champLieu ? `<div class="guide-lieu">${L.champLieuHTML('g-lieu', null, { libelle: 'Autre lieu' })}<p class="rangee"><button type="button" class="bouton-secondaire" data-guide="lieu-ajouter">Ajouter ce lieu</button><button type="button" class="bouton-discret" data-guide="formulaire">En route, activités… : formulaire complet</button></p></div>` : ''}
+        <p class="guide-sous">Situation</p>
+        <div class="choix-puces">${C.ORDRE_SITUATIONS.map((st) => bouton(`data-situation="${st}" aria-pressed="${!!(sitChoisie && sitChoisie.statut === st)}"`, esc(C.SITUATIONS[st]), 'puce-choix')).join('')}</div>
+        ${besoinModalite ? `<div class="choix-puces" style="margin-top:8px">${Object.entries(C.MODALITES).map(([k2, lib]) => bouton(`data-modalite="${k2}" aria-pressed="${sitChoisie.modalite === k2}"`, esc(lib), 'puce-choix')).join('')}</div>` : ''}
+        <p style="margin-top:16px"><button type="button" class="bouton" data-guide="contexte-ok" ${lieuxChoisis.length && sitChoisie && (!besoinModalite || sitChoisie.modalite) ? '' : 'disabled'}>Continuer</button></p>`);
+      contenu.dataset.lieux = JSON.stringify(autresLieux);
+      if (w.champLieu) {
+        champLieuGuide = L.brancherChampLieu('g-lieu', { connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
+        document.getElementById('g-lieu').focus();
+      }
+      return;
+    }
+    if (w.etape === 'paire') {
+      const p = paires.find((x) => x.cle === w.paire);
+      if (!p) { avancer(apresPaire()); return; }
+      const c = w.choixPaire;
+      const seul = p.mixte || (!p.favorable || !p.defavorable) ? (p.mixte || p.favorable || p.defavorable) : null;
+      let corps;
+      if (!c) {
+        corps = seul
+          ? `<div class="choix-liste">${bouton(`data-paire="seul"`, `${pastille(seul.polarite)}<span>Oui : ${esc(seul.libelle)}</span>`, 'choix choix-large')}${bouton('data-paire="rien"', 'Rien de particulier', 'choix choix-large choix-neutre')}</div>`
+          : `<div class="choix-liste">
+            ${bouton('data-paire="fav"', `${pastille('favorable')}<span>${esc(p.favorable.libelle)}</span>`, 'choix choix-large')}
+            ${bouton('data-paire="def"', `${pastille('defavorable')}<span>${esc(p.defavorable.libelle)}</span>`, 'choix choix-large')}
+            ${bouton('data-paire="deux"', 'Un peu des deux', 'choix choix-large choix-neutre')}
+            ${bouton('data-paire="rien"', 'Rien de particulier', 'choix choix-large choix-neutre')}</div>`;
+      } else {
+        // Précisions (sous-catégories) du ou des motifs choisis
+        const motifs = c === 'fav' ? [p.favorable] : c === 'def' ? [p.defavorable] : c === 'deux' ? [p.favorable, p.defavorable] : [seul];
+        corps = motifs.map((m) => {
+          const sous = C.sousMotifsParUsage(m, etat.motifs, etat.evaluations);
+          return `<div class="guide-precision"><p class="guide-sous">${pastille(m.polarite)} ${esc(m.libelle)} : ${esc(m.questionSous || 'précise')} <span class="doux">(facultatif, plusieurs possibles)</span></p>
+            <div class="choix-puces">${sous.map((x) => bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix')).join('')}</div>
+            <span class="sous-autre guide-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-guide-ajouter="${esc(m.id)}">Ajouter</button></span></div>`;
+        }).join('') + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="paire-ok">Continuer</button></p>';
+      }
+      ecran(esc(p.question), corps, { aide: !c && w.auto === 1 && !w.reponses.length ? 'Les questions suivent tes réponses : celles qui comptent le plus pour toi viennent en premier.' : '' });
+      return;
+    }
+    if (w.etape === 'autre') {
+      const deja = new Set(w.reponses.map((r) => r.cle));
+      const reste = C.classerQuestions(paires, etat.evaluations, etat.motifs, { note: w.note, creneau: cible.creneau, instant: t0, deja, choisis: w.choisis });
+      ecran('Autre chose à signaler ?', `<div class="choix-liste">${bouton('data-guide="autre-non"', '<strong>Non, c\'est tout</strong>', 'choix choix-large choix-principal')}</div>
+        <p class="doux guide-ou">ou choisis un thème :</p>
+        <div class="choix-puces">${reste.map((q) => bouton(`data-theme="${esc(q.cle)}"`, esc(q.question.replace(/ \?$/, '')), 'puce-choix')).join('')}</div>`);
+      return;
+    }
+    if (w.etape === 'evenement') {
+      const e = w.evt;
+      if (!e) {
+        ecran('Un événement marquant à noter ?', `<div class="choix-liste">${bouton('data-evt="non"', '<strong>Non</strong>', 'choix choix-large choix-principal')}
+          ${bouton('data-evt="positif"', `${pastille('favorable')}<span>Oui, avec un impact positif</span>`, 'choix choix-large')}
+          ${bouton('data-evt="negatif"', `${pastille('defavorable')}<span>Oui, avec un impact négatif</span>`, 'choix choix-large')}</div>`,
+        { aide: 'Par exemple une victoire du KSC, un appel difficile, une bonne nouvelle.' });
+      } else {
+        ecran(`Événement ${e.impact === 'positif' ? 'positif' : 'négatif'}`, `<div class="champ"><label for="g-evt-titre">En quelques mots</label><input type="text" id="g-evt-titre" maxlength="${C.LONGUEUR_TITRE_EVENEMENT}" value="${esc(e.titre || '')}" autocomplete="off" lang="fr" placeholder="Ex. : victoire du KSC 4-0"></div>
+          <div class="champ"><label for="g-evt-faits">Ce qui s'est passé <span class="doux">(facultatif)</span></label><textarea id="g-evt-faits" rows="2" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr">${esc(e.faits || '')}</textarea></div>
+          <p><button type="button" class="bouton" data-guide="evt-ok">Continuer</button> <button type="button" class="bouton-discret" data-guide="evt-annuler">Pas d'événement</button></p>`);
+      }
+      return;
+    }
+    if (w.etape === 'prevision') {
+      ecran(`Et pour ${esc(prevLib)}, à combien t'attends-tu ?`, grilleNotes('data-prev', w.note));
+      return;
+    }
+    if (w.etape === 'mot') {
+      const obligatoire = exigerTout && !w.choisis.length;
+      ecran(obligatoire ? 'En quelques mots, qu\'est-ce qui a marqué ce moment ?' : 'Un mot à ajouter ?', `<div class="champ"><label for="g-mot" class="visuellement-cache">Commentaire</label><textarea id="g-mot" rows="4" maxlength="10000" lang="fr" spellcheck="true" autocapitalize="sentences" placeholder="Quelques mots suffisent.">${esc(w.mot)}</textarea></div>
+        <p class="rangee"><button type="button" class="bouton" data-guide="mot-ok" ${obligatoire && !w.mot.trim() ? 'disabled' : ''}>Continuer</button>${obligatoire ? '' : '<button type="button" class="bouton-discret" data-guide="mot-passer">Passer</button>'}</p>`,
+      { aide: obligatoire ? 'Aucun motif coché : une phrase courte suffit (ou reviens en arrière pour en choisir un).' : 'Facultatif. Quelques mots suffisent ; tu peux aussi dicter avec le micro du clavier. Les motifs que tu as cochés sont déjà enregistrés.' });
+      return;
+    }
+    if (w.etape === 'resume') {
+      const motifs = w.choisis.map((id) => P.get(id)).filter(Boolean);
+      const brouillon = { note: w.note, lieux: w.lieux, situation: w.situation, motifs, autresMotifs: [], explication: w.mot, prevision: { note: w.prevNote } };
+      const manquants = exigerTout ? C.informationsManquantes(brouillon) : [];
+      const racines = motifs.filter((m) => !m.parentId || !w.choisis.includes(m.parentId));
+      const sousDe = (m) => motifs.filter((x) => x.parentId === m.id);
+      ecran('Tout est juste ?', `<dl class="guide-resume">
+          <dt>Note</dt><dd>${iconeMeteo(w.note, { taille: 22 })} <strong>${esc(C.libelleNote(w.note))}</strong></dd>
+          <dt>Lieu${(w.lieux || []).length > 1 ? 'x' : ''}</dt><dd>${esc(C.libelleLieux(w.lieux || []))}</dd>
+          <dt>Situation</dt><dd>${esc(libSituation(w.situation))}</dd>
+          <dt>Motifs</dt><dd>${racines.length ? `<ul>${racines.map((m) => `<li>${pastille(m.polarite)} ${esc(m.libelle)}${sousDe(m).length ? ` <span class="doux">: ${sousDe(m).map((x) => esc(x.libelle)).join(', ')}</span>` : ''}</li>`).join('')}</ul>` : '<span class="doux">aucun</span>'}</dd>
+          ${w.evt ? `<dt>Événement</dt><dd>${pastille(w.evt.impact === 'positif' ? 'favorable' : 'defavorable')} ${esc(w.evt.titre)}</dd>` : ''}
+          <dt>Prévision</dt><dd>${esc(C.majuscule(prevLib))} : <strong>${esc(C.libelleNote(w.prevNote))}</strong></dd>
+          ${w.mot.trim() ? `<dt>Commentaire</dt><dd>${esc(w.mot.trim())}</dd>` : ''}
+        </dl>
+        ${manquants.length ? `<div class="erreurs erreurs-rouge"><strong>Il manque encore :</strong><ul>${manquants.map((m) => `<li>${esc(m.message.replace(/ \((question \d|Contexte)\)/, ''))}</li>`).join('')}</ul></div>` : ''}
+        <div id="guide-erreur" class="erreurs" hidden></div>
+        <p class="rangee" style="margin-top:14px"><button type="button" class="bouton" data-guide="enregistrer" ${manquants.length ? 'disabled' : ''}>Enregistrer</button><button type="button" class="bouton-secondaire" data-guide="formulaire">Compléter dans le formulaire</button></p>`);
+    }
+  }
+
+  // Formulaire complet : les réponses déjà données y sont reprises
+  const versFormulaire = () => {
+    ui.brouillonGuide = { cible: idCible, note: w.note, lieux: w.lieux, situation: w.situation, motifs: w.choisis, prevNote: w.prevNote, explication: w.mot, evt: w.evt };
+    aller(`#/evaluer/${cible.date}/${cible.creneau}/formulaire`);
+  };
+
+  async function enregistrer(b) {
+    b.disabled = true;
+    const zone = document.getElementById('guide-erreur');
+    try {
+      const instant = maintenant();
+      const P = parId();
+      const saisie = {
+        date: cible.date, creneau: cible.creneau, note: w.note,
+        motifs: w.choisis.map((id) => P.get(id)).filter(Boolean), autresMotifs: [],
+        explication: w.mot, complement: '',
+        prevision: { note: w.prevNote, motif: '', motifs: [] },
+        lieux: w.lieux || [], situation: w.situation,
+      };
+      const erreurs = C.validerSaisie(saisie);
+      if (erreurs.length) throw new Error(erreurs.join(' '));
+      const resultat = C.creerEvaluation(saisie, instant);
+      await enregistrerEvaluation(resultat);
+      if (w.evt) await enregistrerParametres({ evenements: C.evenementsDepuisFormulaire(etat.parametres.evenements, idCible, [{ titre: w.evt.titre, faits: w.evt.faits || '', impact: w.evt.impact }], instant) });
+      annoncer(`Évaluation enregistrée à ${C.formatHeure(instant)}.`);
+      aller('#/');
+      if (resultat.securite && resultat.securite.declenchee) await verificationSecurite(resultat);
+      await preparerApresSaisie(resultat);
+    } catch (err) {
+      if (zone) { zone.hidden = false; zone.textContent = `L'évaluation n'a pas pu être enregistrée : ${err.message}`; }
+      b.disabled = false;
+    }
+  }
+
+  const ajouterPrecisionGuide = async (champ) => {
+    const parent = etat.motifs.find((m) => m.id === champ.dataset.autreSous);
+    if (!parent || !champ.value.trim()) { champ.focus(); return; }
+    try {
+      const { motif, nouveau, reactive } = C.creerSousMotifPropre(parent, champ.value, etat.motifs, maintenant());
+      if (nouveau || reactive) await enregistrerMotif(motif);
+      if (!w.choisis.includes(motif.id)) w.choisis = [...w.choisis, motif.id];
+      if (!w.choisis.includes(parent.id)) w.choisis = [...w.choisis, parent.id];
+      annoncer(nouveau ? `« ${motif.libelle} » ajouté : il sera proposé les prochaines fois.` : `« ${motif.libelle} » coché.`);
+      rendre();
+    } catch (err) { annoncer(err.message); }
+  };
+
+  contenu.onkeydown = (e) => {
+    if (e.key === 'Enter' && e.target.dataset && e.target.dataset.autreSous) { e.preventDefault(); ajouterPrecisionGuide(e.target); }
+  };
+  contenu.oninput = (e) => {
+    // Saisies gardées au fil de la frappe : « Retour » les retrouve
+    if (w.evt && e.target.id === 'g-evt-titre') w.evt = { ...w.evt, titre: e.target.value };
+    if (w.evt && e.target.id === 'g-evt-faits') w.evt = { ...w.evt, faits: e.target.value };
+    if (e.target.id === 'g-mot') {
+      w.mot = e.target.value;
+      const b = contenu.querySelector('[data-guide="mot-ok"]');
+      if (b && exigerTout && !w.choisis.length) b.disabled = !w.mot.trim();
+    }
+  };
+  contenu.onclick = (e) => {
+    if (!document.getElementById('guide')) { contenu.onclick = null; contenu.oninput = null; contenu.onkeydown = null; return; }
+    const el = e.target.closest('button, a');
+    if (!el) return;
+    const d = el.dataset;
+    if (d.guide === 'formulaire') { e.preventDefault(); versFormulaire(); return; }
+    if (d.guide === 'retour') { if (pile.length) { w = pile.pop(); rendre(); } return; }
+    if (d.note !== undefined) {
+      const n = Number(d.note);
+      if (n === 0) { w = { ...w, note: 0 }; rendre(); return; } // sécurité d'abord
+      avancer({ note: n, etape: 'contexte' });
+      return;
+    }
+    if (d.guide === 'apres-zero') { avancer({ etape: 'contexte' }); return; }
+    if (d.guide === 'habituel') {
+      const habituel = proposition.lieu ? [proposition.lieu] : lieuxP.derniers.slice(-1);
+      const sit = proposition.situation;
+      // Situation inconnue (ou télétravail / sur site à préciser) : on reste sur l'écran pour la choisir
+      if (!sit || (C.SITUATIONS_AVEC_MODALITE.includes(sit.statut) && !sit.modalite)) { w = { ...w, lieux: habituel, situation: sit || null }; rendre(); return; }
+      avancer({ lieux: habituel, situation: sit, ...apresContexte() });
+      return;
+    }
+    if (d.lieu !== undefined) {
+      const liste = JSON.parse(contenu.dataset.lieux || '[]');
+      const l = liste.find((x) => C.cleLieu(x) === d.lieu);
+      if (!l) return;
+      const actuels = w.lieux || [];
+      const dedans = actuels.some((x) => C.cleLieu(x) === d.lieu);
+      w = { ...w, lieux: dedans ? actuels.filter((x) => C.cleLieu(x) !== d.lieu) : [...actuels, l].slice(0, C.MAX_LIEUX) };
+      rendre();
+      return;
+    }
+    if (d.guide === 'autre-lieu') { w = { ...w, champLieu: true }; rendre(); return; }
+    if (d.guide === 'lieu-ajouter') {
+      const l = champLieuGuide ? champLieuGuide.valeur() : null;
+      if (!l) { annoncer('Tape d\'abord le nom du lieu.'); document.getElementById('g-lieu').focus(); return; }
+      const actuels = w.lieux || [];
+      w = { ...w, champLieu: false, lieux: actuels.some((x) => C.cleLieu(x) === C.cleLieu(l)) ? actuels : [...actuels, l].slice(0, C.MAX_LIEUX) };
+      rendre();
+      return;
+    }
+    if (d.situation) { w = { ...w, situation: { statut: d.situation, ...(w.situation && w.situation.statut === d.situation && w.situation.modalite ? { modalite: w.situation.modalite } : {}) } }; rendre(); return; }
+    if (d.modalite) { w = { ...w, situation: { ...w.situation, modalite: d.modalite } }; rendre(); return; }
+    if (d.guide === 'contexte-ok') { avancer({ situation: C.normaliserSituation(w.situation), ...apresContexte() }); return; }
+    if (d.paire) {
+      const p = paires.find((x) => x.cle === w.paire);
+      if (d.paire === 'rien') { const x = { ...w, reponses: [...w.reponses, { cle: p.cle, choix: 'rien' }] }; avancer({ reponses: x.reponses, ...apresPaire(x) }); return; }
+      const seul = p.mixte || p.favorable || p.defavorable;
+      const motifs = d.paire === 'fav' ? [p.favorable] : d.paire === 'def' ? [p.defavorable] : d.paire === 'deux' ? [p.favorable, p.defavorable] : [p.mixte || (!p.defavorable ? p.favorable : p.defavorable) || seul];
+      const choisis = [...w.choisis, ...motifs.map((m) => m.id).filter((id) => !w.choisis.includes(id))];
+      const reponses = [...w.reponses, { cle: p.cle, choix: d.paire }];
+      const avecSous = motifs.some((m) => C.sousMotifs(m, etat.motifs).length);
+      if (avecSous) avancer({ choisis, reponses, choixPaire: d.paire });
+      else { const x = { ...w, choisis, reponses }; avancer({ choisis, reponses, ...apresPaire(x) }); }
+      return;
+    }
+    if (d.sous) {
+      w = { ...w, choisis: w.choisis.includes(d.sous) ? w.choisis.filter((x) => x !== d.sous) : [...w.choisis, d.sous] };
+      el.setAttribute('aria-pressed', String(w.choisis.includes(d.sous)));
+      return;
+    }
+    if (d.guideAjouter) { ajouterPrecisionGuide(el.parentElement.querySelector('[data-autre-sous]')); return; }
+    if (d.guide === 'paire-ok') { avancer(apresPaire()); return; }
+    if (d.guide === 'autre-non') { avancer({ etape: 'evenement' }); return; }
+    if (d.theme) { avancer({ etape: 'paire', paire: d.theme, choixPaire: null, retourAutre: true }); return; }
+    if (d.evt) {
+      if (d.evt === 'non') { avancer({ evt: null, etape: 'prevision' }); return; }
+      avancer({ evt: { impact: d.evt, titre: '', faits: '' } });
+      return;
+    }
+    if (d.guide === 'evt-annuler') { avancer({ evt: null, etape: 'prevision' }); return; }
+    if (d.guide === 'evt-ok') {
+      const titre = document.getElementById('g-evt-titre').value.trim();
+      if (!titre) { annoncer('Écris l\'événement en quelques mots.'); document.getElementById('g-evt-titre').focus(); return; }
+      avancer({ evt: { ...w.evt, titre, faits: document.getElementById('g-evt-faits').value.trim() }, etape: 'prevision' });
+      return;
+    }
+    if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), etape: 'mot' }); return; }
+    if (d.guide === 'mot-ok' || d.guide === 'mot-passer') { avancer({ mot: d.guide === 'mot-passer' ? '' : (document.getElementById('g-mot').value || ''), etape: 'resume' }); return; }
+    if (d.guide === 'enregistrer') { enregistrer(el); }
+  };
+  function apresContexte() { const q = prochaineQuestion(); return q ? { etape: 'paire', paire: q.cle, choixPaire: null, auto: 1 } : { etape: 'autre' }; }
+  rendre();
 }
 
 function vueModifier([id]) {
@@ -937,27 +1257,31 @@ function formulaire(cible, ev) {
   const retro = !ev && t > exp;
   const suivant = C.creneauSuivant(cible);
   const prevLib = cible.date === aujourdhui() || suivant.date === aujourdhui() || suivant.date === C.ajouterJours(aujourdhui(), 1) ? creneauRelatif(suivant) : `le ${suivant.creneau} du ${C.formatDateMoyenne(suivant.date)}`;
+  // Réponses déjà données dans les questions guidées : reprises telles quelles
+  const pre = !ev && ui.brouillonGuide && ui.brouillonGuide.cible === C.idCreneau(cible.date, cible.creneau) ? ui.brouillonGuide : null;
+  ui.brouillonGuide = null;
   const s = {
-    note: ev ? ev.note : null,
+    note: ev ? ev.note : (pre && Number.isInteger(pre.note) ? pre.note : null),
     autres: ev ? ev.autresMotifs.map((a) => ({ ...a, ajouter: false, cle: C.nouvelId() })) : [],
-    prevNote: ev && ev.prevision && Number.isInteger(ev.prevision.note) ? ev.prevision.note : null,
+    prevNote: ev && ev.prevision && Number.isInteger(ev.prevision.note) ? ev.prevision.note : (pre && Number.isInteger(pre.prevNote) ? pre.prevNote : null),
   };
   const parId = motifParId();
   const extra = ev ? ev.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
   const extraPrev = ev && ev.prevision ? ev.prevision.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
-  const selection = new Set(ev ? ev.motifs.map((m) => m.id) : []);
+  const selection = new Set(ev ? ev.motifs.map((m) => m.id) : (pre ? pre.motifs : []));
   const selectionPrev = new Set(ev && ev.prevision ? ev.prevision.motifs.map((m) => m.id) : []);
   const titre = `Évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'}`;
   // Contexte : valeurs de l'évaluation modifiée, sinon proposition d'après les évaluations précédentes
   const proposition = ev ? null : C.suggestionContexte(etat.evaluations, cible);
-  const lieuxInitiaux = ev ? C.lieuxDe(ev) : (proposition.lieu ? [proposition.lieu] : []);
+  const lieuxInitiaux = ev ? C.lieuxDe(ev) : pre && pre.lieux && pre.lieux.length ? pre.lieux : (proposition.lieu ? [proposition.lieu] : []);
   const lieuInitial = lieuxInitiaux[0] || null;
-  const situationInitiale = ev ? (ev.situation || null) : proposition.situation;
+  const situationInitiale = ev ? (ev.situation || null) : pre && pre.situation ? pre.situation : proposition.situation;
   const repris = !ev && (lieuInitial || situationInitiale);
 
   contenu.innerHTML = `<form class="colonne-centree" id="form-eval" novalidate>
     <p class="doux" style="margin:0">${esc(C.majuscule(C.formatDateLongue(cible.date)))}</p>
     <h1>${ev ? `Modifier l'évaluation ${cible.creneau === 'matin' ? 'du matin' : 'du soir'}` : titre}</h1>
+    ${ev ? '' : `<p style="margin:-4px 0 10px"><a class="bouton-discret" href="#/evaluer/${cible.date}/${cible.creneau}/questions">Questions guidées (plus rapide)</a></p>`}
     ${ev ? `<div class="bandeau bandeau-laiton"><strong>Modification tracée</strong>L'heure de validation d'origine est conservée ; la modification et son heure sont ajoutées à l'historique de l'évaluation.</div>`
     : retro ? `<div class="bandeau bandeau-laiton"><strong>Saisie en retard</strong>Ce créneau s'est terminé le ${C.formatDateHeure(exp)}. Tu peux encore le remplir jusqu'au ${C.formatDateHeure(C.limiteSaisie(cible.date, cible.creneau))}. Ta réponse sera enregistrée avec l'heure réelle de validation et signalée comme saisie en retard.</div>`
     : `<p class="encre-2">Rappel prévu à ${C.formatHeure(C.heurePrevue(cible.date, cible.creneau))}. L'heure de ta réponse sera enregistrée automatiquement au moment de la validation.</p>`}
@@ -1001,7 +1325,7 @@ function formulaire(cible, ev) {
         <div class="rangee" style="margin-top:12px"><button type="button" class="bouton" id="btn-autre-ajouter">Ajouter ce motif</button><button type="button" class="bouton-discret" id="btn-autre-annuler">Annuler</button></div>
       </div>
       <div class="champ" style="margin-top:18px"><label for="explication">Explication libre <small class="doux">(facultatif)</small></label>
-        <textarea id="explication" spellcheck="true" lang="fr" autocapitalize="sentences" maxlength="10000" rows="4">${esc(ev ? ev.explication : '')}</textarea></div>
+        <textarea id="explication" spellcheck="true" lang="fr" autocapitalize="sentences" maxlength="10000" rows="4">${esc(ev ? ev.explication : (pre ? pre.explication || '' : ''))}</textarea></div>
       <details class="repli" ${ev && ev.complement ? 'open' : ''}><summary>Ajouter un complément</summary>
         <div class="champ"><label for="complement" class="visuellement-cache">Complément</label><textarea id="complement" spellcheck="true" lang="fr" autocapitalize="sentences" maxlength="10000" rows="3">${esc(ev ? ev.complement : '')}</textarea></div>
       </details>
@@ -1095,10 +1419,17 @@ function formulaire(cible, ev) {
     const libelle = champ.value.trim();
     if (!libelle) { champ.focus(); return; }
     const polarite = form.querySelector('[name="autre-polarite"]:checked').value;
-    const existant = etat.motifs.find((m) => C.normaliserLibelle(m.libelle) === C.normaliserLibelle(libelle) && m.actif && !m.regroupeDans);
+    // Même libellé, ou formulation proche d'un motif existant (même sens) : on coche l'existant, pas de doublon
+    const actifsM = etat.motifs.filter((m) => m.actif && !m.regroupeDans);
+    const existant = actifsM.find((m) => C.normaliserLibelle(m.libelle) === C.normaliserLibelle(libelle))
+      || actifsM.find((m) => m.polarite === polarite && C.libellesSemblables(m.libelle, libelle));
     if (existant) {
       const cb = form.querySelector(`[name="motif"][value="${CSS.escape(existant.id)}"]`);
-      if (cb) cb.checked = true;
+      if (cb) {
+        cb.checked = true;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        const dom = cb.closest('details.domaine'); if (dom) dom.open = true;
+      }
       annoncer(`« ${existant.libelle} » existe déjà dans ta bibliothèque : il a été coché.`);
     } else if (!s.autres.some((a) => C.normaliserLibelle(a.libelle) === C.normaliserLibelle(libelle))) {
       s.autres.push({ libelle, polarite, ajouter: document.getElementById('autre-biblio').checked, cle: C.nouvelId() });
@@ -1114,6 +1445,7 @@ function formulaire(cible, ev) {
   // Événements marquants de cette évaluation (3 au maximum), impact positif ou négatif obligatoire
   const idCreneauCible = C.idCreneau(cible.date, cible.creneau);
   let evts = C.evenementsDuCreneau(etat.parametres.evenements, idCreneauCible).map((x) => ({ id: x.id, titre: x.titre, faits: x.faits, impact: x.impact || '', cle: C.nouvelId() }));
+  if (pre && pre.evt && pre.evt.titre && evts.length < C.MAX_EVENEMENTS_EVALUATION) evts.push({ titre: pre.evt.titre, faits: pre.evt.faits || '', impact: pre.evt.impact, cle: C.nouvelId() });
   const zoneEvts = document.getElementById('liste-evts');
   const lireEvts = () => { zoneEvts.querySelectorAll('[data-evt]').forEach((b) => { const x = evts.find((y) => y.cle === b.dataset.evt); if (!x) return; x.titre = b.querySelector('[data-champ=titre]').value; x.faits = b.querySelector('[data-champ=faits]').value; const r = b.querySelector('input[type=radio]:checked'); x.impact = r ? r.value : ''; }); return evts; };
   const dessinerEvts = () => {
@@ -1291,7 +1623,7 @@ function vueFiche([id]) {
       ${ev.noteOrigine ? `<dt>Origine</dt><dd>${esc(ev.noteOrigine)}</dd>` : ''}
       <dt>${C.lieuxDe(ev).length > 1 ? 'Lieux' : 'Lieu'}</dt><dd>${C.lieuxDe(ev).length ? C.lieuxDe(ev).map((l) => `${esc(C.libelleLieu(l, { complet: !C.estItinerance(l) }))}${l.source === 'libre' ? ' <span class="doux">(saisi librement)</span>' : ''}${l.activite ? ` : <em>${esc(l.activite)}</em>` : ''}${C.ressentiValide(l.ressenti) !== null ? ` <span class="ressenti-fiche">${iconeMeteo(l.ressenti, { taille: 18 })}ressenti ${l.ressenti}/10</span>` : ''}`).join(' <span class="doux">→</span> ') : '<span class="doux">non indiqué</span>'}</dd>
       <dt>Situation</dt><dd>${ev.situation ? esc(C.libelleSituation(ev.situation)) : '<span class="doux">non indiquée</span>'}</dd>
-      <dt>Motifs</dt><dd><div class="puces">${libM([...ev.motifs, ...ev.autresMotifs])}</div></dd>
+      <dt>Motifs</dt><dd><div class="puces">${libM([...C.libellesGroupes(ev.motifs, etat.motifs), ...ev.autresMotifs])}</div></dd>
       ${ev.explication ? `<dt>Explication</dt><dd class="texte-libre">${esc(ev.explication)}</dd>` : ''}
       ${ev.complement ? `<dt>Complément</dt><dd class="texte-libre">${esc(ev.complement)}</dd>` : ''}
       <dt>Prévision</dt><dd>${p ? `${Number.isInteger(p.note) ? `<strong>${esc(C.libelleNote(p.note))}</strong>` : 'aucune note'} pour ${esc(creneauRelatif(p.cible))}${p.motif ? `<br><span class="texte-libre">${esc(p.motif)}</span>` : ''}${p.motifs.length ? `<div class="puces" style="margin-top:6px">${libM(p.motifs)}</div>` : ''}
@@ -1618,6 +1950,9 @@ function vueMotifs() {
   const plan = C.planSimplification(etat.motifs, usage);
   const proposerSimplification = plan.changements > 0 && plan.groupes.filter((g) => g.membres.length).length >= 5;
   const precisions = proposerSimplification ? nouvellesPrecisions(plan) : null;
+  // Doublons possibles (même sens, formulation un peu différente), sauf ceux déjà écartés par le patient
+  const ignores = new Set(etat.parametres.doublonsIgnores || []);
+  const doublons = C.doublonsProbables(etat.motifs).filter(([a, b]) => !ignores.has([a.id, b.id].sort().join('|')));
   contenu.innerHTML = `<section class="colonne-centree">
     <h1>Bibliothèque de motifs</h1>
     <p class="encre-2">Les motifs proposés à la question 2. Les modifier, les regrouper ou les supprimer ne change jamais les évaluations déjà enregistrées : chacune conserve les motifs tels qu'ils ont été cochés. Un motif regroupé est compté avec son motif principal dans les statistiques.</p>
@@ -1626,6 +1961,10 @@ function vueMotifs() {
       <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : proposerSimplification ? `<div class="bloc bandeau-laiton" id="bloc-simplifier"><h2>Organiser la bibliothèque</h2>
       <p>Proposition : ranger tes motifs en ${C.DOMAINES.length} domaines (${C.DOMAINES.map((d) => d.libelle).join(', ')}) selon d'où vient l'influence, et réunir ceux qui se ressemblent en ${plan.groupes.filter((g) => g.cible.parent === null).length} motifs courts et clairs, chacun avec une courte description. Rien n'est supprimé : les anciens motifs sont regroupés et comptés avec leur nouveau motif.</p>
       <button type="button" class="bouton" id="btn-simplifier">Voir la proposition</button></div>` : ''}
+    ${doublons.length ? `<div class="bloc bandeau-laiton" id="bloc-doublons"><h2>Doublons possibles</h2>
+      <p>Ces motifs semblent dire la même chose. Choisis celui à garder : l'autre y est réuni (ses évaluations comptent avec lui ; rien n'est supprimé).</p>
+      <ul class="liste-doublons">${doublons.map(([a, b]) => `<li><p><span class="pastille ${a.polarite}"></span> « ${esc(a.libelle)} » et « ${esc(b.libelle)} »</p>
+        <p class="rangee"><button type="button" class="bouton-secondaire" data-doublon-garder="${esc(a.id)}" data-doublon-autre="${esc(b.id)}">Garder « ${esc(a.libelle)} »</button><button type="button" class="bouton-secondaire" data-doublon-garder="${esc(b.id)}" data-doublon-autre="${esc(a.id)}">Garder « ${esc(b.libelle)} »</button><button type="button" class="bouton-discret" data-doublon-ignorer="${esc([a.id, b.id].sort().join('|'))}">Ce n'est pas un doublon</button></p></li>`).join('')}</ul></div>` : ''}
     <form class="bloc" id="form-motif">
       <h2>Ajouter un motif</h2>
       <div class="champ"><label for="nouveau-motif">Libellé</label><input type="text" id="nouveau-motif" maxlength="120" required autocomplete="off"></div>
@@ -1642,6 +1981,26 @@ function vueMotifs() {
   }).join('')}
     ${inactifs.length ? `<div class="bloc"><h2>Désactivés et regroupés <span class="doux">(${inactifs.length})</span></h2><p class="doux">Ils ne sont plus proposés dans le questionnaire.</p>${inactifs.map(ligne).join('')}</div>` : ''}
   </section>`;
+  const blocDoublons = document.getElementById('bloc-doublons');
+  if (blocDoublons) blocDoublons.addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.doublonIgnorer) {
+      await enregistrerParametres({ doublonsIgnores: [...(etat.parametres.doublonsIgnores || []), b.dataset.doublonIgnorer] });
+      vueMotifs();
+      return;
+    }
+    const garde = etat.motifs.find((m) => m.id === b.dataset.doublonGarder);
+    const autre = etat.motifs.find((m) => m.id === b.dataset.doublonAutre);
+    if (!garde || !autre) return;
+    if (!(await confirmer('Réunir ces motifs ?', `« ${esc(autre.libelle)} » sera réuni dans « ${esc(garde.libelle)} ». Les évaluations passées gardent ce qui a été coché ; dans les statistiques, elles comptent avec « ${esc(garde.libelle)} ». « Dégrouper » permet de revenir en arrière.`, 'Réunir'))) return;
+    const le = new Date(maintenant()).toISOString();
+    await enregistrerMotif({ ...autre, regroupeDans: garde.id, actif: false, modifieLeUtc: le });
+    // Ses sous-catégories passent sous le motif gardé
+    for (const sm of etat.motifs.filter((m) => m.parentId === autre.id)) await enregistrerMotif({ ...sm, parentId: garde.id, modifieLeUtc: le });
+    annoncer(`« ${autre.libelle} » réuni dans « ${garde.libelle} ».`);
+    vueMotifs();
+  });
   const bSimplifier = document.getElementById('btn-simplifier');
   if (bSimplifier) bSimplifier.addEventListener('click', () => dialogueSimplification(plan));
   document.getElementById('form-motif').addEventListener('submit', async (e) => {
@@ -1851,7 +2210,7 @@ function vueTextes([idCible]) {
       <div class="bloc">
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
-          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). Tu peux les refaire : elles redeviendront des propositions à relire et valider.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
+          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (redites possibles entre tes motifs et ton commentaire, motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). La nouvelle méthode écrit chaque point une seule fois, en réunissant le motif et ce que tu en dis. Tu peux les refaire : elles redeviendront des propositions à relire et valider ; sinon elles restent valables telles quelles.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
           ${auto && autreStyle.length ? `<div class="bandeau"><strong>Style de rédaction : ${esc(styleActuel.libelle)}</strong>${autreStyle.length > 1 ? `${autreStyle.length} versions validées ont été rédigées` : 'Une version validée a été rédigée'} dans un autre style. Elles restent valables telles quelles ; tu peux les refaire dans le style choisi (elles redeviendront des propositions à relire). <a href="#/reglages/ia">Changer de style</a><p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-style">Refaire ${autreStyle.length > 1 ? `les ${autreStyle.length} versions` : 'cette version'} dans ce style</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
@@ -1997,7 +2356,7 @@ async function preparerVersions(evaluations, { silencieux = true, force = false 
   ui.preparationEnCours = true;
   try {
     const { reformuler, FOURNISSEURS: F } = await import('./ia.js');
-    const { propositions } = await reformuler(etat.parametres, liste, { evenements: etat.parametres.evenements || [] });
+    const { propositions } = await reformuler(etat.parametres, liste, { evenements: etat.parametres.evenements || [], motifs: etat.motifs });
     await enregistrerPropositions(propositions, `Proposition de version professionnelle préparée automatiquement (${F[etat.parametres.ia.fournisseur].nom})`);
     return propositions.length;
   } catch (e) {
@@ -2843,7 +3202,6 @@ async function vueReglages([section] = []) {
       <div class="champ"><label for="patient-nom">Nom complet</label><input type="text" id="patient-nom" value="${esc((p.patient || {}).nom || '')}" maxlength="120" autocomplete="name"></div>
       <div class="champ"><label for="patient-adresse">Adresse</label><textarea id="patient-adresse" rows="3" maxlength="300" autocomplete="street-address">${esc((p.patient || {}).adresse || '')}</textarea></div>
       <div class="champ"><label for="patient-cns">Matricule CNS <small class="doux">(13 chiffres ; tu choisis à chaque rapport de l'inclure ou non)</small></label><input type="text" id="patient-cns" value="${esc(C.formatCNS((p.patient || {}).cns || ''))}" maxlength="20" inputmode="numeric" autocomplete="off" spellcheck="false"></div>
-      <div class="champ"><label for="mention-rapport">Mention à côté du logo, en haut de la page de garde <small class="doux">(facultatif)</small></label><input type="text" id="mention-rapport" value="${esc(C.mentionRapport(p))}" maxlength="${C.LONGUEUR_MENTION}" placeholder="Par exemple : © by Prénom Nom 2026" autocomplete="off"></div>
       <h3 style="margin-top:18px">Ton thérapeute</h3>
       <div class="champ"><label for="therapeute-nom">Nom complet</label><input type="text" id="therapeute-nom" value="${esc((p.therapeute || {}).nom || '')}" maxlength="120" autocomplete="off"></div>
       <div class="champ"><label for="therapeute-titre">Titre professionnel</label><input type="text" id="therapeute-titre" value="${esc((p.therapeute || {}).titre || '')}" maxlength="120" placeholder="Par exemple : Psychothérapeute" autocomplete="off"></div>
@@ -2867,6 +3225,10 @@ async function vueReglages([section] = []) {
     </div>
 
     <div class="bloc" id="questionnaire"><h2>Questionnaire</h2>
+      <fieldset class="champ" style="margin-bottom:12px"><legend style="font-weight:600;margin-bottom:6px">Pour une nouvelle évaluation, ouvrir</legend>
+        <label class="interrupteur"><input type="radio" name="mode-saisie" value="questions" ${p.modeSaisie !== 'formulaire' ? 'checked' : ''}> <span><strong>Les questions guidées</strong> <span class="doux">– une question à la fois, réponses en un geste, dans l'ordre qui compte le plus pour toi (environ une minute)</span></span></label>
+        <label class="interrupteur" style="margin-top:8px"><input type="radio" name="mode-saisie" value="formulaire" ${p.modeSaisie === 'formulaire' ? 'checked' : ''}> <span><strong>Le formulaire complet</strong> <span class="doux">– toutes les questions sur une page</span></span></label>
+      </fieldset>
       <label class="interrupteur"><input type="checkbox" id="saisie-complete" ${p.saisieComplete !== false ? 'checked' : ''}> <span>Exiger toutes les informations avant de valider une nouvelle évaluation <span class="doux">(note, au moins un lieu, situation professionnelle, au moins un motif ou une explication, note prévue ; sinon un message rouge indique ce qui manque. Les corrections d'évaluations passées restent toujours possibles.)</span></span></label>
     </div>
     <div class="bloc" id="lieux"><h2>Lieu et situation</h2>
@@ -2961,24 +3323,12 @@ async function vueReglages([section] = []) {
     majBoutonPdf();
     annoncer('Réglages enregistrés.');
   });
-  {
-    const champMention = document.getElementById('mention-rapport');
-    champMention.addEventListener('input', () => { champMention.dataset.touchee = '1'; });
-    document.getElementById('patient-nom').addEventListener('input', (e) => {
-      if (champMention.dataset.touchee === '1' || typeof etat.parametres.mentionRapport === 'string') return;
-      champMention.value = C.mentionRapport({ patient: { nom: e.target.value } });
-    });
-  }
   document.getElementById('form-identites').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
       const patient = C.normaliserPatient({ nom: document.getElementById('patient-nom').value, adresse: document.getElementById('patient-adresse').value, cns: document.getElementById('patient-cns').value });
       const therapeute = C.normaliserTherapeute({ nom: document.getElementById('therapeute-nom').value, titre: document.getElementById('therapeute-titre').value, adresse: document.getElementById('therapeute-adresse').value });
-      // Mention jamais modifiée : elle suit le nom (valeur par défaut) ; sinon, le texte choisi (même vide)
-      const champMention = document.getElementById('mention-rapport');
-      const modifs = { patient, therapeute };
-      if (champMention.dataset.touchee === '1' || typeof etat.parametres.mentionRapport === 'string') modifs.mentionRapport = champMention.value.trim();
-      await enregistrerParametres(modifs);
+      await enregistrerParametres({ patient, therapeute });
       document.getElementById('patient-cns').value = C.formatCNS(patient.cns);
       annoncer('Identités enregistrées.');
     } catch (err) { annoncer(err.message); document.getElementById('patient-cns').focus(); }
@@ -2988,6 +3338,10 @@ async function vueReglages([section] = []) {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
   });
+  document.querySelectorAll('[name="mode-saisie"]').forEach((r) => r.addEventListener('change', async () => {
+    await enregistrerParametres({ modeSaisie: r.value });
+    annoncer(r.value === 'formulaire' ? 'Les nouvelles évaluations s\'ouvriront sur le formulaire complet.' : 'Les nouvelles évaluations s\'ouvriront sur les questions guidées.');
+  }));
   document.getElementById('saisie-complete').addEventListener('change', async (e) => {
     await enregistrerParametres({ saisieComplete: e.target.checked });
     annoncer(e.target.checked ? 'Toutes les informations seront demandées avant de valider.' : 'Seule la note sera obligatoire.');

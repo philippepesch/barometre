@@ -64,7 +64,7 @@ async function appelerServeur(cfg, serveur, systeme, entrees, f) {
  * Demande une version professionnelle pour les évaluations données.
  * Retourne { propositions:[{id, explication, complement, prevision}], ignorees:[...] }.
  */
-export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis), evenements = null } = {}) {
+export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis), evenements = null, motifs = [] } = {}) {
   const cfg = parametres.ia || {};
   if (!cfg.actif || !cfg.consentementUtc || cfg.consentementFournisseur !== cfg.fournisseur) throw new Error('La préparation automatique n\'est pas activée (Réglages).');
   if (cfg.fournisseur === 'anthropic' && !cfg.cle) throw new Error('Clé d\'accès manquante (Réglages).');
@@ -73,7 +73,7 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
   const style = C.styleRedaction(parametres).id;
   const a = evaluations.filter((e) => C.aDesTextes(e, evts));
   const systeme = C.instructionsReformulation({ style });
-  const entreesDe = (l) => C.entreesReformulation(l, { evenements: evts });
+  const entreesDe = (l) => C.entreesReformulation(l, { evenements: evts, bibliotheque: motifs });
   const propositions = [];
   const ignorees = [];
   for (let i = 0; i < a.length; i += TAILLE_LOT) {
