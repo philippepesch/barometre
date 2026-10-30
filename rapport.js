@@ -102,6 +102,14 @@ class Redacteur {
       + `H${x + r} A${r} ${r} 0 0 1 ${x} ${yHaut + h - r} V${yHaut + r} A${r} ${r} 0 0 1 ${x + r} ${yHaut} Z`;
   }
 
+  /** Même contour, parcouru dans l'autre sens (pour découper un trou : ombre autour d'un cadre déjà rempli). */
+  cheminCadreInverse(x, yHaut, l, h, rayon) {
+    const r = Math.max(0, Math.min(rayon, l / 2, h / 2));
+    if (!r) return `M${x} ${yHaut} V${yHaut + h} H${x + l} V${yHaut} Z`;
+    return `M${x + r} ${yHaut} A${r} ${r} 0 0 0 ${x} ${yHaut + r} V${yHaut + h - r} A${r} ${r} 0 0 0 ${x + r} ${yHaut + h} `
+      + `H${x + l - r} A${r} ${r} 0 0 0 ${x + l} ${yHaut + h - r} V${yHaut + r} A${r} ${r} 0 0 0 ${x + l - r} ${yHaut} Z`;
+  }
+
   cadre(x, yHaut, l, h, { fond = null, bord = null, epaisseur = 0.6, rayon = 5 } = {}) {
     const d = this.cheminCadre(x, yHaut, l, h, rayon);
     this.page.drawSvgPath(d, { x: 0, y: A4[1], ...(fond ? { color: this.couleur(fond) } : {}), ...(bord ? { borderColor: this.couleur(bord), borderWidth: epaisseur } : {}) });
@@ -266,9 +274,9 @@ class Redacteur {
         this.page.drawRectangle({ x, y: A4[1] - y - h, width: 4, height: h, color: this.couleur(LAITON) });
         ligne([x + 4, y + h], [x + l, y + h], 0.5, FILET); break;
       case 'ombre':
-        this.page.drawRectangle({ x: x + 3, y: A4[1] - y - h - 3, width: l, height: 3, color: this.couleur(CADRE) });
-        this.page.drawRectangle({ x: x + l, y: A4[1] - y - h - 3, width: 3, height: h, color: this.couleur(CADRE) });
-        this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 0.8, rayon: RAYON }); break;
+        // Ombre à coins arrondis : le cadre décalé, moins le cadre lui-même (le contenu n'est jamais recouvert)
+        this.page.drawSvgPath(`${this.cheminCadre(x + 3, y + 3, l, h, RAYON)} ${this.cheminCadreInverse(x, y, l, h, RAYON)}`, { x: 0, y: A4[1], color: this.couleur(CADRE), opacity: 0.55 });
+        this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 0.9, rayon: RAYON }); break;
       case 'double':
         this.cadre(x, y, l, h, { bord: CADRE, epaisseur: 1.4, rayon: RAYON });
         this.cadre(x + 3, y + 3, l - 6, h - 6, { bord: CADRE, epaisseur: 0.5, rayon: RAYON }); break;
@@ -856,6 +864,59 @@ class Redacteur {
     this.y = base + 38;
   }
 
+  /**
+   * Nuage de points « note prévue » (horizontal) et « note constatée » (vertical), sur fond quadrillé.
+   * La diagonale correspond à une prévision exacte ; la taille d'un disque, au nombre de prévisions.
+   */
+  nuagePrevisions(prev) {
+    const cote = 230, marge = 30, hTotal = cote + 46;
+    this.place(hTotal);
+    const x0 = MARGE + marge, yH = this.y + 6, yB = yH + cote;
+    const pas = cote / 10;
+    const X = (v) => x0 + v * pas, Y = (v) => yB - v * pas;
+    const c = this.couleur(TRAIT_GRILLE);
+    this.page.drawRectangle({ x: x0, y: A4[1] - yB, width: cote, height: cote, color: this.couleur(FOND_GRILLE), borderColor: c, borderWidth: 0.6 });
+    for (let v = 1; v < 10; v++) {
+      this.page.drawLine({ start: { x: X(v), y: A4[1] - yB }, end: { x: X(v), y: A4[1] - yH }, thickness: 0.4, color: c });
+      this.page.drawLine({ start: { x: x0, y: A4[1] - Y(v) }, end: { x: x0 + cote, y: A4[1] - Y(v) }, thickness: 0.4, color: c });
+    }
+    for (let v = 0; v <= 10; v += 2) {
+      const t = String(v);
+      this.texte(t, X(v) - this.largeur(t, 7.5) / 2, yB + 10, { taille: 7.5, couleur: DOUX });
+      this.texte(t, x0 - 6 - this.largeur(t, 7.5), Y(v) + 2.5, { taille: 7.5, couleur: DOUX });
+    }
+    // Diagonale : prévision = réalité
+    this.page.drawLine({ start: { x: X(0), y: A4[1] - Y(0) }, end: { x: X(10), y: A4[1] - Y(10) }, thickness: 1, color: this.couleur(LAITON), dashArray: [4, 3] });
+    const max = Math.max(1, ...prev.couples.map((k) => k.nombre));
+    for (const k of [...prev.couples].sort((a, b) => b.nombre - a.nombre)) {
+      const r = 3.5 + 7 * Math.sqrt(k.nombre / max);
+      this.page.drawCircle({ x: X(k.prevue), y: A4[1] - Y(k.reelle), size: r, color: this.couleur(COULEURS_NIVEAUX[k.reelle]), borderColor: this.couleur('#FFFFFF'), borderWidth: 1, opacity: 0.9 });
+      if (k.nombre > 1) { const t = String(k.nombre); this.texte(t, X(k.prevue) - this.largeur(t, 7, 'gras') / 2, Y(k.reelle) + 2.5, { taille: 7, police: 'gras', couleur: '#FFFFFF' }); }
+    }
+    this.texte('Note prévue', x0 + cote / 2 - this.largeur('Note prévue', 8, 'gras') / 2, yB + 22, { taille: 8, police: 'gras', couleur: DOUX });
+    // Axe vertical : libellé écrit verticalement
+    this.page.drawText(texteWinAnsi('Note constatée'), { x: MARGE + 4, y: A4[1] - (yH + cote / 2 + this.largeur('Note constatée', 8, 'gras') / 2), size: 8, font: this.polices.gras, color: this.couleur(DOUX), rotate: this.PDFLib.degrees(90) });
+    // Chiffres à droite du nuage
+    const xt = x0 + cote + 22, lt = MARGE + LARGEUR - xt;
+    let y = yH + 4;
+    const ligne = (morceaux, taille = 9.5) => {
+      const texte = morceaux.map((m) => m[0]).join('');
+      const lignes = this.couper(texte, taille, 'normal', lt);
+      if (lignes.length === 1) { let x = xt; for (const [t, pol, coul] of morceaux) { this.texte(t, x, y + taille, { taille, police: pol || 'normal', couleur: coul || ENCRE }); x += this.largeur(t, taille, pol || 'normal'); } }
+      else lignes.forEach((l, i) => this.texte(l, xt, y + taille + i * taille * 1.35, { taille, couleur: ENCRE }));
+      y += Math.max(1, lignes.length) * taille * 1.35 + 5;
+    };
+    const r = prev.correlation;
+    ligne([['Corrélation : ', 'gras'], [r === null ? '—' : `r = ${C.nombreFr(r, 2)}`, 'gras', LAITON]], 11);
+    ligne([[C.majuscule(C.libelleCorrelation(r)) + (r === null ? '' : ` (sur ${C.pluriel(prev.nombreComparees, 'prévision comparée', 'prévisions comparées')})`)]], 9);
+    y += 4;
+    ligne([['Sur la diagonale : ', 'gras'], [`${prev.exactes} (prévision exacte)`]], 9);
+    ligne([['Au-dessus : ', 'gras'], [`${prev.realiteSuperieure} (réalité meilleure que prévu)`]], 9);
+    ligne([['En dessous : ', 'gras'], [`${prev.realiteInferieure} (réalité moins bonne que prévu)`]], 9);
+    ligne([['Écart moyen : ', 'gras'], [`${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point`]], 9);
+    this.y = Math.max(yB + 30, y);
+  }
+
   /** Carte des lieux : fond OpenStreetMap (si fourni), marqueurs taille = nombre, couleur = humeur moyenne. */
   async carteLieux(points, cadre, fondPng) {
     const l = LARGEUR, h = (cadre.hauteur / cadre.largeur) * LARGEUR, k = l / cadre.largeur;
@@ -958,9 +1019,30 @@ export function preparationCarte(evals) {
  * @param options { debut:'AAAA-MM-JJ', fin:'AAAA-MM-JJ', type:'complet'|'synthetique', instant:ms }
  * @returns Uint8Array (PDF)
  */
+/** Nombre de pages maximal du rapport envoyé au thérapeute. */
+export const PAGES_MAX = 10;
+
+/**
+ * Rapport qui ne dépasse jamais PAGES_MAX pages : généré tel que demandé, puis, s'il est trop long,
+ * de plus en plus condensé (tableau abrégé, puis une ligne par semaine…). Retourne { octets, niveau, pages }.
+ */
+export async function genererRapportLimite(PDFLib, donnees, options, { pagesMax = PAGES_MAX } = {}) {
+  let res = null;
+  for (let niveau = 0; niveau <= 5; niveau++) {
+    const octets = await genererRapport(PDFLib, donnees, { ...options, niveau });
+    const pages = (await PDFLib.PDFDocument.load(octets, { updateMetadata: false })).getPageCount();
+    res = { octets, niveau, pages };
+    if (pages <= pagesMax) return res;
+  }
+  return res;
+}
+
 export async function genererRapport(PDFLib, donnees, options) {
   const { debut, fin } = options;
   const type = options.type === 'synthetique' ? 'synthetique' : 'complet';
+  // Niveau de condensation (0 : tel que demandé ; 1 à 4 : de plus en plus compact, pour tenir en 10 pages)
+  const niveau = Math.max(0, Math.min(5, options.niveau || 0));
+  const abrege = type === 'synthetique' || niveau >= 1;
   const modeTextes = ['original', 'les-deux'].includes(options.textes) ? options.textes : 'reformule';
   const instant = options.instant ?? Date.now();
   if (!C.estDateValide(debut) || !C.estDateValide(fin) || debut > fin) throw new Error('Période invalide : la date de début doit précéder la date de fin.');
@@ -1117,7 +1199,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       ['Période analysée', `du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)} (${C.pluriel(nbJours, 'jour')})`],
       precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
       prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : (parametres.seanceAConvenir ? ['Prochaine séance', 'pas encore convenue'] : null),
-      ['Type de rapport', type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
+      ['Type de rapport', niveau ? `condensé pour tenir en ${PAGES_MAX} pages au plus` : type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
       changementRythme ? ['Rythme', morceauxRythme.map((m, k) => (morceauxRythme.length === 1 ? C.libelleRythme(m.creneaux) : k === 0 ? `${C.libelleRythme(m.creneaux)} jusqu'au ${C.formatDateCourte(m.jusquau)}` : `depuis le ${C.formatDateCourte(m.depuis)} : ${C.libelleRythme(m.creneaux)}`)).join(' ; ').replace(/, qui porte sur l'ensemble de la journée/, '')] : null,
       ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
     ].filter(Boolean);
@@ -1191,6 +1273,14 @@ export async function genererRapport(PDFLib, donnees, options) {
     const nbJours = C.joursEntre(debut, fin) + 1;
     R.paragraphe(`Ce rapport présente le suivi de l'humeur du patient du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)} (${C.pluriel(nbJours, 'jour')}). ${changementRythme ? `L'humeur est évaluée sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil). ${phraseRythme()}` : 'L\'humeur est évaluée deux fois par jour, le matin et le soir, sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil).'} Chaque évaluation peut comporter des motifs cochés (favorables ou défavorables), un commentaire, le ou les lieux, la situation professionnelle et une prévision pour le créneau suivant ; le patient peut aussi noter des événements marquants.`, { taille: 10, apres: 6 });
     R.paragraphe('Le rapport comprend cinq parties : I. Introduction ; II. Évaluations jour par jour ; III. Impacts : événements marquants et facteurs ; IV. Analyse ; V. Conclusion et points à aborder.', { taille: 10, apres: 6 });
+    if (niveau) {
+      const quoi = niveau >= 5 ? 'les évaluations sont résumées par semaine (ou par mois), et les listes les plus longues sont limitées aux éléments les plus fréquents ou les plus marquants'
+        : niveau >= 4 ? 'les évaluations récentes sont présentées une par une avec leurs motifs, les plus anciennes résumées par semaine (ou par mois), et les listes sont limitées aux éléments les plus fréquents'
+        : niveau >= 3 ? 'les évaluations sont présentées dans un tableau avec leurs motifs (sans le commentaire), la carte des lieux et le tableau détaillé des prévisions ne sont pas reproduits, et les listes sont limitées aux éléments les plus fréquents'
+          : niveau >= 2 ? 'les évaluations sont présentées dans un tableau aux commentaires abrégés, la carte des lieux n\'est pas reproduite, et seuls les éléments les plus fréquents ou les plus marquants sont listés'
+            : 'les évaluations sont présentées dans un tableau aux commentaires abrégés';
+      R.paragraphe(`Pour que le rapport tienne en ${PAGES_MAX} pages au plus, il est condensé : ${quoi}. Les statistiques et les graphiques portent toujours sur toutes les évaluations de la période ; le détail complet reste consultable dans l'application.`, { taille: 9, police: 'italique', couleur: DOUX, apres: 6 });
+    }
   }
   if (synthese) {
     const parts = C.partiesSynthese(synthese.texte);
@@ -1247,9 +1337,66 @@ export async function genererRapport(PDFLib, donnees, options) {
     const paras = String(texte || '').split(/\n+/).map((t) => t.trim()).filter(Boolean);
     paras.forEach((para, i) => R.riche([...(i === 0 ? [[`${etiquette} : `, 'gras', couleur]] : []), [para, 'normal', couleur]], { taille: 9, retrait: 14, apres: 2 }));
   };
-  if (type === 'synthetique' && evals.length) {
-    const tronquer = (t, n = 220) => (t.length > n ? `${t.slice(0, n).replace(/\s+\S*$/, '')} […]` : t);
+  // Résumé par semaine (ou par mois au-delà de 20 semaines) : moyenne, extrêmes, motifs les plus cochés, événements
+  const tableauResume = (liste, parMois) => {
+    const groupes = new Map();
+    for (const e of liste) {
+      const j = (new Date(`${e.date}T12:00:00Z`).getUTCDay() + 6) % 7;
+      const cle = parMois ? `${e.date.slice(0, 8)}01` : C.ajouterJours(e.date, -j);
+      if (!groupes.has(cle)) groupes.set(cle, []);
+      groupes.get(cle).push(e);
+    }
+    const finGroupe = (d) => (parMois ? C.ajouterJours(`${C.ajouterJours(d, 32).slice(0, 8)}01`, -1) : C.ajouterJours(d, 6));
+    const premier = liste[0].date, dernier = liste[liste.length - 1].date;
+    const lignes = [...groupes.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([d0, l]) => {
+      const notes = l.map((e) => e.note);
+      const moy = notes.reduce((a, b) => a + b, 0) / notes.length;
+      const f = C.frequenceMotifs(l, donnees.motifs || []).filter((x) => !x.cle.startsWith('libre:')).slice(0, 3).map((x) => x.libelle);
+      const evts = l.flatMap((e) => (evtsParCreneau.get(e.creneauId) || []).map((v) => `n° ${v.numero}${v.x.titre ? ` ${v.x.titre}` : ''}`));
+      const d1 = finGroupe(d0);
+      return [`${C.formatDateCourte(d0 < premier ? premier : d0).slice(0, 5)} – ${C.formatDateCourte(d1 > dernier ? dernier : d1).slice(0, 5)}`, String(l.length), `${C.nombreFr(moy)} (${Math.min(...notes)}–${Math.max(...notes)})`, [f.join(', '), evts.length ? `Événements : ${evts.join(' ; ')}` : ''].filter(Boolean).join(' — ') || '—'];
+    });
+    R.tableau([{ titre: parMois ? 'Mois' : 'Semaine', part: 1.35 }, { titre: 'Éval.', part: 0.6 }, { titre: 'Moyenne (min–max)', part: 1.75 }, { titre: 'Motifs les plus cochés, événements', part: 4.3 }], lignes, { taille: 8.5 });
+  };
+  const evtsTexte = (e) => (evtsParCreneau.get(e.creneauId) || []).map((v) => `Événement n° ${v.numero}${v.x.titre ? ` : ${v.x.titre}` : ''}${C.IMPACTS[v.x.impact] ? ` (${C.IMPACTS[v.x.impact].toLowerCase()})` : ''}`).join(' ; ');
+  // Tableau compact : une ligne courte par évaluation (longueur 0 : motifs et événements seulement)
+  const tableauCompact = (liste, longueur, serre) => {
+    const tronquer = (t) => (!longueur ? '' : t.length > longueur ? `${t.slice(0, longueur).replace(/\s+\S*$/, '')} […]` : t);
     R.tableau(
+      [{ titre: 'Évaluation', part: 1.25 }, { titre: 'Note', part: 0.55 }, { titre: longueur ? 'Motifs, commentaire abrégé, événements' : 'Motifs et événements', part: 5.2 }],
+      liste.map((e) => [`${C.formatDateCourte(e.date).slice(0, 5)} ${e.creneau === 'matin' ? 'matin' : 'soir'}`, `${e.note}/10`,
+        [(() => { const l = [...C.libellesGroupes(e.motifs, donnees.motifs || []), ...e.autresMotifs].map((m) => m.libelle); return serre && l.length > 4 ? `${l.slice(0, 4).join(', ')} (+${l.length - 4})` : l.join(', '); })(), tronquer([textes.get(e.id).explication, textes.get(e.id).complement].filter(Boolean).join(' ')), evtsTexte(e)].filter(Boolean).join(' — ') || '—']),
+      { taille: serre ? 7.5 : 8 },
+    );
+  };
+  if (niveau >= 4 && evals.length) {
+    const parMois = C.joursEntre(debut, fin) > 140;
+    if (niveau === 4) {
+      // Les jours récents (depuis la dernière séance, 14 jours au plus) un par un ; avant, un résumé par semaine ou par mois
+      const derniere = C.seancesPassees(listeSeances, instant)[0];
+      const quinze = C.ajouterJours(fin, -13);
+      const coupure = derniere && derniere.date > quinze && derniere.date <= fin ? derniere.date : quinze;
+      const anciens = evals.filter((e) => e.date < coupure), recents = evals.filter((e) => e.date >= coupure);
+      if (anciens.length) {
+        R.sousTitre(`Du ${C.formatDateCourte(anciens[0].date)} au ${C.formatDateCourte(anciens[anciens.length - 1].date)} : résumé par ${parMois ? 'mois' : 'semaine'}`);
+        tableauResume(anciens, parMois);
+      }
+      if (recents.length) {
+        R.sousTitre(`${derniere && coupure === derniere.date ? 'Depuis la dernière séance' : 'Les 14 derniers jours'} (${C.formatDateCourte(recents[0].date)} – ${C.formatDateCourte(recents[recents.length - 1].date)}) : évaluation par évaluation`);
+        tableauCompact(recents, 0, true);
+      }
+      R.paragraphe(`Pour que le rapport tienne en ${PAGES_MAX} pages, les évaluations les plus anciennes sont résumées. Le détail de chaque évaluation (commentaires, lieux) reste consultable dans l'application.`, { taille: 8.5, couleur: DOUX });
+    } else {
+      tableauResume(evals, parMois);
+      R.paragraphe(`Période longue : une ligne par ${parMois ? 'mois' : 'semaine'} pour que le rapport tienne en ${PAGES_MAX} pages. Le détail de chaque évaluation (motifs, commentaires, lieux) reste consultable dans l'application et peut être fourni sur demande, par exemple avec un rapport sur une période plus courte.`, { taille: 8.5, couleur: DOUX });
+    }
+  } else if (abrege && evals.length) {
+    // Niveau 3 : motifs et événements seulement (le commentaire reste dans l'application)
+    const longueur = niveau >= 3 ? 0 : niveau >= 2 ? 110 : 220;
+    const tronquer = (t, n = longueur) => (!n ? '' : t.length > n ? `${t.slice(0, n).replace(/\s+\S*$/, '')} […]` : t);
+    if (niveau >= 2) {
+      tableauCompact(evals, longueur, niveau >= 3);
+    } else R.tableau(
       [{ titre: 'Créneau', part: 1.3 }, { titre: 'Note', part: 1.3 }, { titre: 'Saisie', part: 1.3 }, { titre: 'Motifs et commentaire', part: 4.2 }],
       evals.map((e) => [
         [libCreneau(e), e.lieu ? libLieux(e) : '', e.situation ? C.libelleSituation(e.situation) : ''].filter(Boolean).join('\n'), C.libelleNote(e.note), heureValidation(e) + (e.saisieRetrospective ? ' – rétrospective' : '') + (modifsReelles(e).length ? ' – modifiée' : ''),
@@ -1258,7 +1405,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       ]),
       { taille: 8.5 },
     );
-    R.paragraphe(`Rapport synthétique : les commentaires longs sont abrégés ; le rapport complet les reproduit intégralement.${nbReformules ? ' Les commentaires reformulés sont repris dans leur version validée par le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
+    R.paragraphe(`${type === 'synthetique' ? 'Rapport synthétique' : 'Rapport condensé (10 pages au plus)'} : les commentaires longs sont abrégés ; le texte intégral reste consultable dans l'application.${nbReformules ? ' Les commentaires reformulés sont repris dans leur version validée par le patient.' : ''}`, { taille: 8.5, couleur: DOUX });
   } else {
     for (const e of evals) {
       R.place(80);
@@ -1350,7 +1497,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   {
     if (evenements.length) {
       R.section(++numSection, 'Événements marquants', 120);
-      if (type === 'synthetique') evenements.forEach((x, i) => R.evenement(i + 1, x));
+      if (type === 'synthetique' && niveau === 0) evenements.forEach((x, i) => R.evenement(i + 1, x));
       else {
         // Rapport complet : un tableau d'ensemble ; le texte de chaque événement figure une seule fois,
         // avec l'évaluation qu'il concerne (annexe), ou ci-dessous s'il n'y a pas d'évaluation pour ce moment
@@ -1366,7 +1513,7 @@ export async function genererRapport(PDFLib, donnees, options) {
           orphelins.forEach(({ x, n }) => R.evenement(n, x));
         }
       }
-      R.paragraphe(`Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s'est passé de ce qu'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l'impact (positif ou négatif) est celui qu'indique le patient.${type === 'synthetique' ? '' : ' Le détail de chaque événement figure une seule fois, avec l\'évaluation qu\'il concerne, dans la partie II.'}`, { taille: 8.3, police: 'italique', couleur: DOUX });
+      R.paragraphe(`Notes saisies ou importées par le patient, qui en a validé le contenu. Elles distinguent ce qui s'est passé de ce qu'il a ressenti ; les messages de tiers sont résumés et ne présument pas de leurs intentions. Les numéros renvoient aux pastilles du graphique chronologique ; l'impact (positif ou négatif) est celui qu'indique le patient.${type === 'synthetique' && niveau === 0 ? '' : niveau >= 5 ? ' Le détail de chaque événement reste consultable dans l\'application.' : ' Le détail de chaque événement figure une seule fois, avec l\'évaluation qu\'il concerne, dans la partie II.'}`, { taille: 8.3, police: 'italique', couleur: DOUX });
     }
   }
 
@@ -1375,11 +1522,11 @@ export async function genererRapport(PDFLib, donnees, options) {
     const l = freq.filter((f) => f.polarite === pol);
     if (!l.length) return null;
     const max = Math.max(...freq.map((f) => f.nombre));
-    const lignes = l.slice(0, type === 'synthetique' ? 10 : 20);
+    const lignes = l.slice(0, niveau >= 2 ? 8 : abrege ? 10 : 20);
     return () => {
       R.encadre(lignes.length * 21 + 18, () => R.barres(lignes.map((f) => ({ libelle: f.libelle, valeur: f.nombre, nombre: f.nombre, detail: `${Math.round((f.nombre / evals.length) * 100)} % des évaluations` })),
         { mode: 'compte', max, couleur: pol === 'favorable' ? BARRE_FAV : pol === 'defavorable' ? BARRE_DEF : '#9A9C94' }));
-      if (type === 'synthetique' && l.length > 10) R.paragraphe(`Rapport synthétique : les 10 motifs les plus fréquents sur ${l.length}.`, { taille: 8.5, couleur: DOUX });
+      if (l.length > lignes.length) R.paragraphe(`Les ${lignes.length} motifs les plus fréquents sur ${l.length}.`, { taille: 8.5, couleur: DOUX });
     };
   };
   const rappelMotifs = 'Nombre de fois où chaque motif a été coché. Seuls les motifs explicitement cochés lors d\'une évaluation sont comptés ; les commentaires libres sont reproduits dans la partie II.';
@@ -1420,7 +1567,7 @@ export async function genererRapport(PDFLib, donnees, options) {
 
   // 3. Répartition des notes, minimum et maximum
   if (!stats.nombre) { R.section(++numSection, 'Répartition des notes'); R.paragraphe('Aucune évaluation sur la période.'); } else {
-    const quand = (l) => l.map((e) => libCreneau(e)).join(', ');
+    const quand = (l) => (l.length > 6 ? `${l.slice(-6).map((e) => libCreneau(e)).join(', ')} ; ${l.length} fois en tout` : l.map((e) => libCreneau(e)).join(', '));
     await chapitre('Répartition des notes', {
       avant: () => R.paragraphe('Nombre d\'évaluations pour chaque note, de 0 (Alerte rouge) à 10 (Plein soleil).', { taille: 8.5, couleur: DOUX, apres: 4 }),
       blocs: [() => R.encadre(180, () => {
@@ -1471,7 +1618,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
       }),
     ];
-    const carte = parLieu.lignes.length ? preparationCarte(evals) : null;
+    const carte = parLieu.lignes.length && niveau < 2 ? preparationCarte(evals) : null;
     if (carte) {
       blocs.push(() => R.encadre((TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 110, async () => {
         R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
@@ -1496,34 +1643,43 @@ export async function genererRapport(PDFLib, donnees, options) {
     });
   }
 
-  // 10. Prévisions et réalité
-  R.section(++numSection, 'Comparaison entre prévisions et réalité');
-  if (!prev.lignes.length) R.paragraphe('Aucune prévision n\'a été formulée sur la période.');
-  else {
+  // 10. Prévisions et réalité : nuage de points (corrélation), puis tableau
+  {
     const etatCible = (l) => {
       if (l.ecart !== null) return l.ecart === 0 ? '0 (identique)' : C.signeFr(l.ecart, 0);
       const st = statutParId.get(C.idCreneau(l.cible.date, l.cible.creneau));
       return st === 'omis' ? 'créneau omis' : st === 'en_attente' ? 'en attente de réponse' : st === 'a_rattraper' ? 'à rattraper' : st === 'a_venir' ? 'à venir' : 'pas de réponse';
     };
-    let lignesPrev = prev.lignes;
-    if (type === 'synthetique' && lignesPrev.length > 12) {
-      lignesPrev = [...prev.lignes].filter((l) => l.ecart !== null).sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart)).slice(0, 10)
-        .sort((a, b) => (a.source.creneauId < b.source.creneauId ? -1 : 1));
-      R.paragraphe(`Rapport synthétique : seules les 10 prévisions présentant les écarts les plus importants sont listées (sur ${prev.lignes.length}).`, { taille: 8.5, couleur: DOUX });
-    }
-    R.tableau(
-      [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Créneau visé', part: 1.6 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Écart', part: 1.5 }],
-      lignesPrev.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, etatCible(l)]),
-    );
-    if (prev.nombreComparees) {
-      R.paragraphe(`Sur ${C.pluriel(prev.nombreComparees, 'prévision comparable', 'prévisions comparables')} : ${prev.exactes} identique(s), ${prev.realiteSuperieure} où la note constatée est supérieure, ${prev.realiteInferieure} où elle est inférieure. Écart moyen : ${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point.`, { taille: 9.5 });
-    } else R.paragraphe('Aucune prévision ne peut encore être comparée à une note constatée.', { taille: 9.5, couleur: DOUX });
-    const motifPrev = (l) => (textes.get(l.source.id) || C.textesPourRapport(l.source, modeTextes)).prevision;
-    const motifsPrev = prev.lignes.filter((l) => motifPrev(l));
-    if (motifsPrev.length) {
-      R.sousTitre('Motifs des prévisions');
-      R.puces(motifsPrev.map((l) => `Pour ${libCreneau(l.cible)} (${l.prevue}/10) : ${motifPrev(l)}`), { taille: 9.5 });
-    }
+    const tableauPrev = () => {
+      let lignesPrev = prev.lignes;
+      const limite = niveau >= 2 ? 6 : 10;
+      if (abrege && lignesPrev.length > limite + 2) {
+        lignesPrev = [...prev.lignes].filter((l) => l.ecart !== null).sort((a, b) => Math.abs(b.ecart) - Math.abs(a.ecart)).slice(0, limite)
+          .sort((a, b) => (a.source.creneauId < b.source.creneauId ? -1 : 1));
+        R.paragraphe(`Seules les ${limite} prévisions présentant les écarts les plus importants sont listées (sur ${prev.lignes.length}).`, { taille: 8.5, couleur: DOUX });
+      }
+      R.tableau(
+        [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Créneau visé', part: 1.6 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Écart', part: 1.5 }],
+        lignesPrev.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, etatCible(l)]),
+      );
+      if (!prev.nombreComparees) R.paragraphe('Aucune prévision ne peut encore être comparée à une note constatée.', { taille: 9.5, couleur: DOUX });
+      const motifPrev = (l) => (textes.get(l.source.id) || C.textesPourRapport(l.source, modeTextes)).prevision;
+      const motifsPrev = prev.lignes.filter((l) => motifPrev(l));
+      if (motifsPrev.length && niveau < 2) {
+        R.sousTitre('Motifs des prévisions');
+        const liste = niveau >= 1 ? motifsPrev.slice(-8) : motifsPrev;
+        if (liste.length < motifsPrev.length) R.paragraphe(`Les ${liste.length} plus récents (sur ${motifsPrev.length}).`, { taille: 8.5, couleur: DOUX });
+        R.puces(liste.map((l) => `Pour ${libCreneau(l.cible)} (${l.prevue}/10) : ${motifPrev(l)}`), { taille: 9.5 });
+      }
+    };
+    if (!prev.lignes.length) { R.section(++numSection, 'Comparaison entre prévisions et réalité'); R.paragraphe('Aucune prévision n\'a été formulée sur la période.'); }
+    else if (prev.nombreComparees) {
+      await chapitre('Comparaison entre prévisions et réalité', {
+        avant: () => R.paragraphe('Chaque disque réunit les prévisions d\'une même note prévue (horizontalement) et constatée (verticalement) ; plus il est grand, plus elles sont nombreuses. Sur la diagonale, la prévision était exacte ; au-dessus, la réalité a été meilleure que prévu ; en dessous, moins bonne. La corrélation r va de −1 à 1 : plus elle est proche de 1, plus les notes constatées suivent les notes prévues.', { taille: 8.5, couleur: DOUX, apres: 4 }),
+        blocs: [() => R.encadre(300, () => R.nuagePrevisions(prev))],
+        apres: niveau >= 3 ? () => R.paragraphe('Tableau détaillé des prévisions non reproduit (rapport condensé) ; il reste consultable dans l\'application.', { taille: 8.5, couleur: DOUX }) : tableauPrev,
+      });
+    } else { R.section(++numSection, 'Comparaison entre prévisions et réalité'); tableauPrev(); }
   }
 
   // ===== Partie V – Conclusion et points à aborder

@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.31.0';
+export const VERSION_APP = '1.32.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2188,7 +2188,30 @@ export function comparaisonsPrevisions(evaluations, toutesEvaluations = evaluati
     exactes: comparees.filter((l) => l.ecart === 0).length,
     realiteSuperieure: comparees.filter((l) => l.ecart > 0).length,
     realiteInferieure: comparees.filter((l) => l.ecart < 0).length,
+    correlation: correlation(comparees.map((l) => l.prevue), comparees.map((l) => l.reelle)),
+    // Nombre de prévisions pour chaque couple (prévue, constatée), pour le nuage de points
+    couples: [...comparees.reduce((m, l) => { const k = `${l.prevue}|${l.reelle}`; m.set(k, (m.get(k) || 0) + 1); return m; }, new Map())]
+      .map(([k, n]) => { const [p, r] = k.split('|').map(Number); return { prevue: p, reelle: r, nombre: n }; }),
   };
+}
+
+/** Coefficient de corrélation de Pearson (−1 à 1), ou null s'il ne peut pas être calculé (moins de 3 couples, valeurs constantes). */
+export function correlation(x, y) {
+  const n = Math.min(x.length, y.length);
+  if (n < 3) return null;
+  const mx = x.reduce((a, b) => a + b, 0) / n, my = y.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < n; i++) { sxy += (x[i] - mx) * (y[i] - my); sxx += (x[i] - mx) ** 2; syy += (y[i] - my) ** 2; }
+  if (!sxx || !syy) return null;
+  return sxy / Math.sqrt(sxx * syy);
+}
+
+/** Lecture simple d'une corrélation, sans interprétation clinique. */
+export function libelleCorrelation(r) {
+  if (r === null || r === undefined) return 'pas assez de prévisions variées pour la calculer';
+  const a = Math.abs(r);
+  const force = a >= 0.7 ? 'forte' : a >= 0.4 ? 'moyenne' : a >= 0.2 ? 'faible' : 'quasi nulle';
+  return `${force}${a >= 0.2 ? (r > 0 ? ' et positive' : ' et négative') : ''}`;
 }
 
 /** Constats descriptifs, sans interprétation médicale. */
@@ -2225,19 +2248,21 @@ export function sujetsDeDiscussion(evaluations, frequences, previsions, comptes)
   const fav = frequences.filter((f) => f.polarite === 'favorable').slice(0, 3);
   const mix = frequences.filter((f) => f.polarite === 'mixte').slice(0, 3);
   const liste = (fs) => fs.map((f) => `${f.libelle} (${f.nombre})`).join(', ');
+  // Liste de dates limitée aux plus récentes (une longue période ne doit pas produire des pages de dates)
+  const recents = (l, f, n = 6) => (l.length > n ? `${l.slice(-n).map(f).join(', ')} (les ${n} plus récentes sur ${l.length})` : l.map(f).join(', '));
   if (def.length) sujets.push(`Facteurs défavorables le plus souvent cochés : ${liste(def)}.`);
   if (fav.length) sujets.push(`Facteurs favorables le plus souvent cochés : ${liste(fav)}.`);
   if (mix.length) sujets.push(`Facteurs mixtes cochés : ${liste(mix)}.`);
   const basses = trierChrono(evaluations.filter((e) => e.note <= 3));
-  if (basses.length) sujets.push(`${pluriel(basses.length, 'évaluation')} à 3/10 ou moins : ${basses.map((e) => `${formatDateCourte(e.date)} ${LIBELLE_CRENEAU[e.creneau].toLowerCase()} (${e.note}/10)`).join(', ')}.`);
+  if (basses.length) sujets.push(`${pluriel(basses.length, 'évaluation')} à 3/10 ou moins : ${recents(basses, (e) => `${formatDateCourte(e.date)} ${LIBELLE_CRENEAU[e.creneau].toLowerCase()} (${e.note}/10)`)}.`);
   const secu = trierChrono(evaluations.filter((e) => e.securite && e.securite.declenchee));
-  if (secu.length) sujets.push(`Une vérification de sécurité a été proposée lors de ${pluriel(secu.length, 'évaluation')} : ${secu.map((e) => `${formatDateCourte(e.date)} ${LIBELLE_CRENEAU[e.creneau].toLowerCase()}`).join(', ')}.`);
+  if (secu.length) sujets.push(`Une vérification de sécurité a été proposée lors de ${pluriel(secu.length, 'évaluation')} : ${recents(secu, (e) => `${formatDateCourte(e.date)} ${LIBELLE_CRENEAU[e.creneau].toLowerCase()}`)}.`);
   const grands = previsions.lignes.filter((l) => l.ecart !== null && Math.abs(l.ecart) >= 3);
-  if (grands.length) sujets.push(`Écarts d'au moins 3 points entre prévision et réalité : ${grands.map((l) => `${formatDateCourte(l.cible.date)} ${LIBELLE_CRENEAU[l.cible.creneau].toLowerCase()} (prévu ${l.prevue}, constaté ${l.reelle})`).join(', ')}.`);
+  if (grands.length) sujets.push(`Écarts d'au moins 3 points entre prévision et réalité : ${recents(grands, (l) => `${formatDateCourte(l.cible.date)} ${LIBELLE_CRENEAU[l.cible.creneau].toLowerCase()} (prévu ${l.prevue}, constaté ${l.reelle})`)}.`);
   if (comptes && comptes.omises) sujets.push(`${pluriel(comptes.omises, 'créneau omis', 'créneaux omis')} sur la période.`);
   if (comptes && comptes.enRetard) sujets.push(`${pluriel(comptes.enRetard, 'évaluation saisie', 'évaluations saisies')} après la fin de son créneau (saisie rétrospective).`);
   const commentees = evaluations.filter((e) => e.explication || e.complement || (e.prevision && e.prevision.motif));
-  if (commentees.length) sujets.push(`${pluriel(commentees.length, 'évaluation comporte', 'évaluations comportent')} un commentaire libre, reproduit en annexe.`);
+  if (commentees.length) sujets.push(`${pluriel(commentees.length, 'évaluation comporte', 'évaluations comportent')} un commentaire libre, reproduit dans la partie II.`);
   if (!sujets.length) sujets.push('Aucun élément particulier ne ressort des données saisies sur la période.');
   return sujets;
 }
@@ -2350,6 +2375,41 @@ export function libelleSeance(s, { court = false } = {}) {
   return `${jour}${heures}`;
 }
 
+/** Durée d'une séance : l'heure de fin proposée est le début + 50 minutes (modifiable). */
+export const DUREE_SEANCE_MIN = 50;
+export function finParDefaut(debut, minutes = DUREE_SEANCE_MIN) {
+  if (!estHeure(debut)) return '';
+  const [h, m] = debut.split(':').map(Number);
+  const t = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+}
+/** Début d'une séance (ms UTC) ; sans heure, midi (pour ne pas déclencher les rappels trop tôt). */
+export function debutSeance(s) { return localVersUtc(s.date, s.debut || '12:00'); }
+
+/**
+ * Séance commencée depuis au moins 2 heures, sans séance suivante enregistrée : il est temps d'indiquer la
+ * prochaine. Retourne cette séance, ou null.
+ */
+export function seanceSansSuite(seances, instant) {
+  const l = trierSeances(seances).filter((s) => !s.annulee);
+  const passees = l.filter((s) => debutSeance(s) + 2 * 3600000 <= instant);
+  const derniere = passees[passees.length - 1];
+  if (!derniere) return null;
+  return l.some((s) => debutSeance(s) > debutSeance(derniere)) ? null : derniere;
+}
+/** Proposition pour la séance suivante : même jour de la semaine et mêmes heures, une semaine plus tard. */
+export function propositionSeanceSuivante(derniere) {
+  if (!derniere) return { date: '', debut: '', fin: '' };
+  return { date: ajouterJours(derniere.date, 7), debut: derniere.debut || '', fin: derniere.debut ? finParDefaut(derniere.debut) : '' };
+}
+/** Prochaine séance qui commence dans 36 heures au plus (moment de proposer l'envoi du rapport), ou null. */
+export function seanceDansLes36h(seances, instant) {
+  const s = prochaineSeance(seances, instant);
+  if (!s) return null;
+  const d = debutSeance(s) - instant;
+  return d > 0 && d <= 36 * 3600000 ? s : null;
+}
+
 /** Liste des séances après l'ancien réglage « prochaineSeance » (date seule). */
 export function seancesDepuisParametres(p) {
   const liste = Array.isArray(p && p.seances) ? p.seances.filter((s) => s && estDateValide(s.date)) : [];
@@ -2408,15 +2468,32 @@ export function estEmailValide(texte) {
 }
 
 /** Objet et texte du message qui accompagne le rapport. N'inclut aucune donnée de santé. */
-export function messageEnvoiRapport({ destinataire = '', debut, fin, prochaineSeance = '', seance: seanceObj = null, aujourdhui = '', patient = '' }) {
+export function messageEnvoiRapport({ destinataire = '', debut, fin, prochaineSeance = '', seance: seanceObj = null, aujourdhui = '', patient = '', depuisDebut = false }) {
   const d = String(destinataire || '').trim();
-  const periode = debut === fin ? `du ${formatDateCourte(debut)}` : `du ${formatDateCourte(debut)} au ${formatDateCourte(fin)}`;
+  // Depuis le premier jour du suivi : « depuis le début des enregistrements (le 08/10/2026) jusqu'au 30/10/2026 »
+  const periode = depuisDebut ? `depuis le début des enregistrements (le ${formatDateCourte(debut)}) jusqu'${fin === aujourdhui ? `à aujourd'hui, ${formatDateCourte(fin)}` : `au ${formatDateCourte(fin)}`}`
+    : debut === fin ? `du ${formatDateCourte(debut)}` : `du ${formatDateCourte(debut)} au ${formatDateCourte(fin)}`;
   const s = seanceObj || (estDateValide(prochaineSeance) ? { date: prochaineSeance, debut: '', fin: '' } : null);
   const seance = s && (!aujourdhui || s.date >= aujourdhui) ? `, en vue de notre séance du ${formatDateLongue(s.date)}${s.debut ? (s.fin ? ` de ${heureFr(s.debut)} à ${heureFr(s.fin)}` : ` à ${heureFr(s.debut)}`) : ''}` : '';
   return {
-    objet: `Baromètre de l'humeur – rapport ${periode}`,
-    corps: `${d ? `Bonjour ${d},` : 'Bonjour,'}\n\nVeuillez trouver ci-joint mon rapport du baromètre de l'humeur pour la période ${periode}${seance}.\n\nCordialement${patient ? `\n\n${patient}` : ''}`,
+    objet: depuisDebut ? `Baromètre de l'humeur – rapport depuis le début des enregistrements (${formatDateCourte(debut)} – ${formatDateCourte(fin)})` : `Baromètre de l'humeur – rapport ${periode}`,
+    corps: `${d ? `Bonjour ${d},` : 'Bonjour,'}\n\nVeuillez trouver ci-joint mon rapport du baromètre de l'humeur ${depuisDebut ? periode : `pour la période ${periode}`}${seance}.\n\nCordialement${patient ? `\n\n${patient}` : ''}`,
   };
+}
+
+/** Numéro WhatsApp au format international, chiffres seulement (« +352 691 12 34 56 » donne « 352691123456 »), ou ''. */
+export function numeroWhatsApp(n) {
+  let t = String(n || '').trim().replace(/[\s().\-/]/g, '');
+  if (t.startsWith('00')) t = `+${t.slice(2)}`;
+  if (!/^\+?\d{8,15}$/.test(t)) return '';
+  return t.replace(/^\+/, '');
+}
+/** Lien qui ouvre l'application WhatsApp (ordinateur ou téléphone) sur la conversation, message prérempli. */
+export function lienWhatsApp(numero, texte, { application = true } = {}) {
+  const n = numeroWhatsApp(numero);
+  const t = encodeURIComponent(texte);
+  if (application) return `whatsapp://send?${n ? `phone=${n}&` : ''}text=${t}`;
+  return n ? `https://wa.me/${n}?text=${t}` : `https://wa.me/?text=${t}`;
 }
 
 export function lienMailto(email, objet, corps) {
@@ -2787,7 +2864,7 @@ export function mentionRapport(parametres) {
 export const THEMES_RAPPORT = [
   { id: 'tableau', libelle: 'Tableau de bord', description: 'Bande latérale foncée sur chaque page, titres en bandeau, cartes avec ombre.',
     police: 'sans', entete: 'bandeau', cadre: 'ombre', barre: 'pleine', couverture: 'bandeau', deco: 'bande',
-    accent: '#1F3A5F', encre: '#14202B', doux: '#56657A', filet: '#C9D3DE', fond: '#EEF2F7', tete: '#DFE7F1', fav: '#3C7DBF', def: '#5B6478', trait: '#B9C7D8', grille: '#E3E9F0', axe: '#93A3B8', rayon: 6 },
+    accent: '#1F3A5F', encre: '#14202B', doux: '#56657A', filet: '#C9D3DE', fond: '#EEF2F7', tete: '#DFE7F1', fav: '#3C7DBF', def: '#5B6478', trait: '#B9C7D8', grille: '#E3E9F0', axe: '#93A3B8', rayon: 12 },
 ];
 export const themeRapport = () => THEMES_RAPPORT[0];
 
@@ -2797,7 +2874,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture'];
 
 function empreinteTexte(s) {
   let h = 5381;

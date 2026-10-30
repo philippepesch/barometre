@@ -52,23 +52,40 @@ async function seancePasEncoreConvenue() {
 }
 
 /** Fenêtre d'ajout ou de modification d'une séance. Retourne la séance enregistrée, ou null. */
-async function dialogueSeance(existante = null) {
+/**
+ * Fenêtre d'ajout ou de modification d'une séance. L'heure de fin se remplit seule (début + 50 minutes),
+ * tant qu'elle n'a pas été changée à la main. options.proposition : valeurs proposées pour une nouvelle séance ;
+ * options.intro : texte d'accompagnement (fenêtre ouverte d'office après une séance) ; options.plusTard : bouton « Plus tard ».
+ */
+async function dialogueSeance(existante = null, { proposition = null, intro = '', plusTard = false } = {}) {
   const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
   for (;;) {
     const enregistree = existante && existante.id && seances().some((x) => x.id === existante.id);
-    const r = await dialogue(`<h2 id="dialogue-titre">${existante ? 'Modifier la séance' : `Prochaine séance avec ${esc(dest)}`}</h2>
+    const v = existante || proposition || {};
+    const attente = dialogue(`<h2 id="dialogue-titre">${existante && existante.id ? 'Modifier la séance' : `Prochaine séance avec ${esc(dest)}`}</h2>
+      ${intro ? `<p>${intro}</p>` : ''}
       ${existante && existante.annulee ? '<p class="bandeau">Cette séance est marquée comme <strong>annulée</strong>.</p>' : ''}
-      <div class="champ"><label for="s-date">Date</label><input type="date" id="s-date" name="date" value="${esc(existante ? existante.date : '')}" required autofocus></div>
+      <div class="champ"><label for="s-date">Date</label><input type="date" id="s-date" name="date" value="${esc(v.date || '')}" required ${intro ? '' : 'autofocus'}></div>
       <div class="rangee" style="align-items:flex-start">
-        <div class="champ" style="flex:1;min-width:120px"><label for="s-debut">De</label><input type="time" id="s-debut" name="debut" value="${esc(existante ? existante.debut : '')}" step="300"></div>
-        <div class="champ" style="flex:1;min-width:120px"><label for="s-fin">À</label><input type="time" id="s-fin" name="fin" value="${esc(existante ? existante.fin : '')}" step="300"></div>
+        <div class="champ" style="flex:1;min-width:120px"><label for="s-debut">De</label><input type="time" id="s-debut" name="debut" value="${esc(v.debut || '')}" step="300"></div>
+        <div class="champ" style="flex:1;min-width:120px"><label for="s-fin">À <small class="doux">(début + ${C.DUREE_SEANCE_MIN} min)</small></label><input type="time" id="s-fin" name="fin" value="${esc(v.fin || '')}" step="300"></div>
       </div>
-      <p class="doux">Heure de Luxembourg. Les heures sont facultatives.</p>
+      <p class="doux">Heure de Luxembourg. L'heure de fin se remplit seule, ${C.DUREE_SEANCE_MIN} minutes après le début ; tu peux la changer.</p>
       ${enregistree ? `<div class="rangee" style="margin:4px 0 6px">${existante.annulee
     ? '<button class="bouton-secondaire" value="retablir" formnovalidate>Rétablir la séance</button>'
     : '<button class="bouton-secondaire" value="annulee" formnovalidate>Séance annulée</button>'}</div>
       <p class="doux" style="margin-top:0">« Séance annulée » : elle reste dans la liste, barrée, mais ne compte ni comme prochaine ni comme dernière séance.</p>` : `<p style="margin:4px 0 6px"><button class="bouton-discret" value="a-convenir" formnovalidate>Pas encore convenue</button></p>`}
-      <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Fermer</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+      <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>${plusTard ? 'Plus tard' : 'Fermer'}</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+    // Fin = début + 50 min, tant que la fin n'a pas été modifiée à la main ; calendrier ouvert d'un geste
+    {
+      const d = document.getElementById('s-debut'), f = document.getElementById('s-fin'), j = document.getElementById('s-date');
+      let finAuto = !f.value || f.value === C.finParDefaut(d.value);
+      f.addEventListener('input', () => { finAuto = !f.value; });
+      d.addEventListener('input', () => { if (finAuto && C.finParDefaut(d.value)) f.value = C.finParDefaut(d.value); });
+      const ouvrir = (e) => { try { if (e.currentTarget.showPicker) e.currentTarget.showPicker(); } catch { /* sélecteur natif */ } };
+      j.addEventListener('click', ouvrir);
+    }
+    const r = await attente;
     if (r.valeur === 'a-convenir') { await seancePasEncoreConvenue(); return { aConvenir: true }; }
     if (r.valeur === 'annulee' || r.valeur === 'retablir') {
       const sea = C.normaliserSeance({ ...existante, annulee: r.valeur === 'annulee', annuleeLeUtc: new Date(maintenant()).toISOString() });
@@ -89,6 +106,7 @@ async function dialogueSeance(existante = null) {
     } catch (e) {
       annoncer(e.message);
       existante = { ...(existante || {}), id: existante ? existante.id : undefined, date: r.donnees.get('date') || '', debut: r.donnees.get('debut') || '', fin: r.donnees.get('fin') || '' };
+      if (!existante.id) { proposition = existante; existante = null; }
     }
   }
 }
@@ -294,6 +312,7 @@ function router() {
   document.body.classList.toggle('sans-navigation', !etat.parametres);
   if (!etat.parametres) { vueBienvenue(); marquerOnglet(''); return; }
   C.configurerRythme(etat.parametres.rythme);
+  if (ui.verifOuvertureEnAttente && !/^(evaluer|modifier|textes|evenements)$/.test(route || '')) setTimeout(() => verifierRappelsOuverture().catch((e) => console.warn(e)), 400);
   const vue = VUES[route] || vueAccueil;
   marquerOnglet(['modifier', 'evaluation', 'textes', 'contexte', 'evenements'].includes(route) ? '' : route);
   try { vue(args); } catch (e) { console.error(e); contenu.innerHTML = `<div class="erreurs"><p>Une erreur est survenue : ${esc(e.message)}</p><p><a href="#/">Retour à l'accueil</a></p></div>`; }
@@ -2611,10 +2630,55 @@ const estMobile = estIOS || /Android/i.test(navigator.userAgent);
  * Ordinateur : le PDF est téléchargé et un e-mail pré-rempli s'ouvre ; il reste à joindre le fichier.
  * Doit être appelé directement depuis un clic (exigence du navigateur pour le partage).
  */
+/** Premier jour des enregistrements (début du suivi ou plus ancienne évaluation). */
+function debutEnregistrements() {
+  return [C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)), ...etat.evaluations.map((e) => e.date)].sort()[0];
+}
+function messageRapport(debut, fin) {
+  const p = etat.parametres;
+  return C.messageEnvoiRapport({ destinataire: p.destinataire, debut, fin, seance: C.prochaineSeance(seances(), maintenant()), aujourdhui: aujourdhui(), patient: (p.patient && p.patient.nom) || '', depuisDebut: debut <= debutEnregistrements() });
+}
+
+/**
+ * Envoi par WhatsApp. Téléphone (et ordinateur dont le navigateur sait partager un fichier) : feuille de partage
+ * avec le PDF et le message ; le message est aussi copié (WhatsApp ne reprend pas toujours le texte joint à un
+ * fichier). Ordinateur sinon : le PDF est téléchargé et WhatsApp Desktop s'ouvre sur la conversation, message prêt.
+ * Doit être appelé directement depuis un clic.
+ */
+function envoyerWhatsApp(blob, nom, debut, fin, { surEnvoi = () => {}, dejaTelecharge = false } = {}) {
+  const p = etat.parametres;
+  const { corps } = messageRapport(debut, fin);
+  const dest = (p.destinataire || '').trim() || 'ton thérapeute';
+  const aide = document.getElementById('pdf-envoi-aide');
+  const dire = (html) => { if (aide) { aide.hidden = false; aide.innerHTML = html; } };
+  const copie = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(corps).then(() => true, () => false) : Promise.resolve(false);
+  let fichier = null;
+  try { fichier = new File([blob], nom, { type: 'application/pdf' }); } catch { fichier = null; }
+  const partageFichier = fichier && navigator.canShare && navigator.canShare({ files: [fichier] });
+  if (estMobile && partageFichier) {
+    dire(`Choisis <strong>WhatsApp</strong>, puis <strong>${esc(dest)}</strong>. Le rapport est joint. Si le message n'apparaît pas, touche la zone de texte puis <strong>Coller</strong> : il est copié.`);
+    navigator.share({ files: [fichier], text: corps }).then(
+      () => { dire(`Envoi préparé. Vérifie dans WhatsApp que le rapport et le message sont bien partis à ${esc(dest)}. Si le message manque, touche la zone de texte puis <strong>Coller</strong> : il est copié.`); surEnvoi(); },
+      (e) => { if (!e || e.name !== 'AbortError') dire('Le partage n\'a pas pu s\'ouvrir. Touche <strong>Télécharger</strong>, puis joins le fichier dans WhatsApp.'); },
+    );
+    return;
+  }
+  // Ordinateur : WhatsApp Desktop sur la conversation, message prérempli ; le PDF est dans Téléchargements
+  if (!dejaTelecharge) telecharger(blob, nom);
+  const a = document.createElement('a');
+  a.href = C.lienWhatsApp(p.whatsappTherapeute, corps);
+  document.body.append(a); a.click(); a.remove();
+  const web = C.lienWhatsApp(p.whatsappTherapeute, corps, { application: false });
+  dire(`<strong>WhatsApp Desktop</strong> s'ouvre ${C.numeroWhatsApp(p.whatsappTherapeute) ? `sur la conversation avec ${esc(dest)}` : '(choisis la conversation)'}, avec le message habituel. Le rapport <strong>${esc(nom)}</strong> vient d'être enregistré dans <strong>Téléchargements</strong> : fais-le glisser dans la conversation (ou trombone, puis Document), puis envoie.
+    ${C.numeroWhatsApp(p.whatsappTherapeute) ? '' : `<br><span class="doux">Astuce : indique le numéro WhatsApp de ${esc(dest)} dans Réglages (Identités) pour ouvrir directement sa conversation.</span>`}
+    <br><span class="doux">WhatsApp Desktop ne s'ouvre pas ? <a href="${esc(web)}" target="_blank" rel="noopener">Ouvrir WhatsApp Web</a>${partageFichier ? ', ou touche <strong>Partager ou enregistrer</strong> et choisis WhatsApp' : ''}.</span>`);
+  surEnvoi();
+}
+
 function envoyerRapport(blob, nom, debut, fin) {
   const p = etat.parametres;
   const email = C.estEmailValide(p.emailTherapeute) ? p.emailTherapeute.trim() : '';
-  const { objet, corps } = C.messageEnvoiRapport({ destinataire: p.destinataire, debut, fin, seance: C.prochaineSeance(seances(), maintenant()), aujourdhui: aujourdhui(), patient: (p.patient && p.patient.nom) || '' });
+  const { objet, corps } = messageRapport(debut, fin);
   const aide = document.getElementById('pdf-envoi-aide');
   const dire = (html) => { if (aide) { aide.hidden = false; aide.innerHTML = html; } };
   const copie = email && navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(email).then(() => true, () => false) : Promise.resolve(false);
@@ -2640,7 +2704,7 @@ function envoyerRapport(blob, nom, debut, fin) {
   copie.then((ok) => { if (ok) dire(texte(true)); });
 }
 
-async function ouvrirPdf() {
+async function ouvrirPdf({ periode = null, seanceProposee = null } = {}) {
   if (!etat.parametres) { annoncer('Commence par configurer l\'application.'); return; }
   const fin = aujourdhui();
   const dates = [C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)), ...etat.evaluations.map((e) => e.date)].sort();
@@ -2657,7 +2721,7 @@ async function ouvrirPdf() {
   const simples = options.filter((o) => !o.entre);
   const entre = options.filter((o) => o.entre);
   // Par défaut : depuis la dernière séance, sinon depuis le dernier rapport, sinon tout le suivi
-  const defaut = options.find((o) => o.cle === 'depuis-seance') || options.find((o) => o.cle === 'depuis') || options.find((o) => o.cle === 'tout');
+  const defaut = (periode && options.find((o) => o.cle === periode)) || options.find((o) => o.cle === 'depuis-seance') || options.find((o) => o.cle === 'depuis') || options.find((o) => o.cle === 'tout');
   // Ajouts ou corrections récents sur des jours antérieurs : la période est élargie pour les inclure
   const ajoutsPour = (debut) => C.ajoutsHorsPeriode({ evaluations: etat.evaluations, evenements: etat.parametres.evenements, debut, seances: seances(), dernierRapport: dr, instant: maintenant() });
   const ajoutsDefaut = ajoutsPour(defaut.debut);
@@ -2925,7 +2989,7 @@ async function ouvrirPdf() {
     bouton.disabled = true; bouton.textContent = 'Génération…';
     try {
       const PDFLib = await chargerPdfLib();
-      const { genererRapport, nomFichierRapport, preparationCarte } = await import('./rapport.js');
+      const { genererRapportLimite, nomFichierRapport, preparationCarte } = await import('./rapport.js');
       const fondCarte = await fondCartePourRapport(preparationCarte(C.dansPeriode(etat.evaluations, debut, finChoisie)));
       const caseSynthese = document.getElementById('pdf-avec-synthese');
       const synthese = caseSynthese && caseSynthese.checked ? C.syntheseDe(etat.parametres, debut, finChoisie) : null;
@@ -2934,16 +2998,16 @@ async function ouvrirPdf() {
       const ctxRapport = C.normaliserContexte(etat.parametres.contexteRapport);
       let logoPng = null;
       try { const r = await fetch('./icone-192.png'); if (r.ok) logoPng = new Uint8Array(await r.arrayBuffer()); } catch { /* sans logo */ }
-      const octets = await genererRapport(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), logoPng, inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
+      // Jamais plus de 10 pages : condensé automatiquement si la période est longue
+      const { octets, niveau: niveauCondense, pages: nbPages } = await genererRapportLimite(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), logoPng, inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
-      const nbPages = (new TextDecoder('latin1').decode(octets).match(/\/Type\s*\/Page[^s]/g) || []).length;
       res.hidden = false;
       await enregistrerParametres({ dernierRapport: { debut, fin: finChoisie, type, genereLeUtc: new Date(maintenant()).toISOString() } });
       const proch = C.prochaineSeance(seances(), maintenant());
       const email = C.estEmailValide(etat.parametres.emailTherapeute) ? etat.parametres.emailTherapeute.trim() : '';
-      const boutonsEnvoi = email ? `<button type="button" class="bouton" data-envoi="email">${dest ? `Envoyer à ${esc(dest)}` : 'Envoyer par e-mail'}</button>` : '';
-      res.innerHTML = `<div class="bandeau bandeau-laiton"><strong>Rapport prêt</strong>${esc(nom)}${nbPages ? `, ${nbPages} page${nbPages > 1 ? 's' : ''}` : ''}.<div class="rangee" style="margin-top:10px">${boutonsEnvoi}<button type="button" class="${email ? 'bouton-secondaire' : 'bouton'}" id="pdf-telecharger">Télécharger</button>${navigator.canShare ? '<button type="button" class="bouton-secondaire" id="pdf-partager">Partager ou enregistrer</button>' : ''}<button type="button" class="bouton-discret" id="pdf-ouvrir">Ouvrir</button></div><div id="pdf-envoi-aide" class="encre-2 aide-envoi" style="margin-top:10px" hidden></div></div>
+      const boutonsEnvoi = `<button type="button" class="bouton" data-envoi="whatsapp">${estMobile ? 'Envoyer par WhatsApp' : 'Envoyer par WhatsApp Desktop'}</button>${email ? `<button type="button" class="bouton-secondaire" data-envoi="email">${dest ? `Envoyer à ${esc(dest)} par e-mail` : 'Envoyer par e-mail'}</button>` : ''}`;
+      res.innerHTML = `<div class="bandeau bandeau-laiton"><strong>Rapport prêt</strong>${esc(nom)}${nbPages ? `, ${nbPages} page${nbPages > 1 ? 's' : ''}` : ''}${niveauCondense ? ' (condensé automatiquement pour tenir en 10 pages)' : ''}.<div class="rangee" style="margin-top:10px">${boutonsEnvoi}<button type="button" class="bouton-secondaire" id="pdf-telecharger">Télécharger</button>${navigator.canShare ? '<button type="button" class="bouton-secondaire" id="pdf-partager">Partager ou enregistrer</button>' : ''}<button type="button" class="bouton-discret" id="pdf-ouvrir">Ouvrir</button></div><div id="pdf-envoi-aide" class="encre-2 aide-envoi" style="margin-top:10px" hidden></div></div>
         ${proch ? `<p class="encre-2" style="margin-top:12px">Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong> <span class="doux">(modifiable dans Réglages, Séances)</span>.</p>`
     : `<div class="champ" style="margin-top:12px"><label for="pdf-seance">Prochaine séance <small class="doux">(facultatif : un rappel s'affichera la veille et le jour même)</small></label>
           <div class="rangee"><input type="date" id="pdf-seance" min="${C.ajouterJours(fin, 0)}" style="flex:2;min-width:140px" aria-label="Date"><input type="time" id="pdf-seance-debut" step="300" style="flex:1;min-width:100px" aria-label="De"><input type="time" id="pdf-seance-fin" step="300" style="flex:1;min-width:100px" aria-label="À"><button type="button" class="bouton-secondaire" id="pdf-seance-ok">Enregistrer</button></div></div>`}`;
@@ -2957,7 +3021,13 @@ async function ouvrirPdf() {
         } catch (err) { annoncer(err.message); }
       });
       document.getElementById('pdf-telecharger').addEventListener('click', () => telecharger(blob, nom));
-      res.querySelectorAll('[data-envoi]').forEach((b) => b.addEventListener('click', () => envoyerRapport(blob, nom, debut, finChoisie)));
+      // Envoi noté : la proposition d'envoi avant la séance ne revient pas
+      const surEnvoi = () => {
+        const modifs = { dernierRapport: { ...(etat.parametres.dernierRapport || {}), envoyeLeUtc: new Date(maintenant()).toISOString() } };
+        if (seanceProposee) modifs.rapportsProposes = { ...(etat.parametres.rapportsProposes || {}), [seanceProposee]: 'envoye' };
+        enregistrerParametres(modifs).catch(() => {});
+      };
+      res.querySelectorAll('[data-envoi]').forEach((b) => b.addEventListener('click', () => (b.dataset.envoi === 'whatsapp' ? envoyerWhatsApp(blob, nom, debut, finChoisie, { surEnvoi, dejaTelecharge: !estIOS }) : (envoyerRapport(blob, nom, debut, finChoisie), surEnvoi()))));
       document.getElementById('pdf-ouvrir').addEventListener('click', () => { const u = URL.createObjectURL(blob); window.open(u, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(u), 120000); });
       const bp = document.getElementById('pdf-partager');
       if (bp) bp.addEventListener('click', async () => { if (!(await partager(blob, nom))) telecharger(blob, nom); });
@@ -3241,6 +3311,7 @@ async function vueReglages([section] = []) {
       <div class="champ"><label for="therapeute-nom">Nom complet</label><input type="text" id="therapeute-nom" value="${esc((p.therapeute || {}).nom || '')}" maxlength="120" autocomplete="off"></div>
       <div class="champ"><label for="therapeute-titre">Titre professionnel</label><input type="text" id="therapeute-titre" value="${esc((p.therapeute || {}).titre || '')}" maxlength="120" placeholder="Par exemple : Psychothérapeute" autocomplete="off"></div>
       <div class="champ"><label for="therapeute-adresse">Adresse professionnelle</label><textarea id="therapeute-adresse" rows="3" maxlength="300" autocomplete="off">${esc((p.therapeute || {}).adresse || '')}</textarea></div>
+      <div class="champ"><label for="therapeute-whatsapp">Numéro WhatsApp <small class="doux">(facultatif, format international, par exemple +352 691 123 456 : sur ordinateur, WhatsApp s'ouvre directement sur sa conversation)</small></label><input type="tel" id="therapeute-whatsapp" value="${esc(p.whatsappTherapeute || '')}" maxlength="30" autocomplete="off" inputmode="tel"></div>
       <button class="bouton" type="submit">Enregistrer</button>
     </form>
 
@@ -3253,6 +3324,7 @@ async function vueReglages([section] = []) {
     const passees = liste.filter((x) => x.annulee || C.bornesSeance(x).fin <= maintenant()).reverse();
     const ligne = (x) => `<li${x.annulee ? ' class="seance-annulee"' : ''}><span>${x.annulee ? `<s>${esc(C.libelleSeance(x))}</s> <span class="badge-annulee">annulée</span>` : esc(C.libelleSeance(x))}</span><span><button type="button" class="bouton-discret" data-action="modifier-seance" data-id="${esc(x.id)}">Modifier</button><button type="button" class="bouton-discret" data-action="supprimer-seance" data-id="${esc(x.id)}">Supprimer</button></span></li>`;
     return `<p>${proch ? `Prochaine séance : <strong>${esc(C.libelleSeance(proch))}</strong>.` : `Prochaine séance : <strong>${etat.parametres.seanceAConvenir ? 'pas encore convenue' : 'aucune séance à venir'}</strong>.`} La veille et le jour même, l'accueil te rappelle de préparer le rapport ; une fois la séance passée, il te propose d'indiquer la suivante.</p>
+      <label class="interrupteur" style="margin:4px 0 12px"><input type="checkbox" id="fenetres-ouverture" ${etat.parametres.fenetresOuverture !== false ? 'checked' : ''}> <span>À l'ouverture de l'application, <strong>2 heures après le début d'une séance</strong>, me demander la date de la suivante ; et <strong>36 heures avant une séance</strong>, me proposer d'envoyer le rapport</span></label>
       <p class="rangee"><button type="button" class="bouton" data-action="ajouter-seance">Ajouter une séance</button>${!proch && !etat.parametres.seanceAConvenir ? '<button type="button" class="bouton-discret" data-action="seance-a-convenir">Pas encore convenue</button>' : ''}</p>
       ${futures.length ? `<h3>À venir</h3><ul class="liste-simple">${futures.map(ligne).join('')}</ul>` : ''}
       ${passees.length ? `<h3 style="margin-top:14px">${passees.some((x) => x.annulee) ? 'Passées et annulées' : 'Passées'}</h3><ul class="liste-simple">${passees.slice(0, 12).map(ligne).join('')}</ul>` : ''}`;
@@ -3377,10 +3449,12 @@ async function vueReglages([section] = []) {
     try {
       const patient = C.normaliserPatient({ nom: document.getElementById('patient-nom').value, adresse: document.getElementById('patient-adresse').value, cns: document.getElementById('patient-cns').value });
       const therapeute = C.normaliserTherapeute({ nom: document.getElementById('therapeute-nom').value, titre: document.getElementById('therapeute-titre').value, adresse: document.getElementById('therapeute-adresse').value });
-      await enregistrerParametres({ patient, therapeute });
+      const wa = document.getElementById('therapeute-whatsapp').value.trim();
+      if (wa && !C.numeroWhatsApp(wa)) throw new Error('Numéro WhatsApp à vérifier : indique-le au format international, par exemple +352 691 123 456.');
+      await enregistrerParametres({ patient, therapeute, whatsappTherapeute: wa });
       document.getElementById('patient-cns').value = C.formatCNS(patient.cns);
       annoncer('Identités enregistrées.');
-    } catch (err) { annoncer(err.message); document.getElementById('patient-cns').focus(); }
+    } catch (err) { annoncer(err.message); document.getElementById(/WhatsApp/.test(err.message) ? 'therapeute-whatsapp' : 'patient-cns').focus(); }
   });
   const caseAlerte = document.getElementById('alerte-manquee');
   if (caseAlerte) caseAlerte.addEventListener('change', async (e) => {
@@ -3399,6 +3473,7 @@ async function vueReglages([section] = []) {
     annoncer(`Rythme enregistré : ${C.libelleRythme(creneaux)}, à partir du ${C.formatDateCourte(depuis)}.`);
     vueReglages(['questionnaire']);
   });
+  { const f = document.getElementById('fenetres-ouverture'); if (f) f.addEventListener('change', () => enregistrerParametres({ fenetresOuverture: f.checked })); }
   document.querySelectorAll('[name="mode-saisie"]').forEach((r) => r.addEventListener('change', async () => {
     await enregistrerParametres({ modeSaisie: r.value });
     annoncer(r.value === 'formulaire' ? 'Les nouvelles évaluations s\'ouvriront sur le formulaire complet.' : 'Les nouvelles évaluations s\'ouvriront sur les questions guidées.');
@@ -3663,6 +3738,8 @@ document.addEventListener('visibilitychange', () => {
     planifierRappelsInternes();
     const h = location.hash;
     if (h === '' || h === '#/' || h === '#') vueAccueil();
+    // Application rouverte après au moins 10 minutes : mêmes vérifications qu'à l'ouverture
+    if (maintenant() - derniereVerifOuverture > 10 * 60000) setTimeout(() => verifierRappelsOuverture().catch((e) => console.warn(e)), 1500);
   }
 });
 
@@ -3691,6 +3768,47 @@ function enregistrerServiceWorker() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Fenêtres à l'ouverture de l'application : prochaine séance à indiquer, rapport à envoyer avant la séance
+
+let derniereVerifOuverture = 0;
+async function verifierRappelsOuverture() {
+  if (!etat.parametres || dlg.open || etat.parametres.fenetresOuverture === false) return;
+  // Pas pendant une saisie : la vérification attend le retour à l'accueil
+  if (/^#\/(evaluer|modifier|textes|evenements)/.test(location.hash)) { ui.verifOuvertureEnAttente = true; return; }
+  ui.verifOuvertureEnAttente = false;
+  derniereVerifOuverture = maintenant();
+  const t = maintenant();
+  const dest = (etat.parametres.destinataire || '').trim() || 'ton thérapeute';
+  // 1. Une séance a commencé il y a au moins 2 heures et aucune suivante n'est enregistrée
+  const sansSuite = C.seanceSansSuite(seances(), t);
+  const traitees = etat.parametres.seancesSuiteTraitee || [];
+  if (sansSuite && !traitees.includes(sansSuite.id)) {
+    const res = await dialogueSeance(null, {
+      proposition: C.propositionSeanceSuivante(sansSuite),
+      intro: `Ta séance du ${esc(C.libelleSeance(sansSuite, { court: true }))} a eu lieu. <strong>Indique dès maintenant la prochaine séance avec ${esc(dest)}</strong> (proposition : même jour et même heure la semaine prochaine ; modifie si besoin).`,
+      plusTard: true,
+    });
+    if (res && res.aConvenir) await enregistrerParametres({ seancesSuiteTraitee: [...traitees, sansSuite.id].slice(-30) });
+    if (res) router();
+    return;
+  }
+  // 2. Séance dans 36 heures au plus : proposer d'envoyer le rapport (une fois par séance)
+  const proche = C.seanceDansLes36h(seances(), t);
+  if (!proche) return;
+  const deja = (etat.parametres.rapportsProposes || {})[proche.id];
+  const dr = etat.parametres.dernierRapport;
+  if (deja === 'refuse' || deja === 'envoye' || (dr && dr.envoyeLeUtc && Date.parse(dr.envoyeLeUtc) >= C.debutSeance(proche) - 36 * 3600000)) return;
+  const debutTout = [C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)), ...etat.evaluations.map((e) => e.date)].sort()[0];
+  const quand = C.dateLocale(C.debutSeance(proche)) === aujourdhui() ? 'aujourd\'hui' : C.dateLocale(C.debutSeance(proche)) === C.ajouterJours(aujourdhui(), 1) ? 'demain' : `le ${C.formatDateLongue(proche.date)}`;
+  const r = await dialogue(`<h2 id="dialogue-titre">Séance avec ${esc(dest)} ${esc(quand)}${proche.debut ? ` à ${esc(proche.debut.replace(':', ' h ').replace(/ h 00$/, ' h').replace(/^0/, ''))}` : ''}</h2>
+    <p>Veux-tu lui envoyer ton rapport maintenant ? Il couvrira <strong>toute la période, depuis le début des enregistrements (${esc(C.formatDateCourte(debutTout))}) jusqu'à aujourd'hui</strong>, en 10 pages au plus.</p>
+    <p class="doux">Le rapport est préparé sur cet appareil ; tu l'envoies ensuite par WhatsApp (ou par e-mail), avec le message habituel.</p>
+    <div class="dialogue-actions"><button class="bouton-discret" value="refuse" formnovalidate>Non, merci</button><button class="bouton-secondaire" value="plus-tard" formnovalidate>Plus tard</button><button class="bouton" value="oui" autofocus>Préparer le rapport</button></div>`);
+  if (r.valeur === 'refuse') { await enregistrerParametres({ rapportsProposes: { ...(etat.parametres.rapportsProposes || {}), [proche.id]: 'refuse' } }); return; }
+  if (r.valeur === 'oui') await ouvrirPdf({ periode: 'tout', seanceProposee: proche.id });
+}
+
 async function demarrer() {
   try {
     await chargerEtat();
@@ -3705,6 +3823,8 @@ async function demarrer() {
   router();
   majEtatSynchro();
   enregistrerServiceWorker();
+  // Après une courte attente (la synchronisation peut apporter une séance saisie sur un autre appareil)
+  if (etat.parametres) setTimeout(() => verifierRappelsOuverture().catch((e) => console.warn(e)), 2500);
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));
