@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.32.0';
+export const VERSION_APP = '1.34.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -174,6 +174,29 @@ export function creneauxDuJour(date, rythme = RYTHME) {
   let c = CRENEAUX;
   for (const r of rythme) if (r.depuis <= date) c = r.creneaux;
   return c;
+}
+/** Date depuis laquelle le rythme de ce jour s'applique (dernier changement réel), ou null s'il n'a jamais changé. */
+export function debutRythmeEnCours(date, rythme = RYTHME) {
+  let depuis = null, courant = CRENEAUX;
+  for (const r of rythme) {
+    if (r.depuis > date) break;
+    if (r.creneaux.join() !== courant.join()) { depuis = r.depuis; courant = r.creneaux; }
+  }
+  return depuis;
+}
+/**
+ * D'après les évaluations enregistrées : depuis quand le patient ne répond plus qu'à un seul créneau
+ * (le lendemain de la dernière évaluation de l'autre créneau). Rien n'est déduit sans évaluation de ce créneau
+ * ni si elle date d'hier ou d'aujourd'hui. Retourne { depuis, derniere } ou null.
+ */
+export function debutRythmeSelonDonnees(evaluations, creneauRestant, aujourdhuiIso) {
+  const autre = creneauRestant === 'soir' ? 'matin' : 'soir';
+  const dates = (evaluations || []).filter((e) => e && e.creneau === autre && estDateValide(e.date)).map((e) => e.date).sort();
+  if (!dates.length) return null;
+  const derniere = dates[dates.length - 1];
+  const depuis = ajouterJours(derniere, 1);
+  if (depuis >= aujourdhuiIso) return null;
+  return { depuis, derniere };
 }
 export function estCreneauAttendu({ date, creneau }, rythme = RYTHME) { return creneauxDuJour(date, rythme).includes(creneau); }
 
@@ -818,6 +841,92 @@ export function motifsFrequents(evaluations, bibliotheque, { nombre = 6, jours =
 /** Sous-motifs actifs d'un motif (affichés quand le motif est coché). */
 export function sousMotifs(m, bibliotheque) {
   return bibliotheque.filter((x) => x.parentId === m.id && x.actif && !x.regroupeDans);
+}
+
+// ---------------------------------------------------------------------------
+// Symboles des lieux et des activités (dessins dans symboles.js). Une activité reçoit son symbole d'après
+// son nom ; un lieu, ceux des activités qui y ont été faites et ceux que le patient lui a attribués.
+
+export const SYMBOLES = [
+  { id: 'maison', libelle: 'Maison', cles: [/maison/, /domicile/, /chez moi/, /\bzuhause\b/, /\bhaus\b/] },
+  { id: 'randonnee', libelle: 'Randonnée, marche', cles: [/randonn/, /\bmarche\b/, /balade/, /promenade/, /wander/, /\bhike/, /\btrek/] },
+  { id: 'repas', libelle: 'Repas, restaurant', cles: [/repas/, /restaurant/, /manger/, /diner/, /dejeuner/, /\bessen\b/, /brasserie/, /pizz/, /\bresto\b/, /souper/] },
+  { id: 'cafe', libelle: 'Café', cles: [/\bcafe\b/, /kaffee/, /\bthe\b/, /patisserie/, /gourmandise/] },
+  { id: 'velo', libelle: 'Vélo', cles: [/velo/, /cycl/, /\bbike/, /\brad\b/, /fahrrad/] },
+  { id: 'courses', libelle: 'Courses', cles: [/course/, /shopping/, /achat/, /supermarch/, /einkauf/, /marche de/] },
+  { id: 'sante', libelle: 'Santé, soin', cles: [/medec/, /medic/, /pedicure/, /kine/, /hopital/, /dentist/, /pharma/, /therap/, /\bsoin/, /\bdocteur/, /\barzt/, /analyse/] },
+  { id: 'famille', libelle: 'Famille, amis', cles: [/famill/, /parents/, /enfant/, /\bamis?\b/, /visite/, /anniversaire/, /\bfreund/] },
+  { id: 'travail', libelle: 'Travail', cles: [/travail/, /bureau/, /reunion/, /\barbeit/, /\bboulot/] },
+  { id: 'sport', libelle: 'Sport, football', cles: [/\bfoot/, /\bmatch/, /\bksc\b/, /stade/, /\bsport/, /fitness/, /natation/, /piscine/] },
+  { id: 'culture', libelle: 'Culture, musique', cles: [/musee/, /cinema/, /concert/, /theatre/, /musique/, /exposition/, /\bkino\b/] },
+  { id: 'recherche', libelle: 'Recherches, lecture', cles: [/genealog/, /recherche/, /archive/, /ecriture/, /histoire/, /lecture/, /\blivre/, /bibliotheque/] },
+  { id: 'photo', libelle: 'Photo', cles: [/photo/, /\bfoto/] },
+  { id: 'nature', libelle: 'Nature', cles: [/nature/, /foret/, /\blac\b/, /jardin/, /\bparc\b/, /\bwald\b/] },
+  { id: 'voyage', libelle: 'Voyage', cles: [/voyage/, /vacances/, /hotel/, /excursion/, /\burlaub/, /\breise/] },
+];
+export const MAX_SYMBOLES_LIEU = 4;
+
+// Symboles de la situation professionnelle : fixes, d'après le statut et la modalité indiqués par le patient
+export const SYMBOLES_SITUATION = [
+  { id: 'arret', libelle: 'Congé maladie' },
+  { id: 'vacances', libelle: 'Congé' },
+  { id: 'travail', libelle: 'Travail' },
+  { id: 'reprise', libelle: 'Reprise progressive' },
+  { id: 'weekend', libelle: 'Week-end, jour férié' },
+  { id: 'teletravail', libelle: 'Télétravail' },
+  { id: 'bureau', libelle: 'Sur site' },
+];
+const SYMBOLE_STATUT = { conge_maladie: 'arret', conge: 'vacances', temps_plein: 'travail', reprise_progressive: 'reprise', weekend_ferie: 'weekend' };
+const SYMBOLE_MODALITE = { teletravail: 'teletravail', sur_site: 'bureau' };
+/** Symboles d'une situation { statut, modalite? } : statut, puis télétravail / sur site s'il est indiqué. */
+export function symbolesSituation(x) {
+  if (!x || !SYMBOLE_STATUT[x.statut]) return [];
+  return [SYMBOLE_STATUT[x.statut], ...(SITUATIONS_AVEC_MODALITE.includes(x.statut) && SYMBOLE_MODALITE[x.modalite] ? [SYMBOLE_MODALITE[x.modalite]] : [])];
+}
+export const symboleModalite = (m) => SYMBOLE_MODALITE[m] || null;
+/** Libellé d'un symbole (lieux, activités ou situation). */
+export function libelleSymbole(id) {
+  const x = SYMBOLES.find((s) => s.id === id) || SYMBOLES_SITUATION.find((s) => s.id === id);
+  return x ? x.libelle : '';
+}
+/** Identifiants distincts, dans l'ordre d'apparition (pour les légendes). */
+export const symbolesDistincts = (listes) => [...new Set(listes.flat())];
+
+/** Symboles d'une activité, d'après son nom (2 au plus). */
+export function symbolesActivite(nom) {
+  const n = normaliserLibelle(nom || '');
+  if (!n) return [];
+  return SYMBOLES.filter((s) => s.cles.some((r) => r.test(n))).map((s) => s.id).slice(0, 2);
+}
+
+/** Symboles choisis pour chaque lieu (réglage partagé { cleLieu: [ids] }), nettoyés. */
+export function normaliserSymbolesLieux(x) {
+  const ids = new Set(SYMBOLES.map((s) => s.id));
+  const res = {};
+  for (const [k, v] of Object.entries(x && typeof x === 'object' ? x : {})) {
+    const l = (Array.isArray(v) ? v : []).filter((id) => ids.has(id));
+    if (l.length) res[k] = [...new Set(l)].slice(0, MAX_SYMBOLES_LIEU);
+  }
+  return res;
+}
+
+/**
+ * Symboles d'un lieu : ceux que le patient lui a attribués, puis ceux des activités qui y ont été faites
+ * (dans les évaluations données), sans doublon, MAX_SYMBOLES_LIEU au plus.
+ */
+export function symbolesLieu(lieu, { manuels = {}, evaluations = [] } = {}) {
+  if (!lieu) return [];
+  const k = cleLieu(lieuSansActivite(lieu));
+  const res = [...(normaliserSymbolesLieux(manuels)[k] || [])];
+  const compte = new Map();
+  for (const e of evaluations) {
+    for (const l of lieuxDe(e)) {
+      if (cleLieu(lieuSansActivite(l)) !== k || !l.activite) continue;
+      for (const id of symbolesActivite(l.activite)) compte.set(id, (compte.get(id) || 0) + 1);
+    }
+  }
+  for (const [id] of [...compte].sort((a, b) => b[1] - a[1])) if (!res.includes(id)) res.push(id);
+  return res.slice(0, MAX_SYMBOLES_LIEU);
 }
 
 // ---------------------------------------------------------------------------
@@ -2874,7 +2983,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux'];
 
 function empreinteTexte(s) {
   let h = 5381;

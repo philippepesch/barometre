@@ -239,6 +239,8 @@ details.repli[open] > summary { margin-bottom: 8px; }
 .bandeau { border-radius: var(--rayon-petit); padding: 12px 14px; margin: 0 0 16px; border: 1px solid var(--filet); background: var(--surface-2); font-size: .94rem; }
 .bandeau strong { display: block; margin-bottom: 2px; }
 .bandeau .aide-envoi strong { display: inline; margin: 0; }
+.bandeau-rythme strong { display: inline; margin: 0; }
+.bandeau-rythme { border-left: 4px solid var(--laiton); }
 .bandeau-laiton { border-color: color-mix(in oklab, var(--laiton) 55%, var(--surface)); background: var(--laiton-fond); }
 .securite { border-radius: var(--rayon-petit); padding: 14px 16px; margin: 14px 0 0; border-left: 4px solid var(--alerte-bord); background: var(--alerte-fond); }
 .securite p:last-child { margin-bottom: 0; }
@@ -609,3 +611,12 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .liste-doublons li { padding: 8px 0; border-top: 1px solid var(--filet); }
 .liste-doublons li p { margin: 0 0 6px; }
 .liste-doublons .rangee { flex-wrap: wrap; gap: 6px; }
+
+/* Symboles des lieux et des activités */
+.icone-symbole { display: inline-block; vertical-align: -3px; margin-left: 4px; }
+.symboles-cat { white-space: nowrap; }
+.liste-symboles-lieux li { align-items: center; }
+.grille-symboles { margin: 10px 0 4px; }
+.puce-symbole { display: inline-flex; align-items: center; gap: 6px; }
+.puce-symbole .icone-symbole { margin-left: 0; }
+.puce-choix .icone-symbole { margin-left: 6px; }

@@ -5,6 +5,7 @@ import { FOURNISSEURS } from './ia.js';
 import * as S from './sync.js';
 import * as L from './lieux.js';
 import { iconeMeteo } from './meteo.js';
+import { iconeSymbole } from './symboles.js';
 
 const etat = { evaluations: [], motifs: [], parametres: null, archives: [] };
 const ui = { periode: null, alerteDossier: false, majDisponible: null, majDemandee: false };
@@ -428,6 +429,7 @@ function vueAccueil() {
   contenu.innerHTML = `
     ${ui.majDisponible ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>Une nouvelle version de l\'application est prête.</span><button class="bouton-secondaire" data-action="mettre-a-jour">Mettre à jour</button></div>' : ''}
     ${ui.alerteDossier ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>La sauvegarde automatique dans ton dossier attend ton autorisation.</span><button class="bouton-secondaire" data-action="autoriser-dossier">Autoriser</button></div>' : ''}
+    ${ligneRythme()}
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
     ${bandeauContexte()}
@@ -435,7 +437,7 @@ function vueAccueil() {
     ${rappelSauvegarde ? `<div class="bandeau rangee-espacee"><span>${esc(rappelSauvegarde)}</span><button class="bouton-secondaire" data-action="exporter-json">Sauvegarder maintenant</button></div>` : ''}
     <div class="grille-2">
       <div>
-        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneRythme()}${ligneProchaineSeance()}<p class="lien-evenements"><a class="bouton-discret" href="#/evenements">Noter un événement marquant</a>${(() => { const n = C.evenementsActifs(etat.parametres.evenements).length; return n ? ` <span class="doux">(${C.pluriel(n, 'événement noté', 'événements notés')})</span>` : ''; })()}</p></section>
+        <section class="bloc maintenant" aria-label="Évaluation en cours">${blocMaintenant}${ligneProchaineSeance()}<p class="lien-evenements"><a class="bouton-discret" href="#/evenements">Noter un événement marquant</a>${(() => { const n = C.evenementsActifs(etat.parametres.evenements).length; return n ? ` <span class="doux">(${C.pluriel(n, 'événement noté', 'événements notés')})</span>` : ''; })()}</p></section>
         ${manquants.length ? `<section class="bloc"><h2>Créneaux à rattraper</h2>
           <p class="doux">Tu peux encore les remplir pendant ${C.DELAI_RATTRAPAGE_H} heures après la fin du créneau : la saisie sera signalée en retard. Au-delà, le créneau est compté comme omis.</p>
           <ul class="liste-simple">${manquants.map((s) => `<li><span>${esc(C.majuscule(creneauRelatif(s)))} ${badgeStatut('a_rattraper', `jusqu'au ${C.formatDateHeure(C.limiteSaisie(s.date, s.creneau))}`)}</span><a class="bouton-discret" href="#/evaluer/${s.date}/${s.creneau}">Saisir maintenant</a></li>`).join('')}</ul></section>` : ''}
@@ -517,11 +519,29 @@ function bandeauSeance() {
 
 /** Rythme d'une seule évaluation par jour : rappelé discrètement à l'accueil. */
 function ligneRythme() {
-  const r = C.rythmeActuel();
   const c = C.creneauxDuJour(aujourdhui());
-  if (c.length !== 1) return '';
-  const regle = [...r].reverse().find((x) => x.depuis <= aujourdhui());
-  return `<p class="etat-creneau doux">Une évaluation par jour, ${c[0] === 'soir' ? 'le soir' : 'le matin'}${regle ? ` (depuis le ${esc(C.formatDateCourte(regle.depuis))})` : ''}. <a class="bouton-discret" href="#/reglages/questionnaire">Modifier</a></p>`;
+  if (c.length !== 1) {
+    // Encore deux par jour dans les réglages, mais plus aucune évaluation du matin depuis au moins 3 jours
+    const s2 = C.debutRythmeSelonDonnees(etat.evaluations, 'soir', aujourdhui());
+    if (!s2 || s2.depuis > C.ajouterJours(aujourdhui(), -3) || !etat.evaluations.some((e) => e.creneau === 'soir' && e.date >= s2.depuis)) return '';
+    return `<div class="bandeau bandeau-rythme"><p style="margin:0">Tu réponds seulement le soir depuis le <strong>${esc(C.formatDateLongue(s2.depuis))}</strong> (dernière évaluation du matin : ${esc(C.formatDateCourte(s2.derniere))}). Les matins sont donc comptés comme omis.</p>
+      <p style="margin:6px 0 0"><button type="button" class="bouton-secondaire" data-action="rythme-corriger" data-id="${s2.depuis}|soir">Une par jour, le soir, depuis le ${esc(C.formatDateCourte(s2.depuis))}</button></p></div>`;
+  }
+  const depuis = C.debutRythmeEnCours(aujourdhui());
+  const selon = C.debutRythmeSelonDonnees(etat.evaluations, c[0], aujourdhui());
+  const ecart = depuis && selon && selon.depuis < depuis ? selon : null;
+  const autre = c[0] === 'soir' ? 'du matin' : 'du soir';
+  return `<div class="bandeau bandeau-rythme"><p style="margin:0"><strong>${depuis ? `Depuis le ${esc(C.formatDateLongue(depuis))}` : 'Actuellement'}</strong> : une seule évaluation par jour, ${c[0] === 'soir' ? 'le soir' : 'le matin'}. <a class="bouton-discret" href="#/reglages/questionnaire">Modifier</a></p>
+    ${ecart ? `<p class="doux" style="margin:6px 0 0">D'après tes évaluations, la dernière ${autre} date du ${esc(C.formatDateLongue(ecart.derniere))} : ce rythme a sans doute commencé le ${esc(C.formatDateLongue(ecart.depuis))}.</p>
+      <p style="margin:6px 0 0"><button type="button" class="bouton-secondaire" data-action="rythme-corriger" data-id="${ecart.depuis}|${c[0]}">Corriger : depuis le ${esc(C.formatDateCourte(ecart.depuis))}</button></p>` : ''}</div>`;
+}
+
+/** Enregistre un rythme à partir d'une date (les règles à partir de cette date sont remplacées ; le passé garde son rythme). */
+async function appliquerRythme(depuis, creneaux) {
+  const liste = C.normaliserRythme([...(etat.parametres.rythme || []).filter((x) => x.depuis < depuis), { depuis, creneaux }]);
+  await enregistrerParametres({ rythme: liste });
+  await majAbonnementRythme();
+  annoncer(`Rythme enregistré : ${C.libelleRythme(creneaux)}, à partir du ${C.formatDateCourte(depuis)}.`);
 }
 
 function ligneProchaineSeance() {
@@ -633,10 +653,10 @@ function blocContexte(evals) {
       <p class="doux">Aucun lieu ni aucune situation professionnelle indiqués sur la période. Ces informations se renseignent en bas de chaque évaluation.</p>${lienCompleter}</section>`;
   }
   const coul = couleursContexte();
-  const table = (titre, r, couleur) => {
+  const table = (titre, r, couleur, symboles = null) => {
     if (!r.lignes.length) return `<div><h3>${titre}</h3><p class="doux">Rien d'indiqué sur la période.</p></div>`;
     return `<div><h3>${titre}</h3><div class="defile"><table class="donnees"><thead><tr><th>${titre}</th><th class="nombre">Évaluations</th><th class="nombre">Moyenne</th><th class="nombre">Min – max</th></tr></thead><tbody>
-      ${r.lignes.map((l) => `<tr><td><i class="pastille-cat" style="background:${couleur(l.valeur)};margin-right:8px"></i>${esc(l.libelle)}</td><td class="nombre">${l.nombre}</td>
+      ${r.lignes.map((l) => `<tr><td><i class="pastille-cat" style="background:${couleur(l.valeur)};margin-right:8px"></i>${esc(l.libelle)}${symboles ? `<span class="symboles-cat">${symboles(l)}</span>` : ''}</td><td class="nombre">${l.nombre}</td>
         <td class="nombre" style="white-space:nowrap">${C.nombreFr(l.moyenne)}<span class="moyenne-barre" aria-hidden="true"><i style="width:${l.moyenne * 10}%;background:var(--n${Math.round(l.moyenne)})"></i></span></td><td class="nombre">${C.nombreFr(l.min)} – ${C.nombreFr(l.max)}</td></tr>`).join('')}
       </tbody></table></div>
       ${r.sansValeur ? `<p class="doux" style="margin-top:6px">${C.pluriel(r.sansValeur, 'évaluation')} sans cette information.</p>` : ''}</div>`;
@@ -648,8 +668,46 @@ function blocContexte(evals) {
   const surPlace = pl.lignes.reduce((t, l) => t + (l.surPlace || 0), 0);
   return `<section class="bloc" aria-labelledby="titre-contexte"><h2 id="titre-contexte">Humeur selon le lieu et la situation</h2>
     <p class="doux">Moyenne de tes notes pour chaque lieu et chaque situation de la période. Ce sont des constats, pas des causes : d'autres facteurs peuvent jouer.${peu ? ' Avec moins de 4 évaluations, une moyenne est peu représentative.' : ''}${surPlace ? ` Pour les lieux et les activités, ton ressenti sur place est utilisé quand tu l'as indiqué (${C.pluriel(surPlace, 'fois', 'fois')}), sinon la note de la période.` : ''}</p>
-    <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu)}${table('Situation', ps, coul.situation)}${pa.lignes.length ? table('Activité', { ...pa, sansValeur: 0 }, () => 'var(--filet-fort)') : ''}</div>
+    <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">${table('Lieu', pl, coul.lieu, (l) => symbolesLieuHTML(l.valeur))}${table('Situation', ps, coul.situation, (l) => symbolesHTML(C.symbolesSituation(l.valeur)))}${pa.lignes.length ? table('Activité', { ...pa, sansValeur: 0 }, () => 'var(--filet-fort)', (l) => symbolesActiviteHTML(l.libelle)) : ''}</div>
     ${lienCompleter}</section>`;
+}
+
+/** Symboles d'un lieu (réglages du patient + activités faites sur place), en petites icônes. */
+function symbolesLieuHTML(lieu, taille = 16) {
+  const ids = C.symbolesLieu(lieu, { manuels: etat.parametres.symbolesLieux, evaluations: etat.evaluations });
+  return symbolesHTML(ids, taille);
+}
+function symbolesActiviteHTML(nom, taille = 16) {
+  return symbolesHTML(C.symbolesActivite(nom), taille);
+}
+function symbolesHTML(ids, taille = 16) {
+  return ids.map((id) => iconeSymbole(id, { taille, titre: C.libelleSymbole(id) })).join('');
+}
+
+/** Choix des symboles d'un lieu (plusieurs possibles). */
+async function dialogueSymbolesLieu(cle, lieu) {
+  const manuels = C.normaliserSymbolesLieux(etat.parametres.symbolesLieux);
+  const choisis = new Set(manuels[cle] || []);
+  const auto = C.symbolesLieu(lieu, { evaluations: etat.evaluations }).filter((id) => !choisis.has(id));
+  const attente = dialogue(`<h2 id="dialogue-titre">Symboles : ${esc(C.libelleLieu(lieu))}</h2>
+    <p class="doux">Ce que tu fais en général à cet endroit (${C.MAX_SYMBOLES_LIEU} au plus). Ils s'affichent dans les graphiques et sur la carte du rapport.${auto.length ? ` D'après tes activités, s'ajoutent déjà : ${auto.map((id) => esc(C.SYMBOLES.find((x) => x.id === id).libelle)).join(', ')}.` : ''}</p>
+    <div class="choix-puces grille-symboles">${C.SYMBOLES.map((x) => `<button type="button" class="puce-choix puce-symbole" data-symbole="${x.id}" aria-pressed="${choisis.has(x.id)}">${iconeSymbole(x.id, { taille: 22 })}<span>${esc(x.libelle)}</span></button>`).join('')}</div>
+    <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+  dlg.querySelector('.grille-symboles').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-symbole]');
+    if (!b) return;
+    const id = b.dataset.symbole;
+    if (choisis.has(id)) choisis.delete(id);
+    else if (choisis.size < C.MAX_SYMBOLES_LIEU) choisis.add(id);
+    else { annoncer(`${C.MAX_SYMBOLES_LIEU} symboles au plus par lieu.`); return; }
+    dlg.querySelectorAll('[data-symbole]').forEach((x) => x.setAttribute('aria-pressed', String(choisis.has(x.dataset.symbole))));
+  });
+  const r = await attente;
+  if (r.valeur !== 'oui') return false;
+  const ordre = C.SYMBOLES.map((x) => x.id).filter((id) => choisis.has(id));
+  await enregistrerParametres({ symbolesLieux: C.normaliserSymbolesLieux({ ...manuels, [cle]: ordre }) });
+  annoncer('Symboles enregistrés.');
+  return true;
 }
 
 // Couleurs des lieux : ordre stable (fréquence sur tout le suivi), 5 couleurs puis « autres lieux » en gris.
@@ -664,7 +722,7 @@ function couleursContexte() {
 }
 
 /** Légende d'une bande : les catégories présentes sur la période, dans l'ordre des couleurs. */
-function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre) {
+function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre, symboles = () => '') {
   const vus = new Map();
   let vide = false;
   for (const e of evals) {
@@ -676,7 +734,7 @@ function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre) {
   const items = [...vus.values()].sort((a, b) => ordre(a) - ordre(b));
   const autres = items.filter((v) => couleur(v) === 'var(--cat-autre)');
   const nommes = items.filter((v) => couleur(v) !== 'var(--cat-autre)');
-  return `<div class="legende-contexte"><span class="titre">${titre} :</span>${nommes.map((v) => `<span><i class="pastille-cat" style="background:${couleur(v)}"></i>${esc(libelle(v))}</span>`).join('')}
+  return `<div class="legende-contexte"><span class="titre">${titre} :</span>${nommes.map((v) => `<span><i class="pastille-cat" style="background:${couleur(v)}"></i>${esc(libelle(v))}${symboles(v)}</span>`).join('')}
     ${autres.length ? `<span><i class="pastille-cat" style="background:var(--cat-autre)"></i>${autres.length === 1 ? esc(libelle(autres[0])) : `Autres lieux (${autres.map((v) => esc(libelle(v))).join(', ')})`}</span>` : ''}
     ${vide ? '<span><i class="pastille-cat vide"></i>Non indiqué</span>' : ''}</div>`;
 }
@@ -763,8 +821,8 @@ function graphiqueHTML(grille, prev) {
   const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td>${avecContexte ? `<td>${s.evaluation && s.evaluation.lieu ? esc(C.libelleLieux(C.lieuxDe(s.evaluation))) : '—'}</td><td>${s.evaluation && s.evaluation.situation ? esc(C.libelleSituation(s.evaluation.situation)) : '—'}</td>` : ''}</tr>`).join('');
   const evalsGrille = grille.filter((s) => s.evaluation).map((s) => s.evaluation);
   const ordreLieu = (l) => { const i = coul.ordre.indexOf(C.cleLieu(l)); return i < 0 ? 999 : i; };
-  const legendes = avecContexte ? `${legendeContexte('Lieu', evalsGrille, C.lieuxDe, C.cleLieu, (l) => C.libelleLieu(l), coul.lieu, ordreLieu)}
-    ${legendeContexte('Situation', evalsGrille, (e) => e.situation, (x) => x.statut, (x) => C.SITUATIONS[x.statut], coul.situation, (x) => C.ORDRE_SITUATIONS.indexOf(x.statut))}` : '';
+  const legendes = avecContexte ? `${legendeContexte('Lieu', evalsGrille, C.lieuxDe, C.cleLieu, (l) => C.libelleLieu(l), coul.lieu, ordreLieu, (l) => symbolesLieuHTML(l, 14))}
+    ${legendeContexte('Situation', evalsGrille, (e) => e.situation, (x) => x.statut, (x) => C.SITUATIONS[x.statut], coul.situation, (x) => C.ORDRE_SITUATIONS.indexOf(x.statut), (x) => symbolesHTML(C.symbolesSituation({ statut: x.statut }), 14))}` : '';
   return `<div class="graphique" id="graphique">
       <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Courbe de ${nbRep} notes sur la période">${svg}</svg>
     </div>
@@ -935,12 +993,12 @@ function questionsGuidees(cible) {
       ecran('Où étais-tu, et quelle est ta situation ?', `
         ${habituel.length && !w.lieux ? `<div class="choix-liste">${bouton('data-guide="habituel"', `<strong>Comme d'habitude</strong><span class="doux">${esc(C.libelleLieux(habituel))}${sitHab ? ` · ${esc(libSituation(sitHab))}` : ' · situation à choisir'}</span>`, 'choix choix-large choix-principal')}</div><p class="doux guide-ou">ou précise :</p>` : ''}
         <p class="guide-sous">Lieu${lieuxChoisis.length > 1 ? 'x' : ''} <span class="doux">(touche-en un ou plusieurs)</span></p>
-        <div class="choix-puces">${autresLieux.map((l) => bouton(`data-lieu="${esc(C.cleLieu(l))}" aria-pressed="${cles.has(C.cleLieu(l))}"`, esc(C.libelleLieu(l)), 'puce-choix')).join('')}
+        <div class="choix-puces">${autresLieux.map((l) => bouton(`data-lieu="${esc(C.cleLieu(l))}" aria-pressed="${cles.has(C.cleLieu(l))}"`, `${esc(C.libelleLieu(l))}${symbolesLieuHTML(l, 15)}`, 'puce-choix')).join('')}
           ${w.champLieu ? '' : bouton('data-guide="autre-lieu"', 'Autre lieu…', 'puce-choix puce-autre')}</div>
         ${w.champLieu ? `<div class="guide-lieu">${L.champLieuHTML('g-lieu', null, { libelle: 'Autre lieu' })}<p class="rangee"><button type="button" class="bouton-secondaire" data-guide="lieu-ajouter">Ajouter ce lieu</button><button type="button" class="bouton-discret" data-guide="formulaire">En route, activités… : formulaire complet</button></p></div>` : ''}
         <p class="guide-sous">Situation</p>
-        <div class="choix-puces">${C.ORDRE_SITUATIONS.map((st) => bouton(`data-situation="${st}" aria-pressed="${!!(sitChoisie && sitChoisie.statut === st)}"`, esc(C.SITUATIONS[st]), 'puce-choix')).join('')}</div>
-        ${besoinModalite ? `<div class="choix-puces" style="margin-top:8px">${Object.entries(C.MODALITES).map(([k2, lib]) => bouton(`data-modalite="${k2}" aria-pressed="${sitChoisie.modalite === k2}"`, esc(lib), 'puce-choix')).join('')}</div>` : ''}
+        <div class="choix-puces">${C.ORDRE_SITUATIONS.map((st) => bouton(`data-situation="${st}" aria-pressed="${!!(sitChoisie && sitChoisie.statut === st)}"`, `${esc(C.SITUATIONS[st])}${symbolesHTML(C.symbolesSituation({ statut: st }), 15)}`, 'puce-choix')).join('')}</div>
+        ${besoinModalite ? `<div class="choix-puces" style="margin-top:8px">${Object.entries(C.MODALITES).map(([k2, lib]) => bouton(`data-modalite="${k2}" aria-pressed="${sitChoisie.modalite === k2}"`, `${esc(lib)}${symbolesHTML([C.symboleModalite(k2)].filter(Boolean), 15)}`, 'puce-choix')).join('')}</div>` : ''}
         <p style="margin-top:16px"><button type="button" class="bouton" data-guide="contexte-ok" ${lieuxChoisis.length && sitChoisie && (!besoinModalite || sitChoisie.modalite) ? '' : 'disabled'}>Continuer</button></p>`);
       contenu.dataset.lieux = JSON.stringify(autresLieux);
       if (w.champLieu) {
@@ -3337,12 +3395,17 @@ async function vueReglages([section] = []) {
     const actuel = C.creneauxDuJour(aujourdhui());
     const valeur = actuel.length === 2 ? 'deux' : actuel[0];
     const histo = r.map((x) => `<li>Depuis le ${esc(C.formatDateCourte(x.depuis))} : ${esc(C.libelleRythme(x.creneaux))}</li>`).join('');
+    // Date de départ suggérée par les données : lendemain de la dernière évaluation du matin (si elle précède le réglage actuel)
+    const debutActuel = C.debutRythmeEnCours(aujourdhui());
+    const selonBrut = C.debutRythmeSelonDonnees(etat.evaluations, 'soir', aujourdhui());
+    const selon = selonBrut && (!debutActuel || selonBrut.depuis < debutActuel) ? selonBrut : null;
     return `<fieldset class="champ" id="bloc-rythme" style="margin-bottom:14px"><legend style="font-weight:600;margin-bottom:6px">Rythme des évaluations</legend>
         <label class="interrupteur"><input type="radio" name="rythme" value="deux" ${valeur === 'deux' ? 'checked' : ''}> <span><strong>Deux par jour</strong> <span class="doux">– le matin (06:00) et le soir (18:00)</span></span></label>
         <label class="interrupteur" style="margin-top:8px"><input type="radio" name="rythme" value="soir" ${valeur === 'soir' ? 'checked' : ''}> <span><strong>Une par jour, le soir</strong> <span class="doux">– rappel à 18:00 ; elle porte sur toute la journée, et la prévision sur le soir suivant</span></span></label>
         <label class="interrupteur" style="margin-top:8px"><input type="radio" name="rythme" value="matin" ${valeur === 'matin' ? 'checked' : ''}> <span><strong>Une par jour, le matin</strong> <span class="doux">– rappel à 06:00</span></span></label>
-        <div class="rangee" style="margin-top:10px;align-items:flex-end"><div class="champ" style="margin:0"><label for="rythme-depuis">À partir du</label><input type="date" id="rythme-depuis" value="${aujourdhui()}"></div><button type="button" class="bouton-secondaire" id="btn-rythme">Enregistrer le rythme</button></div>
+        <div class="rangee" style="margin-top:10px;align-items:flex-end"><div class="champ" style="margin:0"><label for="rythme-depuis">À partir du</label><input type="date" id="rythme-depuis" value="${(selon && selon.depuis) || aujourdhui()}"></div><button type="button" class="bouton-secondaire" id="btn-rythme">Enregistrer le rythme</button></div>
         ${histo ? `<ul class="doux" style="margin:10px 0 0;padding-left:18px">${histo}</ul>` : ''}
+        ${selon ? `<p class="doux" style="margin:8px 0 0">D'après tes évaluations, la dernière du matin date du ${esc(C.formatDateLongue(selon.derniere))} : la date proposée ci-dessus est le lendemain, le ${esc(C.formatDateCourte(selon.depuis))}.</p>` : ''}
         <p class="doux" style="margin:8px 0 0">Les jours d'avant gardent leur rythme : le rapport ne compte comme attendues que les évaluations prévues par le rythme de chaque jour, et l'indique en tête.</p>
       </fieldset>`;
   })()}
@@ -3357,6 +3420,13 @@ async function vueReglages([section] = []) {
       <label class="interrupteur" style="margin-bottom:10px"><input type="checkbox" id="fond-carte" ${p.fondCarte !== false ? 'checked' : ''}> <span>Fond de carte dans le rapport PDF <span class="doux">(images d'OpenStreetMap téléchargées au moment du rapport : seules les coordonnées de la zone affichée sont demandées ; désactivé, la carte montre les lieux sans fond)</span></span></label>
       <label class="interrupteur"><input type="checkbox" id="recherche-lieux" ${p.rechercheLieux !== false ? 'checked' : ''}> <span>Recherche mondiale des lieux pendant la saisie <span class="doux">(service Photon d'OpenStreetMap, exploité par komoot en Allemagne : seules les lettres tapées sont envoyées, sans ton nom, tes notes ni aucune autre donnée ; désactivée, seuls tes lieux habituels sont proposés)</span></span></label>
       <p style="margin:14px 0 0"><a class="bouton-secondaire" href="#/contexte">Compléter les évaluations passées</a></p>
+      ${(() => {
+    const connus = C.lieuxConnus(etat.evaluations).slice(0, 30);
+    if (!connus.length) return '';
+    return `<h3 style="margin-top:18px">Symboles de tes lieux</h3>
+      <p class="doux">Ce que tu fais à chaque endroit (maison, randonnée, repas…), affiché dans les graphiques et sur la carte du rapport. Les symboles des activités que tu y as notées s'ajoutent d'eux-mêmes ; plusieurs symboles par lieu sont possibles.</p>
+      <ul class="liste-simple liste-symboles-lieux">${connus.map((x) => `<li><span>${esc(C.libelleLieu(x.lieu))} <span class="symboles-cat">${symbolesLieuHTML(x.lieu, 18)}</span></span><button type="button" class="bouton-discret" data-symboles-lieu="${esc(x.cle)}">Choisir</button></li>`).join('')}</ul>`;
+  })()}
     </div>
 
     <div class="bloc" id="rappels"><h2>Rappels et synchronisation</h2>
@@ -3466,14 +3536,14 @@ async function vueReglages([section] = []) {
     const depuis = document.getElementById('rythme-depuis').value;
     if (!C.estDateValide(depuis)) { annoncer('Choisis la date à partir de laquelle ce rythme s\'applique.'); return; }
     const creneaux = choix === 'deux' ? ['matin', 'soir'] : [choix];
-    // Les règles à partir de cette date sont remplacées ; celles d'avant restent (le passé garde son rythme)
-    const liste = C.normaliserRythme([...(etat.parametres.rythme || []).filter((x) => x.depuis < depuis), { depuis, creneaux }]);
-    await enregistrerParametres({ rythme: liste });
-    await majAbonnementRythme();
-    annoncer(`Rythme enregistré : ${C.libelleRythme(creneaux)}, à partir du ${C.formatDateCourte(depuis)}.`);
+    await appliquerRythme(depuis, creneaux);
     vueReglages(['questionnaire']);
   });
   { const f = document.getElementById('fenetres-ouverture'); if (f) f.addEventListener('change', () => enregistrerParametres({ fenetresOuverture: f.checked })); }
+  document.querySelectorAll('[data-symboles-lieu]').forEach((b) => b.addEventListener('click', async () => {
+    const x = C.lieuxConnus(etat.evaluations).find((l) => l.cle === b.dataset.symbolesLieu);
+    if (x && await dialogueSymbolesLieu(x.cle, x.lieu)) vueReglages(['lieux']);
+  }));
   document.querySelectorAll('[name="mode-saisie"]').forEach((r) => r.addEventListener('change', async () => {
     await enregistrerParametres({ modeSaisie: r.value });
     annoncer(r.value === 'formulaire' ? 'Les nouvelles évaluations s\'ouvriront sur le formulaire complet.' : 'Les nouvelles évaluations s\'ouvriront sur les questions guidées.');
@@ -3723,6 +3793,7 @@ document.addEventListener('click', (e) => {
   if (action === 'synchro-code') { copierCodeConnexion(); return; }
   if (action === 'demarrer-vide') { initialiser().then(() => { annoncer('Suivi démarré.'); aller('#/'); }); return; }
   if (action === 'retirer') { retirerEvaluation(id); return; }
+  if (action === 'rythme-corriger') { const [d, cr] = String(id).split('|'); if (C.estDateValide(d) && C.CRENEAUX.includes(cr)) appliquerRythme(d, [cr]).then(() => router()); return; }
   if (action === 'mettre-a-jour') { if (ui.majDisponible) { ui.majDemandee = true; ui.majDisponible.postMessage({ type: 'activer' }); } return; }
   if (action.startsWith('motif-')) { actionMotif(action, id); return; }
   if (action === 'exporter-json') { exporter('json').then(() => router()); return; }

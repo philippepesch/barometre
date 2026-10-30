@@ -2,6 +2,7 @@
 // Utilise pdf-lib (licence MIT), embarqué localement : aucune donnée ne quitte l'appareil.
 import * as C from './core.js';
 import { formesMeteo } from './meteo.js';
+import { formesSymbole } from './symboles.js';
 import * as K from './carte.js';
 
 export const COULEURS_NIVEAUX = [
@@ -83,6 +84,36 @@ class Redacteur {
   couleur(hex) { return hexRgb(this.PDFLib, hex); }
 
   /** Pictogramme météo d'un niveau, coin haut-gauche (x, yHaut), côté « taille » en points. */
+  /** Symbole d'un lieu ou d'une activité (maison, randonnée, repas…), carré de « taille » points. */
+  symbole(id, x, yHaut, taille) {
+    const k = taille / 48;
+    for (const f of formesSymbole(id)) {
+      this.page.drawSvgPath(f.d, {
+        x, y: A4[1] - yHaut, scale: k,
+        ...(f.fond ? { color: this.couleur(f.fond) } : {}),
+        ...(f.trait ? { borderColor: this.couleur(f.trait), borderWidth: (f.epaisseur || 1) * k, borderLineCap: this.PDFLib.LineCapStyle.Round } : {}),
+      });
+    }
+  }
+
+  /** Légende des symboles employés : icône et libellé, sur une ou plusieurs lignes. */
+  legendeSymboles(ids) {
+    if (!ids.length) return;
+    this.place(18);
+    let x = MARGE, y = this.y + 2;
+    this.texte('Symboles :', x, y + 9, { taille: 7.8, police: 'gras', couleur: DOUX });
+    x += this.largeur('Symboles :', 7.8, 'gras') + 6;
+    for (const id of ids) {
+      const lib = C.libelleSymbole(id) || id;
+      const w = 13 + this.largeur(lib, 7.8) + 10;
+      if (x + w > MARGE + LARGEUR) { x = MARGE; y += 14; }
+      this.symbole(id, x, y, 11);
+      this.texte(lib, x + 13, y + 9, { taille: 7.8, couleur: DOUX });
+      x += w;
+    }
+    this.y = y + 16;
+  }
+
   meteo(note, x, yHaut, taille) {
     const k = taille / 48;
     for (const f of formesMeteo(note)) {
@@ -673,12 +704,14 @@ class Redacteur {
         this.texte(`${titre} :`, xl, yl2() + 3, { taille: 8.5, police: 'gras', couleur: ENCRE });
         xl += this.largeur(`${titre} :`, 8.5, 'gras') + 8;
         for (const it of items) {
-          const lw = 14 + this.largeur(it.libelle, 8.5) + 10;
+          const syms = it.symboles || [];
+          const lw = 14 + this.largeur(it.libelle, 8.5) + (syms.length ? syms.length * 10 + 3 : 0) + 10;
           if (xl + lw > MARGE + LARGEUR) { this.y += 14; xl = gauche + 50; }
           const yy = yl2();
           if (it.couleur) this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(it.couleur) });
           else this.page.drawRectangle({ x: xl, y: A4[1] - yy - 3.5, width: 8, height: 8, color: this.couleur(FOND), borderColor: this.couleur(FILET), borderWidth: 0.5 });
           this.texte(it.libelle, xl + 12, yy + 3, { taille: 8.5, couleur: DOUX });
+          syms.forEach((id, i) => this.symbole(id, xl + 12 + this.largeur(it.libelle, 8.5) + 3 + i * 10, yy - 5, 9.5));
           xl += lw;
         }
         this.y += 16;
@@ -731,8 +764,11 @@ class Redacteur {
    */
   barres(lignes, { mode = 'humeur', couleur = BARRE_FAV, max = null, signalerBas = true } = {}) {
     if (!lignes.length) return;
-    const hLigne = 21, hBarre = 11;
-    const colLib = Math.min(175, Math.max(70, Math.max(...lignes.map((l) => this.largeur(l.libelle, 9, 'gras'))) + 10));
+    const hLigne = 21, hBarre = 11, tS = 12;
+    // Symboles (lieu, activité) : une petite colonne à droite des libellés
+    const nbS = Math.max(0, ...lignes.map((l) => (l.symboles || []).length));
+    const colSym = nbS ? nbS * (tS + 1.5) + 4 : 0;
+    const colLib = Math.min(175 + colSym, Math.max(70, Math.max(...lignes.map((l) => this.largeur(l.libelle, 9, 'gras'))) + 10) + colSym);
     const x0 = MARGE + colLib, x1 = MARGE + LARGEUR - 96;
     const vmax = mode === 'humeur' ? 10 : (max || Math.max(1, ...lignes.map((l) => l.valeur || 0)));
     // La moyenne la plus basse n'est signalée que si elle repose sur au moins 2 évaluations et s'écarte nettement (0,5 point)
@@ -757,9 +793,10 @@ class Redacteur {
       graduer(this.y, this.y + hLigne);
       const yc = this.y + hLigne / 2;
       const bas = plusBas && l === plusBas;
-      const lignesLib = this.couper(l.libelle, 9, bas ? 'gras' : 'normal', colLib - 8);
+      const lignesLib = this.couper(l.libelle, 9, bas ? 'gras' : 'normal', colLib - 8 - colSym);
       const lib = lignesLib.length > 1 ? `${lignesLib[0].replace(/[\s,;:]+$/, '')}…` : lignesLib[0];
       this.texte(lib, MARGE, yc + 3.2, { taille: 9, police: bas ? 'gras' : 'normal' });
+      (l.symboles || []).forEach((id, i) => this.symbole(id, x0 - colSym + 1 + i * (tS + 1.5), yc - tS / 2, tS));
       if (l.valeur !== null && l.nombre > 0) {
         const w = Math.max(2, (l.valeur / vmax) * (x1 - x0));
         const coul = mode === 'humeur' ? COULEURS_NIVEAUX[Math.max(0, Math.min(10, Math.round(l.valeur)))] : couleur;
@@ -945,7 +982,9 @@ class Redacteur {
     const chevauche = (a) => occupes.some((b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0);
     for (const { p, x, y, r } of etiquettes) {
       const t1 = p.nom, t2 = `${C.nombreFr(p.moyenne)}/10 · ${C.pluriel(p.nombre, 'éval.', 'éval.')}`;
-      const w = Math.max(this.largeur(t1, 8, 'gras'), this.largeur(t2, 7)) + 8 + 20;
+      const syms = p.symboles || [];
+      const lSym = syms.length ? syms.length * 10.5 + 3 : 0;
+      const w = Math.max(this.largeur(t1, 8, 'gras') + lSym, this.largeur(t2, 7)) + 8 + 20;
       const essais = [[x + r + 3, y - 11], [x - r - 3 - w, y - 11], [x - w / 2, y - r - 25], [x - w / 2, y + r + 3],
         [x + r + 3, y - 30], [x + r + 3, y + 8], [x - r - 3 - w, y - 30], [x - r - 3 - w, y + 8]];
       const dans = ([a, b]) => [Math.max(MARGE + 2, Math.min(MARGE + l - w - 2, a)), Math.max(yH + 2, Math.min(yH + h - 24, b))];
@@ -961,6 +1000,8 @@ class Redacteur {
       this.meteo(Math.max(0, Math.min(10, Math.round(p.moyenne))), xe + 3, ye + 3, 16);
       // Étiquettes sur fond blanc : texte foncé, quel que soit le style
       this.texte(t1, xe + 23, ye + 9, { taille: 8, police: 'gras', couleur: '#1E2A33' });
+      // Symboles du lieu (maison, randonnée, repas…) après le nom
+      syms.forEach((id, i) => this.symbole(id, xe + 23 + this.largeur(t1, 8, 'gras') + 3 + i * 10.5, ye + 1.5, 10));
       this.texte(t2, xe + 23, ye + 18.5, { taille: 7, couleur: '#5E6B74' });
     }
     // Échelle et attribution
@@ -1028,10 +1069,12 @@ export const PAGES_MAX = 10;
  */
 export async function genererRapportLimite(PDFLib, donnees, options, { pagesMax = PAGES_MAX } = {}) {
   let res = null;
-  for (let niveau = 0; niveau <= 5; niveau++) {
-    const octets = await genererRapport(PDFLib, donnees, { ...options, niveau });
+  // Au niveau 4, on réduit d'abord la fenêtre des jours détaillés (14, puis 7, puis 3 jours) avant de tout résumer.
+  const essais = [0, 1, 2, 3, ...[14, 7, 3].map((j) => [4, j]), 5].map((x) => (Array.isArray(x) ? { niveau: x[0], joursRecents: x[1] } : { niveau: x }));
+  for (const essai of essais) {
+    const octets = await genererRapport(PDFLib, donnees, { ...options, ...essai });
     const pages = (await PDFLib.PDFDocument.load(octets, { updateMetadata: false })).getPageCount();
-    res = { octets, niveau, pages };
+    res = { octets, niveau: essai.niveau, pages, ...(essai.joursRecents ? { joursRecents: essai.joursRecents } : {}) };
     if (pages <= pagesMax) return res;
   }
   return res;
@@ -1060,10 +1103,12 @@ export async function genererRapport(PDFLib, donnees, options) {
   if ('rythme' in parametres) C.configurerRythme(parametres.rythme);
   const morceauxRythme = C.rythmePeriode(debut, fin);
   const changementRythme = morceauxRythme.length > 1 || morceauxRythme[0].creneaux.length === 1;
+  // Date réelle du passage à une évaluation par jour, même si elle précède la période du rapport
+  const debutRythme = morceauxRythme.length === 1 && morceauxRythme[0].creneaux.length === 1 ? C.debutRythmeEnCours(fin) : null;
   // Phrase courte : « Depuis le 23/10/2026, une seule évaluation par jour, le soir, qui porte sur l'ensemble de la journée. »
   const phraseRythme = () => morceauxRythme.map((m, k) => {
     const libre = C.libelleRythme(m.creneaux);
-    if (morceauxRythme.length === 1) return `Sur toute la période, ${libre}.`;
+    if (morceauxRythme.length === 1) return debutRythme ? `Depuis le ${C.formatDateCourte(debutRythme)}, ${libre.replace(/^une évaluation/, 'une seule évaluation')} (donc sur toute la période).` : `Sur toute la période, ${libre}.`;
     return k === 0 ? `Jusqu'au ${C.formatDateCourte(m.jusquau)}, ${libre}.` : `Depuis le ${C.formatDateCourte(m.depuis)}, ${libre.replace(/^une évaluation/, 'une seule évaluation')}.`;
   }).join(' ');
   const patient = parametres.patient || {};
@@ -1082,8 +1127,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   const couleurSituation = (x) => COULEURS_CATEGORIES[C.ORDRE_SITUATIONS.indexOf(x.statut)] || COULEUR_AUTRE;
   const parLieu = C.humeurParLieu(evals);
   const parSituation = C.humeurParSituation(evals);
-  const legendeLieux = [...parLieu.lignes].sort((a, b) => (ordreLieux.indexOf(a.cle) + 1 || 999) - (ordreLieux.indexOf(b.cle) + 1 || 999)).map((l) => ({ libelle: C.libelleLieu(l.valeur), couleur: couleurLieu(l.valeur) }));
-  const legendeSituations = C.ORDRE_SITUATIONS.filter((st) => parSituation.lignes.some((l) => l.valeur.statut === st)).map((st) => ({ libelle: C.SITUATIONS[st], couleur: couleurSituation({ statut: st }) }));
+  const legendeLieux = [...parLieu.lignes].sort((a, b) => (ordreLieux.indexOf(a.cle) + 1 || 999) - (ordreLieux.indexOf(b.cle) + 1 || 999)).map((l) => ({ libelle: C.libelleLieu(l.valeur), couleur: couleurLieu(l.valeur), symboles: C.symbolesLieu(l.valeur, { manuels: parametres.symbolesLieux, evaluations: evals }) }));
+  const legendeSituations = C.ORDRE_SITUATIONS.filter((st) => parSituation.lignes.some((l) => l.valeur.statut === st)).map((st) => ({ libelle: C.SITUATIONS[st], couleur: couleurSituation({ statut: st }), symboles: C.symbolesSituation({ statut: st }) }));
   if (parLieu.sansValeur && parLieu.lignes.length) legendeLieux.push({ libelle: 'non indiqué', couleur: null });
   if (parSituation.sansValeur && parSituation.lignes.length) legendeSituations.push({ libelle: 'non indiquée', couleur: null });
   const estCompletion = (h) => h.changements.every((c) => ['lieu', 'lieux', 'situation'].includes(c.champ) && (!c.avant || (Array.isArray(c.avant) && !c.avant.length)));
@@ -1200,7 +1245,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       precedente ? ['Séance précédente', C.libelleSeance(precedente)] : null,
       prochaine ? ['Prochaine séance', C.libelleSeance(prochaine)] : (parametres.seanceAConvenir ? ['Prochaine séance', 'pas encore convenue'] : null),
       ['Type de rapport', niveau ? `condensé pour tenir en ${PAGES_MAX} pages au plus` : type === 'complet' ? 'complet (évaluations détaillées)' : 'synthétique (évaluations abrégées)'],
-      changementRythme ? ['Rythme', morceauxRythme.map((m, k) => (morceauxRythme.length === 1 ? C.libelleRythme(m.creneaux) : k === 0 ? `${C.libelleRythme(m.creneaux)} jusqu'au ${C.formatDateCourte(m.jusquau)}` : `depuis le ${C.formatDateCourte(m.depuis)} : ${C.libelleRythme(m.creneaux)}`)).join(' ; ').replace(/, qui porte sur l'ensemble de la journée/, '')] : null,
+      changementRythme ? ['Rythme', morceauxRythme.map((m, k) => (morceauxRythme.length === 1 ? `${debutRythme ? `depuis le ${C.formatDateCourte(debutRythme)} : ` : ''}${C.libelleRythme(m.creneaux)}` : k === 0 ? `${C.libelleRythme(m.creneaux)} jusqu'au ${C.formatDateCourte(m.jusquau)}` : `depuis le ${C.formatDateCourte(m.depuis)} : ${C.libelleRythme(m.creneaux)}`)).join(' ; ').replace(/, qui porte sur l'ensemble de la journée/, '')] : null,
       ['Établi le', `${C.formatDateHeure(instant)} (heure de Luxembourg)`],
     ].filter(Boolean);
     for (const [lib, val] of infos) {
@@ -1316,8 +1361,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   for (const d of det) R.paragraphe(d, { taille: 9.5, couleur: DOUX, apres: 4 });
 
   // 10. Évaluations manquantes
-  R.section(++numSection, 'Évaluations manquantes');
   const omis = grille.filter((s) => s.statut === 'omis');
+  R.section(++numSection, 'Évaluations manquantes', omis.length ? 90 : 30);
   const attente = grille.filter((s) => s.statut === 'en_attente' || s.statut === 'a_rattraper');
   const nonRens = grille.filter((s) => s.statut === 'non_renseigne');
   if (!omis.length) R.paragraphe('Aucun créneau omis sur la période.');
@@ -1326,7 +1371,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (nonRens.length) R.paragraphe(`Non renseigné (antérieur au début du suivi dans l'application, données inconnues) : ${nonRens.map(libCreneau).join(', ')}.`, { taille: 9.5, couleur: DOUX });
 
   // ===== Partie II – Évaluations jour par jour (détail complet, ou tableau dans le rapport synthétique)
-  await R.partie('II', 'Évaluations jour par jour', { nouvellePage: true });
+  await R.partie('II', 'Évaluations jour par jour', niveau ? { besoin: 230 } : { nouvellePage: true }); // rapport condensé : pas de page entamée laissée vide
   R.section(++numSection, 'Évaluations jour par jour', 120);
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
@@ -1372,9 +1417,10 @@ export async function genererRapport(PDFLib, donnees, options) {
   if (niveau >= 4 && evals.length) {
     const parMois = C.joursEntre(debut, fin) > 140;
     if (niveau === 4) {
-      // Les jours récents (depuis la dernière séance, 14 jours au plus) un par un ; avant, un résumé par semaine ou par mois
+      // Les jours récents (depuis la dernière séance, 14 jours au plus, ou 7 ou 3 si nécessaire) un par un ; avant, un résumé par semaine ou par mois
       const derniere = C.seancesPassees(listeSeances, instant)[0];
-      const quinze = C.ajouterJours(fin, -13);
+      const nbRecents = [14, 7, 3].includes(options.joursRecents) ? options.joursRecents : 14;
+      const quinze = C.ajouterJours(fin, -(nbRecents - 1));
       const coupure = derniere && derniere.date > quinze && derniere.date <= fin ? derniere.date : quinze;
       const anciens = evals.filter((e) => e.date < coupure), recents = evals.filter((e) => e.date >= coupure);
       if (anciens.length) {
@@ -1382,7 +1428,7 @@ export async function genererRapport(PDFLib, donnees, options) {
         tableauResume(anciens, parMois);
       }
       if (recents.length) {
-        R.sousTitre(`${derniere && coupure === derniere.date ? 'Depuis la dernière séance' : 'Les 14 derniers jours'} (${C.formatDateCourte(recents[0].date)} – ${C.formatDateCourte(recents[recents.length - 1].date)}) : évaluation par évaluation`);
+        R.sousTitre(`${derniere && coupure === derniere.date ? 'Depuis la dernière séance' : `Les ${nbRecents} derniers jours`} (${C.formatDateCourte(recents[0].date)} – ${C.formatDateCourte(recents[recents.length - 1].date)}) : évaluation par évaluation`);
         tableauCompact(recents, 0, true);
       }
       R.paragraphe(`Pour que le rapport tienne en ${PAGES_MAX} pages, les évaluations les plus anciennes sont résumées. Le détail de chaque évaluation (commentaires, lieux) reste consultable dans l'application.`, { taille: 8.5, couleur: DOUX });
@@ -1596,6 +1642,8 @@ export async function genererRapport(PDFLib, donnees, options) {
   // 8. Quand et où l'humeur est la plus basse : jours, situations, lieux (carte), activités
   if (!stats.nombre) { R.section(++numSection, 'Jours, situations, lieux et activités'); R.paragraphe('Aucune évaluation sur la période.'); } else {
     const enBarres = (r) => r.map((l) => ({ libelle: l.libelle, valeur: l.moyenne, nombre: l.nombre }));
+    // Symboles : ceux choisis par le patient pour le lieu, puis ceux des activités qu'il y a faites
+    const symbolesDuLieu = (lieu) => C.symbolesLieu(lieu, { manuels: parametres.symbolesLieux, evaluations: evals });
     const hBarres = (n) => Math.min(200, n * 21 + 30);
     const hB = (n) => n * 21 + 18 + 40;
     const blocs = [
@@ -1606,14 +1654,18 @@ export async function genererRapport(PDFLib, donnees, options) {
       () => R.encadre(hB(parSituation.lignes.length || 1), () => {
         R.sousTitre('Par situation professionnelle', hBarres(parSituation.lignes.length || 1));
         if (parSituation.lignes.length) {
-          R.barres(enBarres(parSituation.lignes));
+          const lignesSit = enBarres(parSituation.lignes).map((x, i) => ({ ...x, symboles: C.symbolesSituation(parSituation.lignes[i].valeur) }));
+          R.barres(lignesSit);
+          R.legendeSymboles(C.symbolesDistincts(lignesSit.map((l) => l.symboles)));
           if (parSituation.sansValeur) R.paragraphe(`${C.pluriel(parSituation.sansValeur, 'évaluation')} sans situation indiquée.`, { taille: 8.3, couleur: DOUX });
         } else R.paragraphe('Aucune situation professionnelle indiquée sur la période.', { taille: 9.5, couleur: DOUX });
       }),
       () => R.encadre(hB(Math.min(12, parLieu.lignes.length) || 1), () => {
         R.sousTitre('Par lieu', hBarres(parLieu.lignes.length || 1));
         if (parLieu.lignes.length) {
-          R.barres(enBarres(parLieu.lignes.slice(0, 12)).map((x, i) => ({ ...x, libelle: C.libelleLieu(parLieu.lignes[i].valeur) })));
+          const lignesLieu = enBarres(parLieu.lignes.slice(0, 12)).map((x, i) => ({ ...x, libelle: C.libelleLieu(parLieu.lignes[i].valeur), symboles: symbolesDuLieu(parLieu.lignes[i].valeur) }));
+          R.barres(lignesLieu);
+          R.legendeSymboles(C.SYMBOLES.map((x) => x.id).filter((id) => lignesLieu.some((l) => l.symboles.includes(id))));
           if (parLieu.sansValeur) R.paragraphe(`${C.pluriel(parLieu.sansValeur, 'évaluation')} sans lieu indiqué.`, { taille: 8.3, couleur: DOUX });
         } else R.paragraphe('Aucun lieu indiqué sur la période.', { taille: 9.5, couleur: DOUX });
       }),
@@ -1622,7 +1674,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     if (carte) {
       blocs.push(() => R.encadre((TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 110, async () => {
         R.sousTitre('Carte des lieux', (TAILLE_CARTE.hauteur / TAILLE_CARTE.largeur) * LARGEUR + 40);
-        await R.carteLieux(carte.points, carte.cadre, options.fondCarte || null);
+        await R.carteLieux(carte.points.map((pt) => ({ ...pt, symboles: symbolesDuLieu(parLieu.lignes.find((l) => l.cle === pt.cle)?.valeur) })), carte.cadre, options.fondCarte || null);
         const sansCoord = carte.sansCoordonnees > 1 ? ` ${carte.sansCoordonnees} lieux sans coordonnées (saisis librement, ou « En route ») n'apparaissent pas sur la carte.` : carte.sansCoordonnees ? ' Un lieu sans coordonnées (saisi librement, ou « En route ») n\'apparaît pas sur la carte.' : '';
         R.paragraphe(`Taille du disque : nombre d'évaluations ; couleur et pictogramme météo : humeur moyenne (ressenti sur place quand il est indiqué), du plus sombre (humeur basse) au doré (humeur haute).${sansCoord}${options.fondCarte ? '' : ' Fond de carte non affiché (désactivé dans les réglages ou hors connexion).'}`, { taille: 8.3, couleur: DOUX, apres: 0 });
       }));
@@ -1630,7 +1682,9 @@ export async function genererRapport(PDFLib, donnees, options) {
     if (parActivite.lignes.length) {
       blocs.push(() => R.encadre(hB(Math.min(12, parActivite.lignes.length)), () => {
         R.sousTitre('Par activité', hBarres(parActivite.lignes.length));
-        R.barres(enBarres(parActivite.lignes.slice(0, 12)));
+        const lignesAct = enBarres(parActivite.lignes.slice(0, 12)).map((x) => ({ ...x, symboles: C.symbolesActivite(x.libelle) }));
+        R.barres(lignesAct);
+        R.legendeSymboles(C.SYMBOLES.map((x) => x.id).filter((id) => lignesAct.some((l) => l.symboles.includes(id))));
       }));
     }
     const multi = evals.some((e) => C.lieuxDe(e).length > 1);
@@ -1639,7 +1693,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     await chapitre('Jours, situations, lieux et activités', {
       avant: () => R.paragraphe('Humeur moyenne (sur 10) selon le jour de la semaine, la situation professionnelle, le lieu et l\'activité déclarés par le patient. Le libellé en gras signale la moyenne la plus basse (au moins 2 évaluations).', { taille: 9, couleur: DOUX, apres: 6 }),
       blocs,
-      apres: () => R.paragraphe(`Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « En route » désigne un déplacement (à pied, à vélo, en voiture, en bus, en train, en avion, en bateau…).' : ''}${texteRessenti}`, { taille: 8.3, couleur: DOUX }),
+      apres: () => R.paragraphe(`${parLieu.lignes.some((l) => symbolesDuLieu(l.valeur).length) || parActivite.lignes.some((l) => C.symbolesActivite(l.libelle).length) ? 'Les symboles des lieux indiquent ce que le patient fait habituellement à chaque endroit (d\'après ses réglages et les activités notées sur place). ' : ''}${parSituation.lignes.length ? 'Les symboles de la situation professionnelle reprennent celle qu\'il a indiquée (congé maladie, congé, travail, reprise, week-end ; télétravail ou sur site). ' : ''}Moyennes descriptives des notes selon les informations déclarées par le patient ; elles ne permettent pas d'établir un lien de cause à effet. Une moyenne calculée sur moins de 4 évaluations est peu représentative.${multi || parActivite.lignes.length ? ' Une évaluation où plusieurs lieux ou activités sont indiqués compte pour chacun d\'eux. « En route » désigne un déplacement (à pied, à vélo, en voiture, en bus, en train, en avion, en bateau…).' : ''}${texteRessenti}`, { taille: 8.3, couleur: DOUX }),
     });
   }
 
