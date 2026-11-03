@@ -687,10 +687,11 @@ function symbolesHTML(ids, taille = 16) {
 /** Choix des symboles d'un lieu (plusieurs possibles). */
 async function dialogueSymbolesLieu(cle, lieu) {
   const manuels = C.normaliserSymbolesLieux(etat.parametres.symbolesLieux);
-  const choisis = new Set(manuels[cle] || []);
-  const auto = C.symbolesLieu(lieu, { evaluations: etat.evaluations }).filter((id) => !choisis.has(id));
+  const auto = C.symbolesActivitesLieu(lieu, etat.evaluations);
+  // Coché au départ : ce qui s'affiche aujourd'hui (choix du patient + symboles déduits non retirés)
+  const choisis = new Set(C.symbolesLieu(lieu, { manuels, evaluations: etat.evaluations }));
   const attente = dialogue(`<h2 id="dialogue-titre">Symboles : ${esc(C.libelleLieu(lieu))}</h2>
-    <p class="doux">Ce que tu fais en général à cet endroit (${C.MAX_SYMBOLES_LIEU} au plus). Ils s'affichent dans les graphiques et sur la carte du rapport.${auto.length ? ` D'après tes activités, s'ajoutent déjà : ${auto.map((id) => esc(C.SYMBOLES.find((x) => x.id === id).libelle)).join(', ')}.` : ''}</p>
+    <p class="doux">Ce que tu fais en général à cet endroit (${C.MAX_SYMBOLES_LIEU} au plus). Ils s'affichent dans les graphiques et sur la carte du rapport.${auto.length ? ` Repérés d'après tes activités : ${auto.map((id) => esc(C.libelleSymbole(id))).join(', ')} ; touche un symbole pour le retirer s'il ne convient pas.` : ''}</p>
     <div class="choix-puces grille-symboles">${C.SYMBOLES.map((x) => `<button type="button" class="puce-choix puce-symbole" data-symbole="${x.id}" aria-pressed="${choisis.has(x.id)}">${iconeSymbole(x.id, { taille: 22 })}<span>${esc(x.libelle)}</span></button>`).join('')}</div>
     <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
   dlg.querySelector('.grille-symboles').addEventListener('click', (e) => {
@@ -705,7 +706,10 @@ async function dialogueSymbolesLieu(cle, lieu) {
   const r = await attente;
   if (r.valeur !== 'oui') return false;
   const ordre = C.SYMBOLES.map((x) => x.id).filter((id) => choisis.has(id));
-  await enregistrerParametres({ symbolesLieux: C.normaliserSymbolesLieux({ ...manuels, [cle]: ordre }) });
+  const retires = auto.filter((id) => !choisis.has(id)).map((id) => `-${id}`);
+  const suite = { ...manuels, [cle]: [...ordre, ...retires] };
+  if (!ordre.length && !retires.length) delete suite[cle];
+  await enregistrerParametres({ symbolesLieux: C.normaliserSymbolesLieux(suite) });
   annoncer('Symboles enregistrés.');
   return true;
 }

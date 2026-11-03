@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.34.0';
+export const VERSION_APP = '1.35.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -848,21 +848,23 @@ export function sousMotifs(m, bibliotheque) {
 // son nom ; un lieu, ceux des activités qui y ont été faites et ceux que le patient lui a attribués.
 
 export const SYMBOLES = [
-  { id: 'maison', libelle: 'Maison', cles: [/maison/, /domicile/, /chez moi/, /\bzuhause\b/, /\bhaus\b/] },
-  { id: 'randonnee', libelle: 'Randonnée, marche', cles: [/randonn/, /\bmarche\b/, /balade/, /promenade/, /wander/, /\bhike/, /\btrek/] },
-  { id: 'repas', libelle: 'Repas, restaurant', cles: [/repas/, /restaurant/, /manger/, /diner/, /dejeuner/, /\bessen\b/, /brasserie/, /pizz/, /\bresto\b/, /souper/] },
-  { id: 'cafe', libelle: 'Café', cles: [/\bcafe\b/, /kaffee/, /\bthe\b/, /patisserie/, /gourmandise/] },
-  { id: 'velo', libelle: 'Vélo', cles: [/velo/, /cycl/, /\bbike/, /\brad\b/, /fahrrad/] },
-  { id: 'courses', libelle: 'Courses', cles: [/course/, /shopping/, /achat/, /supermarch/, /einkauf/, /marche de/] },
-  { id: 'sante', libelle: 'Santé, soin', cles: [/medec/, /medic/, /pedicure/, /kine/, /hopital/, /dentist/, /pharma/, /therap/, /\bsoin/, /\bdocteur/, /\barzt/, /analyse/] },
-  { id: 'famille', libelle: 'Famille, amis', cles: [/famill/, /parents/, /enfant/, /\bamis?\b/, /visite/, /anniversaire/, /\bfreund/] },
-  { id: 'travail', libelle: 'Travail', cles: [/travail/, /bureau/, /reunion/, /\barbeit/, /\bboulot/] },
-  { id: 'sport', libelle: 'Sport, football', cles: [/\bfoot/, /\bmatch/, /\bksc\b/, /stade/, /\bsport/, /fitness/, /natation/, /piscine/] },
-  { id: 'culture', libelle: 'Culture, musique', cles: [/musee/, /cinema/, /concert/, /theatre/, /musique/, /exposition/, /\bkino\b/] },
-  { id: 'recherche', libelle: 'Recherches, lecture', cles: [/genealog/, /recherche/, /archive/, /ecriture/, /histoire/, /lecture/, /\blivre/, /bibliotheque/] },
-  { id: 'photo', libelle: 'Photo', cles: [/photo/, /\bfoto/] },
-  { id: 'nature', libelle: 'Nature', cles: [/nature/, /foret/, /\blac\b/, /jardin/, /\bparc\b/, /\bwald\b/] },
-  { id: 'voyage', libelle: 'Voyage', cles: [/voyage/, /vacances/, /hotel/, /excursion/, /\burlaub/, /\breise/] },
+  // Mots-clés cherchés dans le libellé normalisé (minuscules, sans accents) : précis, pour éviter les faux amis
+  // (« course à pied » n'est pas « faire les courses », « marché » n'est pas « marche », « signature » n'est pas « nature »…).
+  { id: 'maison', libelle: 'Maison', cles: [/\bmaison\b/, /domicile/, /chez moi/, /\bzuhause\b/, /\bhaus\b/] },
+  { id: 'randonnee', libelle: 'Randonnée, marche', cles: [/randonn/, /\bmarche\b(?! (de|du|des|aux|au)\b)/, /\bbalade/, /promenade/, /\bwander/, /\bhike/, /\bhiking\b/, /\btrek/, /spaziergang/] },
+  { id: 'repas', libelle: 'Repas, restaurant', cles: [/\brepas\b/, /restaurant/, /\bmanger\b/, /\bdiner\b/, /dejeuner/, /\bessen\b/, /brasserie/, /\bpizz/, /\bresto\b/, /souper/, /barbecue/] },
+  { id: 'cafe', libelle: 'Café', cles: [/\bcafe\b/, /kaffee/, /salon de the/, /\bun the\b/, /patisserie/] },
+  { id: 'velo', libelle: 'Vélo', cles: [/\bvelo/, /\bcyclis/, /\bbike\b/, /\bvtt\b/, /\brad\b/, /fahrrad/, /radtour/] },
+  { id: 'courses', libelle: 'Courses', cles: [/\bcourses\b(?! (a pied|de|du|des|hippique))/, /faire (les|des) courses/, /shopping/, /\bachats?\b/, /supermarch/, /\bmagasin/, /einkauf/, /\bmarche (de|du|des|aux|au)\b/] },
+  { id: 'sante', libelle: 'Santé, soin', cles: [/medec/, /\bmedic/, /pedicure/, /\bkine\b/, /kinesi/, /hopital/, /\bdentist/, /pharma/, /therap/, /\bsoins?\b/, /\bdocteur/, /\barzt/, /prise de sang/, /\blabo\b/, /laboratoire/] },
+  { id: 'famille', libelle: 'Famille, amis', cles: [/\bfamill/, /\bparents\b/, /\benfants?\b/, /\bamis?\b/, /visite (a|chez|de mes|de ma|de mon)\b/, /anniversaire/, /\bfreunde?\b/, /\bfamilie/] },
+  { id: 'travail', libelle: 'Travail', cles: [/\btravail\b/, /\barbeit/, /\bboulot/] },
+  { id: 'sport', libelle: 'Sport', cles: [/\bfoot/, /\bmatch/, /\bksc\b/, /\bstade/, /\bstadion/, /\bsport/, /fitness/, /natation/, /piscine/, /athleti/, /leichtathlet/, /course a pied/, /\bcourse (de|du|sur) /, /\bmarathon/, /\bjogging/, /\brunning\b/, /\blauf/, /\btrail\b/, /\bwettkampf/, /\btennis/, /\bgym\b/] },
+  { id: 'culture', libelle: 'Culture, musique', cles: [/\bmusee/, /\bcinema/, /\bconcert/, /\btheatre/, /\bmusique/, /exposition/, /\bkino\b/, /kinepolis/, /\bopera\b/] },
+  { id: 'recherche', libelle: 'Recherches, lecture', cles: [/genealog/, /\brecherches?\b/, /\barchives?\b/, /\becriture/, /\blecture/, /\blivres?\b/, /bibliotheque/] },
+  { id: 'photo', libelle: 'Photo', cles: [/\bphoto/, /\bfoto/] },
+  { id: 'nature', libelle: 'Nature', cles: [/\bnature/, /\bforet/, /\blac\b/, /\bjardin/, /\bparc\b(?! d.attraction)/, /\bwald\b/] },
+  { id: 'voyage', libelle: 'Voyage', cles: [/\bvoyage/, /\bvacances/, /\bhotel\b(?! de ville)/, /excursion/, /\burlaub/, /\breise/] },
 ];
 export const MAX_SYMBOLES_LIEU = 4;
 
@@ -901,23 +903,21 @@ export function symbolesActivite(nom) {
 
 /** Symboles choisis pour chaque lieu (réglage partagé { cleLieu: [ids] }), nettoyés. */
 export function normaliserSymbolesLieux(x) {
+  // { cleLieu: ['maison', '-courses'] } : symboles choisis, et « -id » pour un symbole déduit d'une activité que le patient a retiré
   const ids = new Set(SYMBOLES.map((s) => s.id));
   const res = {};
   for (const [k, v] of Object.entries(x && typeof x === 'object' ? x : {})) {
-    const l = (Array.isArray(v) ? v : []).filter((id) => ids.has(id));
-    if (l.length) res[k] = [...new Set(l)].slice(0, MAX_SYMBOLES_LIEU);
+    const l = Array.isArray(v) ? v : [];
+    const choisis = [...new Set(l.filter((id) => ids.has(id)))].slice(0, MAX_SYMBOLES_LIEU);
+    const retires = [...new Set(l.filter((id) => typeof id === 'string' && id.startsWith('-') && ids.has(id.slice(1)) && !choisis.includes(id.slice(1))))];
+    if (choisis.length || retires.length) res[k] = [...choisis, ...retires];
   }
   return res;
 }
-
-/**
- * Symboles d'un lieu : ceux que le patient lui a attribués, puis ceux des activités qui y ont été faites
- * (dans les évaluations données), sans doublon, MAX_SYMBOLES_LIEU au plus.
- */
-export function symbolesLieu(lieu, { manuels = {}, evaluations = [] } = {}) {
+/** Symboles déduits des activités notées à ce lieu, du plus fréquent au moins fréquent. */
+export function symbolesActivitesLieu(lieu, evaluations = []) {
   if (!lieu) return [];
   const k = cleLieu(lieuSansActivite(lieu));
-  const res = [...(normaliserSymbolesLieux(manuels)[k] || [])];
   const compte = new Map();
   for (const e of evaluations) {
     for (const l of lieuxDe(e)) {
@@ -925,7 +925,15 @@ export function symbolesLieu(lieu, { manuels = {}, evaluations = [] } = {}) {
       for (const id of symbolesActivite(l.activite)) compte.set(id, (compte.get(id) || 0) + 1);
     }
   }
-  for (const [id] of [...compte].sort((a, b) => b[1] - a[1])) if (!res.includes(id)) res.push(id);
+  return [...compte].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+}
+export function symbolesLieu(lieu, { manuels = {}, evaluations = [] } = {}) {
+  if (!lieu) return [];
+  const k = cleLieu(lieuSansActivite(lieu));
+  const reglage = normaliserSymbolesLieux(manuels)[k] || [];
+  const res = reglage.filter((id) => !id.startsWith('-'));
+  const retires = new Set(reglage.filter((id) => id.startsWith('-')).map((id) => id.slice(1)));
+  for (const id of symbolesActivitesLieu(lieu, evaluations)) if (!res.includes(id) && !retires.has(id)) res.push(id);
   return res.slice(0, MAX_SYMBOLES_LIEU);
 }
 
