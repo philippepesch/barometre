@@ -64,7 +64,7 @@ async function appelerServeur(cfg, serveur, systeme, entrees, f) {
  * Demande une version professionnelle pour les évaluations données.
  * Retourne { propositions:[{id, explication, complement, prevision}], ignorees:[...] }.
  */
-export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis), evenements = null, motifs = [] } = {}) {
+export async function reformuler(parametres, evaluations, { fetch: f = globalThis.fetch.bind(globalThis), evenements = null, motifs = [], remarques = null } = {}) {
   const cfg = parametres.ia || {};
   if (!cfg.actif || !cfg.consentementUtc || cfg.consentementFournisseur !== cfg.fournisseur) throw new Error('La préparation automatique n\'est pas activée (Réglages).');
   if (cfg.fournisseur === 'anthropic' && !cfg.cle) throw new Error('Clé d\'accès manquante (Réglages).');
@@ -73,7 +73,7 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
   const style = C.styleRedaction(parametres).id;
   const a = evaluations.filter((e) => C.aDesTextes(e, evts));
   const systeme = C.instructionsReformulation({ style });
-  const entreesDe = (l) => C.entreesReformulation(l, { evenements: evts, bibliotheque: motifs });
+  const entreesDe = (l) => C.entreesReformulation(l, { evenements: evts, bibliotheque: motifs, remarques });
   const propositions = [];
   const ignorees = [];
   for (let i = 0; i < a.length; i += TAILLE_LOT) {
@@ -86,11 +86,13 @@ export async function reformuler(parametres, evaluations, { fetch: f = globalThi
     // Contrôle : une proposition encore à la première personne est redemandée une fois, avec un rappel
     // (et une proposition trop longue)
     const premiere = (p) => ['explication', 'complement', 'prevision'].some((k) => C.contientPremierePersonne(p[k]));
-    const aCorriger = r.propositions.filter((p) => premiere(p) || C.versionTropLongue(p));
+    const aCorriger = r.propositions.filter((p) => premiere(p) || C.versionTropLongue(p) || C.redites(p).length);
     if (aCorriger.length) {
       const lot2 = lot.filter((e) => aCorriger.some((p) => p.id === e.id));
       const consignes = [];
       if (aCorriger.some(premiere)) consignes.push('ta réponse précédente employait la première personne. Réécris ces entrées en parlant uniquement du « patient », sans aucun « je », « me », « mon », « ma », « mes »');
+      const doubles = aCorriger.flatMap((p) => C.redites(p)).slice(0, 4);
+      if (doubles.length) consignes.push(`certaines phrases disaient deux fois la même chose (${doubles.map(([x, y]) => `« ${x.slice(0, 90)} » et « ${y.slice(0, 90)} »`).join(' ; ')}). Écris chaque fait une seule fois, à sa place dans le récit du patient, sans le sortir de son contexte`);
       if (aCorriger.some((p) => C.versionTropLongue(p))) consignes.push(`certains textes dépassaient ${C.LONGUEUR_VERSION} caractères. Chaque texte doit compter au maximum ${C.LONGUEUR_VERSION} caractères, espaces compris : condense en gardant l'essentiel`);
       const rappel = `${systeme}\n\nATTENTION : ${consignes.join(' ; de plus, ')}.`;
       try {

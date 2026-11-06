@@ -46,6 +46,42 @@ async function enregistrerSeances(liste) {
   await enregistrerParametres({ seances: triees, prochaineSeance: proch ? proch.date : '', ...(proch ? { seanceAConvenir: false } : {}) });
 }
 
+/**
+ * Séances transmises avec une mise à jour, à la demande du patient : ajoutées une seule fois sur chaque appareil,
+ * seulement si elles sont encore à venir et qu'aucune séance n'est déjà notée ce jour-là. Ni nom ni adresse ici :
+ * le code de l'application est public. Le patient peut ensuite les modifier ou les annuler comme les autres.
+ */
+const SEANCES_MISE_A_JOUR = [{ id: 'maj-2026-11-13', des: '2026-11-06', date: '2026-11-13', debut: '13:00', fin: '13:50' }];
+/** Expérience demandée par le thérapeute, activée par la mise à jour : jusqu'à la veille de la séance du 13/11. */
+const EXPERIENCES_MISE_A_JOUR = [{ id: 'exp-objectif-2026-11', des: '2026-11-06', jusquau: '2026-11-12', ecart: 1 }];
+async function ajouterSeancesMiseAJour() {
+  if (!etat.parametres) return;
+  const deja = new Set(etat.parametres.seancesMiseAJour || []);
+  const messages = [];
+  const expATraiter = EXPERIENCES_MISE_A_JOUR.filter((x) => !deja.has(x.id) && aujourdhui() >= x.des);
+  if (expATraiter.length) {
+    const liste = C.normaliserExperiences(etat.parametres.experiencesPrevision);
+    const ajout = expATraiter.filter((x) => aujourdhui() <= x.jusquau && !liste.some((e) => e.id === x.id)).map(({ des: _d, ...x }) => ({ ...x, depuis: aujourdhui() }));
+    await enregistrerParametres({ ...(ajout.length ? { experiencesPrevision: C.normaliserExperiences([...liste, ...ajout]) } : {}), seancesMiseAJour: [...deja, ...expATraiter.map((x) => x.id)] });
+    expATraiter.forEach((x) => deja.add(x.id));
+    if (ajout.length) messages.push(`Expérience activée jusqu'au ${C.formatDateCourte(ajout[0].jusquau)} : à la prévision, tu notes aussi ton objectif (prévision + 1).`);
+  }
+  const aTraiter = SEANCES_MISE_A_JOUR.filter((s) => !deja.has(s.id) && aujourdhui() >= s.des);
+  if (!aTraiter.length) { if (messages.length) { annoncer(messages.join(' ')); rafraichirAccueil(); } return; }
+  const liste = seances();
+  const nouvelles = aTraiter.filter((s) => C.bornesSeance(s).fin > maintenant() && !liste.some((x) => x.id === s.id || (x.date === s.date && !x.annulee)));
+  if (nouvelles.length) await enregistrerSeances([...liste, ...nouvelles.map(({ des: _d, ...x }) => C.normaliserSeance(x))]);
+  await enregistrerParametres({ seancesMiseAJour: [...deja, ...aTraiter.map((s) => s.id)] });
+  if (nouvelles.length) messages.unshift(`Prochaine séance ajoutée : ${nouvelles.map((s) => `${C.formatDateLongue(s.date)}, ${s.debut}–${s.fin}`).join(' ; ')}.`);
+  if (messages.length) { annoncer(messages.join(' ')); rafraichirAccueil(); }
+}
+function rafraichirAccueil() { const h = location.hash; if (h === '' || h === '#/' || h === '#') vueAccueil(); }
+/** Rappel discret sur l'accueil pendant l'expérience de prévision. */
+function ligneExperience() {
+  const e = C.experienceDu(etat.parametres.experiencesPrevision, aujourdhui());
+  return e ? `<div class="bandeau bandeau-rythme"><p style="margin:0"><strong>Expérience en cours${e.jusquau ? ` jusqu'au ${esc(C.formatDateLongue(e.jusquau))}` : ''}</strong> : à la prévision, note ce que tu attends, puis ton objectif (prévision + ${e.ecart}). <a class="bouton-discret" href="#/reglages/questionnaire">Réglages</a></p></div>` : '';
+}
+
 /** Plus de séance prévue pour l'instant : l'accueil l'indique calmement, sans redemander la date. */
 async function seancePasEncoreConvenue() {
   await enregistrerParametres({ seanceAConvenir: true });
@@ -429,7 +465,7 @@ function vueAccueil() {
   contenu.innerHTML = `
     ${ui.majDisponible ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>Une nouvelle version de l\'application est prête.</span><button class="bouton-secondaire" data-action="mettre-a-jour">Mettre à jour</button></div>' : ''}
     ${ui.alerteDossier ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>La sauvegarde automatique dans ton dossier attend ton autorisation.</span><button class="bouton-secondaire" data-action="autoriser-dossier">Autoriser</button></div>' : ''}
-    ${ligneRythme()}
+    ${ligneRythme()}${ligneExperience()}
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
     ${bandeauContexte()}
@@ -934,7 +970,7 @@ function questionsGuidees(cible) {
   const lieuxP = C.lieuxProposes(etat.evaluations, cible);
   const exigerTout = etat.parametres.saisieComplete !== false;
   // État des réponses ; « pile » garde les états précédents pour revenir en arrière
-  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, prevNote: null, mot: '', retourAutre: false };
+  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, prevNote: null, prevObjectif: null, mot: '', retourAutre: false };
   const pile = [];
   let champLieuGuide = null;
   const copie = (x) => JSON.parse(JSON.stringify(x));
@@ -957,10 +993,12 @@ function questionsGuidees(cible) {
   }
   const bouton = (attrs, contenuB, classe = 'choix') => `<button type="button" class="${classe}" ${attrs}>${contenuB}</button>`;
   const pastille = (pol) => `<span class="pastille ${pol}" aria-hidden="true"></span>`;
-  const grilleNotes = (attr, actuelle = null) => `<div class="grille-notes">${Array.from({ length: 11 }, (_, n) => n).reverse().map((n) => bouton(`${attr}="${n}" aria-label="${n} sur 10, ${esc(C.nomNiveau(n))}"`, `<span class="gn-icone">${iconeMeteo(n, { taille: 30 })}</span><span class="gn-note">${n}</span><span class="gn-nom">${esc(C.nomNiveau(n))}</span>${actuelle === n ? '<span class="gn-marque">comme maintenant</span>' : ''}`, `choix choix-note${actuelle === n ? ' choix-marque' : ''}`)).join('')}</div>`;
+  const grilleNotes = (attr, actuelle = null, marque = 'comme maintenant') => `<div class="grille-notes">${Array.from({ length: 11 }, (_, n) => n).reverse().map((n) => bouton(`${attr}="${n}" aria-label="${n} sur 10, ${esc(C.nomNiveau(n))}"`, `<span class="gn-icone">${iconeMeteo(n, { taille: 30 })}</span><span class="gn-note">${n}</span><span class="gn-nom">${esc(C.nomNiveau(n))}</span>${actuelle === n ? `<span class="gn-marque">${marque}</span>` : ''}`, `choix choix-note${actuelle === n ? ' choix-marque' : ''}`)).join('')}</div>`;
+  // Expérience de prévision en cours (demandée par le thérapeute) : objectif en plus de la note attendue
+  const experience = C.experienceDu(etat.parametres.experiencesPrevision, cible.date);
 
   function ecran(titreQ, corps, { aide = '' } = {}) {
-    const etapes = { note: 1, contexte: 2, paire: 3, autre: 3, evenement: 4, prevision: 5, mot: 6, resume: 7 };
+    const etapes = { note: 1, contexte: 2, 'lieux-detail': 2, paire: 3, autre: 3, evenement: 4, prevision: 5, objectif: 5, mot: 6, resume: 7 };
     const k = etapes[w.etape] || 1;
     contenu.innerHTML = `<section class="colonne-centree guide" id="guide">
       <div class="guide-haut"><span class="doux">${esc(C.majuscule(C.formatDateLongue(cible.date)))} · ${cible.creneau === 'matin' ? 'matin' : 'soir'}${retro ? ' · saisie en retard' : ''}</span>
@@ -1011,6 +1049,29 @@ function questionsGuidees(cible) {
       }
       return;
     }
+    if (w.etape === 'lieux-detail') {
+      const ls = w.lieux || [];
+      const plusieurs = ls.length > 1;
+      const toutes = C.activitesConnues(etat.evaluations);
+      const activitesDe = (l) => {
+        // D'abord ce que le patient a déjà fait à cet endroit (du plus fréquent au moins fréquent), puis ses activités habituelles
+        const compte = new Map();
+        for (const e of etat.evaluations) for (const x of C.lieuxDe(e)) if (x.activite && C.cleLieu(x) === C.cleLieu(l)) compte.set(x.activite, (compte.get(x.activite) || 0) + 1);
+        const ici = [...compte].sort((a, b) => b[1] - a[1]).map(([a]) => a);
+        const vus = new Set();
+        return [...(l.activite ? [l.activite] : []), ...ici, ...toutes].filter((a) => { const k = C.normaliserLibelle(a); if (!k || vus.has(k)) return false; vus.add(k); return true; }).slice(0, 6);
+      };
+      ecran(plusieurs ? 'Et à chaque endroit ?' : `À ${esc(C.libelleLieu(ls[0]))} ?`, ls.map((l, i) => `<div class="guide-lieu-detail">
+          <p class="guide-sous"><strong>${plusieurs ? `${i + 1}. ` : ''}${esc(C.libelleLieu(l))}</strong>${symbolesLieuHTML(l, 15)}</p>
+          ${plusieurs ? `<p class="doux guide-petit">Ton humeur là-bas, indépendamment de la note du jour <span>(facultatif ; sinon la note du jour s'applique)</span></p>
+          <div class="ressenti-echelle echelle-lieu" role="radiogroup" aria-label="Humeur à ${esc(C.libelleLieu(l))}, de 0 à 10">${C.NIVEAUX.map((nom, k) => `<button type="button" role="radio" aria-checked="${l.ressenti === k}" data-ressenti-lieu="${i}" data-v="${k}" title="${k} – ${esc(nom)}" aria-label="${k} – ${esc(nom)}" style="--c: var(--n${k})">${iconeMeteo(k, { taille: 20 })}<span>${k}</span></button>`).join('')}</div>` : ''}
+          <p class="doux guide-petit" style="margin-top:10px">Ce que tu y as fait <span>(facultatif)</span></p>
+          <div class="choix-puces">${activitesDe(l).map((a) => bouton(`data-activite-lieu="${i}" data-activite="${esc(a)}" aria-pressed="${C.normaliserLibelle(l.activite || '') === C.normaliserLibelle(a)}"`, `${esc(a)}${symbolesActiviteHTML(a, 14)}`, 'puce-choix')).join('')}</div>
+          <input type="text" class="guide-activite" data-activite-champ="${i}" maxlength="${C.LONGUEUR_ACTIVITE}" value="${esc(l.activite || '')}" placeholder="Autre activité…" aria-label="Activité à ${esc(C.libelleLieu(l))}" autocomplete="off" lang="fr" autocapitalize="sentences">
+        </div>`).join('') + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="lieux-ok">Continuer</button></p>',
+      { aide: plusieurs ? 'Dans l\'ordre de ta journée. Une humeur indiquée ici compte pour ce lieu dans les statistiques « Par lieu » et sur la carte du rapport.' : '' });
+      return;
+    }
     if (w.etape === 'paire') {
       const p = paires.find((x) => x.cle === w.paire);
       if (!p) { avancer(apresPaire()); return; }
@@ -1031,7 +1092,7 @@ function questionsGuidees(cible) {
         corps = motifs.map((m) => {
           const sous = C.sousMotifsParUsage(m, etat.motifs, etat.evaluations);
           return `<div class="guide-precision"><p class="guide-sous">${pastille(m.polarite)} ${esc(m.libelle)} : ${esc(m.questionSous || 'précise')} <span class="doux">(facultatif, plusieurs possibles)</span></p>
-            <div class="choix-puces">${sous.map((x) => bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix')).join('')}</div>
+            <div class="choix-puces">${sous.map((x) => (C.estPrecisionPropre(x) ? `<span class="puce-et-modifier">${bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix')}${boutonMaPrecision(x)}</span>` : bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix'))).join('')}</div>
             <span class="sous-autre guide-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-guide-ajouter="${esc(m.id)}">Ajouter</button></span></div>`;
         }).join('') + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="paire-ok">Continuer</button></p>';
       }
@@ -1061,7 +1122,14 @@ function questionsGuidees(cible) {
       return;
     }
     if (w.etape === 'prevision') {
-      ecran(`Et pour ${esc(prevLib)}, à combien t'attends-tu ?`, grilleNotes('data-prev', w.note));
+      ecran(`Et pour ${esc(prevLib)}, à combien t'attends-tu ?`, grilleNotes('data-prev', w.note), experience ? { aide: 'Ta prévision réaliste : ce que tu attends vraiment. L\'objectif vient juste après.' } : {});
+      return;
+    }
+    if (w.etape === 'objectif') {
+      const propose = C.objectifPropose(w.prevNote, experience ? experience.ecart : 1);
+      ecran(`Et ton objectif pour ${esc(prevLib)} ?`, `<div class="choix-liste">${bouton(`data-objectif="${propose}"`, `<strong>${propose} – ${esc(C.nomNiveau(propose))}</strong><span class="doux">ta prévision ${w.prevNote} + ${experience ? experience.ecart : 1}</span>`, 'choix choix-large choix-principal')}</div>
+        <p class="doux guide-ou">ou un autre objectif :</p>${grilleNotes('data-objectif', propose, 'prévision + 1')}`,
+      { aide: `Expérience demandée par ton thérapeute${experience && experience.jusquau ? ` jusqu'au ${C.formatDateCourte(experience.jusquau)}` : ''} : en plus de ce que tu attends, note l'humeur que tu vises. Le rapport compare ensuite les deux avec la note réelle.` });
       return;
     }
     if (w.etape === 'mot') {
@@ -1079,11 +1147,11 @@ function questionsGuidees(cible) {
       const sousDe = (m) => motifs.filter((x) => x.parentId === m.id);
       ecran('Tout est juste ?', `<dl class="guide-resume">
           <dt>Note</dt><dd>${iconeMeteo(w.note, { taille: 22 })} <strong>${esc(C.libelleNote(w.note))}</strong></dd>
-          <dt>Lieu${(w.lieux || []).length > 1 ? 'x' : ''}</dt><dd>${esc(C.libelleLieux(w.lieux || []))}</dd>
+          <dt>Lieu${(w.lieux || []).length > 1 ? 'x' : ''}</dt><dd>${(w.lieux || []).map((l) => `${esc(C.libelleLieu(l))}${[l.activite && l.activite.trim() ? esc(l.activite.trim()) : '', (w.lieux || []).length > 1 && Number.isInteger(l.ressenti) ? `humeur sur place ${l.ressenti}/10` : ''].filter(Boolean).length ? ` <span class="doux">(${[l.activite && l.activite.trim() ? esc(l.activite.trim()) : '', (w.lieux || []).length > 1 && Number.isInteger(l.ressenti) ? `humeur sur place ${l.ressenti}/10` : ''].filter(Boolean).join(', ')})</span>` : ''}`).join(' → ')}</dd>
           <dt>Situation</dt><dd>${esc(libSituation(w.situation))}</dd>
           <dt>Motifs</dt><dd>${racines.length ? `<ul>${racines.map((m) => `<li>${pastille(m.polarite)} ${esc(m.libelle)}${sousDe(m).length ? ` <span class="doux">: ${sousDe(m).map((x) => esc(x.libelle)).join(', ')}</span>` : ''}</li>`).join('')}</ul>` : '<span class="doux">aucun</span>'}</dd>
           ${w.evt ? `<dt>Événement</dt><dd>${pastille(w.evt.impact === 'positif' ? 'favorable' : 'defavorable')} ${esc(w.evt.titre)}</dd>` : ''}
-          <dt>Prévision</dt><dd>${esc(C.majuscule(prevLib))} : <strong>${esc(C.libelleNote(w.prevNote))}</strong></dd>
+          <dt>Prévision</dt><dd>${esc(C.majuscule(prevLib))} : <strong>${esc(C.libelleNote(w.prevNote))}</strong>${Number.isInteger(w.prevObjectif) ? `<br>Objectif : <strong>${esc(C.libelleNote(w.prevObjectif))}</strong>` : ''}</dd>
           ${w.mot.trim() ? `<dt>Commentaire</dt><dd>${esc(w.mot.trim())}</dd>` : ''}
         </dl>
         ${manquants.length ? `<div class="erreurs erreurs-rouge"><strong>Il manque encore :</strong><ul>${manquants.map((m) => `<li>${esc(m.message.replace(/ \((question \d|Contexte)\)/, ''))}</li>`).join('')}</ul></div>` : ''}
@@ -1094,7 +1162,7 @@ function questionsGuidees(cible) {
 
   // Formulaire complet : les réponses déjà données y sont reprises
   const versFormulaire = () => {
-    ui.brouillonGuide = { cible: idCible, note: w.note, lieux: w.lieux, situation: w.situation, motifs: w.choisis, prevNote: w.prevNote, explication: w.mot, evt: w.evt };
+    ui.brouillonGuide = { cible: idCible, note: w.note, lieux: w.lieux, situation: w.situation, motifs: w.choisis, prevNote: w.prevNote, prevObjectif: w.prevObjectif, explication: w.mot, evt: w.evt };
     aller(`#/evaluer/${cible.date}/${cible.creneau}/formulaire`);
   };
 
@@ -1108,7 +1176,7 @@ function questionsGuidees(cible) {
         date: cible.date, creneau: cible.creneau, note: w.note,
         motifs: w.choisis.map((id) => P.get(id)).filter(Boolean), autresMotifs: [],
         explication: w.mot, complement: '',
-        prevision: { note: w.prevNote, motif: '', motifs: [] },
+        prevision: { note: w.prevNote, motif: '', motifs: [], ...(Number.isInteger(w.prevObjectif) && Number.isInteger(w.prevNote) ? { objectif: w.prevObjectif } : {}) },
         lieux: w.lieux || [], situation: w.situation,
       };
       const erreurs = C.validerSaisie(saisie);
@@ -1146,6 +1214,10 @@ function questionsGuidees(cible) {
     // Saisies gardées au fil de la frappe : « Retour » les retrouve
     if (w.evt && e.target.id === 'g-evt-titre') w.evt = { ...w.evt, titre: e.target.value };
     if (w.evt && e.target.id === 'g-evt-faits') w.evt = { ...w.evt, faits: e.target.value };
+    if (e.target.dataset && e.target.dataset.activiteChamp !== undefined && w.lieux) {
+      const i = Number(e.target.dataset.activiteChamp);
+      w.lieux = w.lieux.map((l, k) => (k === i ? { ...l, activite: e.target.value } : l));
+    }
     if (e.target.id === 'g-mot') {
       w.mot = e.target.value;
       const b = contenu.querySelector('[data-guide="mot-ok"]');
@@ -1195,7 +1267,20 @@ function questionsGuidees(cible) {
     }
     if (d.situation) { w = { ...w, situation: { statut: d.situation, ...(w.situation && w.situation.statut === d.situation && w.situation.modalite ? { modalite: w.situation.modalite } : {}) } }; rendre(); return; }
     if (d.modalite) { w = { ...w, situation: { ...w.situation, modalite: d.modalite } }; rendre(); return; }
-    if (d.guide === 'contexte-ok') { avancer({ situation: C.normaliserSituation(w.situation), ...apresContexte() }); return; }
+    if (d.guide === 'contexte-ok') { avancer({ situation: C.normaliserSituation(w.situation), ...(besoinDetailLieux() ? { etape: 'lieux-detail' } : apresContexte()) }); return; }
+    if (d.ressentiLieu !== undefined) {
+      const i = Number(d.ressentiLieu), v = Number(d.v);
+      w = { ...w, lieux: w.lieux.map((l, k) => (k === i ? { ...l, ressenti: l.ressenti === v ? null : v } : l)) };
+      rendre();
+      return;
+    }
+    if (d.activiteLieu !== undefined) {
+      const i = Number(d.activiteLieu);
+      w = { ...w, lieux: w.lieux.map((l, k) => (k === i ? { ...l, activite: l.activite === d.activite ? '' : d.activite } : l)) };
+      rendre();
+      return;
+    }
+    if (d.guide === 'lieux-ok') { avancer(apresContexte()); return; }
     if (d.paire) {
       const p = paires.find((x) => x.cle === w.paire);
       if (d.paire === 'rien') { const x = { ...w, reponses: [...w.reponses, { cle: p.cle, choix: 'rien' }] }; avancer({ reponses: x.reponses, ...apresPaire(x) }); return; }
@@ -1214,6 +1299,16 @@ function questionsGuidees(cible) {
       return;
     }
     if (d.guideAjouter) { ajouterPrecisionGuide(el.parentElement.querySelector('[data-autre-sous]')); return; }
+    if (d.maPrecision) {
+      dialogueMaPrecision(etat.motifs.find((m) => m.id === d.maPrecision)).then((r) => {
+        if (!r) return;
+        const ancien = d.maPrecision;
+        w.choisis = w.choisis.filter((x) => x !== ancien);
+        if (r.cible && el.previousElementSibling && el.previousElementSibling.getAttribute('aria-pressed') === 'true' && !w.choisis.includes(r.cible.id)) w.choisis = [...w.choisis, r.cible.id];
+        rendre();
+      });
+      return;
+    }
     if (d.guide === 'paire-ok') { avancer(apresPaire()); return; }
     if (d.guide === 'autre-non') { avancer({ etape: 'evenement' }); return; }
     if (d.theme) { avancer({ etape: 'paire', paire: d.theme, choixPaire: null, retourAutre: true }); return; }
@@ -1229,10 +1324,17 @@ function questionsGuidees(cible) {
       avancer({ evt: { ...w.evt, titre, faits: document.getElementById('g-evt-faits').value.trim() }, etape: 'prevision' });
       return;
     }
-    if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), etape: 'mot' }); return; }
+    if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), prevObjectif: null, etape: experience ? 'objectif' : 'mot' }); return; }
+    if (d.objectif !== undefined) { avancer({ prevObjectif: Number(d.objectif), etape: 'mot' }); return; }
     if (d.guide === 'mot-ok' || d.guide === 'mot-passer') { avancer({ mot: d.guide === 'mot-passer' ? '' : (document.getElementById('g-mot').value || ''), etape: 'resume' }); return; }
     if (d.guide === 'enregistrer') { enregistrer(el); }
   };
+  // Plusieurs lieux, ou une sortie : humeur sur place (ressenti) et activité, à chaque endroit
+  function lieuxHabituels() { return [proposition.lieu, ...lieuxP.frequents.slice(0, 2)].filter(Boolean).map(C.cleLieu); }
+  function besoinDetailLieux(x = w) {
+    const ls = x.lieux || [];
+    return ls.length > 1 || (ls.length === 1 && !C.estItinerance(ls[0]) && !lieuxHabituels().includes(C.cleLieu(ls[0])));
+  }
   function apresContexte() { const q = prochaineQuestion(); return q ? { etape: 'paire', paire: q.cle, choixPaire: null, auto: 1 } : { etape: 'autre' }; }
   rendre();
 }
@@ -1256,7 +1358,7 @@ function explicationsMotifs(motifs) {
 }
 
 /** Met à jour, sous chaque groupe, la description des motifs cochés. */
-function brancherExplicationsMotifs(racine) {
+function brancherExplicationsMotifs(racine, idEvaluation = null) {
   racine.addEventListener('change', (e) => {
     const c = e.target;
     if (c.type !== 'checkbox' || !/^motif(-prev)?$/.test(c.name)) return;
@@ -1309,6 +1411,31 @@ function brancherExplicationsMotifs(racine) {
   racine.addEventListener('click', (e) => {
     const bAutre = e.target.closest('[data-ajouter-sous]');
     if (bAutre) { ajouterPrecision(bAutre.parentElement.querySelector('[data-autre-sous]')); return; }
+    const bMa = e.target.closest('[data-ma-precision]');
+    if (bMa) {
+      const id = bMa.dataset.maPrecision;
+      const label = bMa.previousElementSibling;
+      const caseM = label && label.querySelector('input[type="checkbox"]');
+      dialogueMaPrecision(etat.motifs.find((m) => m.id === id), { exclure: idEvaluation }).then((r) => {
+        if (!r || !caseM) return;
+        const etaitCoche = caseM.checked;
+        const groupe = bMa.closest('.sous-motifs');
+        const cibleExistante = r.cible && r.cible.id !== id && groupe ? groupe.querySelector(`input[value="${CSS.escape(r.cible.id)}"]`) : null;
+        if (r.supprime || cibleExistante) {
+          if (caseM.checked) { caseM.checked = false; caseM.dispatchEvent(new Event('change', { bubbles: true })); }
+          label.remove(); bMa.remove();
+          if (cibleExistante && etaitCoche && !cibleExistante.checked) { cibleExistante.checked = true; cibleExistante.dispatchEvent(new Event('change', { bubbles: true })); }
+        } else if (r.cible) {
+          caseM.value = r.cible.id;
+          const t = label.querySelector('.pastille');
+          if (t && t.nextSibling) t.nextSibling.textContent = r.cible.libelle;
+          bMa.dataset.maPrecision = r.cible.id;
+          bMa.setAttribute('aria-label', `Corriger ou supprimer « ${r.cible.libelle} »`);
+          caseM.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+      return;
+    }
     const b = e.target.closest('[data-raccourci]');
     if (!b) return;
     const groupe = b.closest('.motifs-zone');
@@ -1332,7 +1459,7 @@ function pucesMotifs(nom, selection, extra = []) {
     const sous = tous.filter((x) => x.parentId === m.id);
     // « Autre… » : une précision écrite ici devient une sous-catégorie, proposée ensuite comme les autres
     const autre = `<span class="sous-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-ajouter-sous="${esc(m.id)}">Ajouter</button></span>`;
-    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id))).join('')}${autre}</div>` : '');
+    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id)) + boutonMaPrecision(x)).join('')}${autre}</div>` : '');
   }).join('');
   const ordre = (a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr');
   const racines = tous.filter((m) => !estSous(m));
@@ -1362,7 +1489,11 @@ function formulaire(cible, ev) {
     note: ev ? ev.note : (pre && Number.isInteger(pre.note) ? pre.note : null),
     autres: ev ? ev.autresMotifs.map((a) => ({ ...a, ajouter: false, cle: C.nouvelId() })) : [],
     prevNote: ev && ev.prevision && Number.isInteger(ev.prevision.note) ? ev.prevision.note : (pre && Number.isInteger(pre.prevNote) ? pre.prevNote : null),
+    prevObjectif: ev && ev.prevision && Number.isInteger(ev.prevision.objectif) ? ev.prevision.objectif : (pre && Number.isInteger(pre.prevObjectif) ? pre.prevObjectif : null),
   };
+  // Expérience de prévision : champ « objectif » pendant la période (ou si l'évaluation en a déjà un)
+  const experienceF = C.experienceDu(etat.parametres.experiencesPrevision, cible.date);
+  const avecObjectif = !!experienceF || s.prevObjectif !== null;
   const parId = motifParId();
   const extra = ev ? ev.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
   const extraPrev = ev && ev.prevision ? ev.prevision.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
@@ -1445,6 +1576,8 @@ function formulaire(cible, ev) {
         ${curseurHTML('prevision', s.prevNote, `Note prévue pour ${prevLib}`)}
         <p class="consigne">Facultatif. <button type="button" class="bouton-discret" id="btn-prev-effacer" ${s.prevNote === null ? 'hidden' : ''}>Ne pas faire de prévision</button></p>
       </div>
+      ${avecObjectif ? `<div class="champ champ-objectif"><label for="prevision-objectif">Objectif <small class="doux">(expérience demandée par ton thérapeute${experienceF && experienceF.jusquau ? ` jusqu'au ${esc(C.formatDateCourte(experienceF.jusquau))}` : ''} : l'humeur que tu vises, en général ta prévision + ${experienceF ? experienceF.ecart : 1})</small></label>
+        <select id="prevision-objectif"><option value="">— pas d'objectif</option>${Array.from({ length: 11 }, (_, n) => `<option value="${n}" ${s.prevObjectif === n ? 'selected' : ''}>${n} – ${esc(C.nomNiveau(n))}</option>`).join('')}</select></div>` : ''}
       <div class="champ"><label for="prevision-motif">Pourquoi ? <small class="doux">(facultatif)</small></label>
         <textarea id="prevision-motif" spellcheck="true" lang="fr" autocapitalize="sentences" rows="2" maxlength="10000">${esc(ev && ev.prevision ? ev.prevision.motif : '')}</textarea></div>
       <details class="repli" ${selectionPrev.size ? 'open' : ''}><summary>Associer des motifs à cette prévision</summary>${pucesMotifs('motif-prev', selectionPrev, extraPrev)}</details>
@@ -1460,7 +1593,7 @@ function formulaire(cible, ev) {
   const form = document.getElementById('form-eval');
   const champLieux = L.brancherChampLieux(form, { initial: lieuxInitiaux, connus: C.lieuxConnus(etat.evaluations), activites: C.activitesConnues(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
   const champSituation = L.brancherChampSituation(form, 'situation');
-  brancherExplicationsMotifs(form);
+  brancherExplicationsMotifs(form, ev ? ev.id : null);
   const brancherCurseur = (idCurseur, idCiel, idNote, idNom, surChoix, idIcone) => {
     const c = document.getElementById(idCurseur);
     const maj = () => {
@@ -1483,7 +1616,11 @@ function formulaire(cible, ev) {
     document.getElementById('consigne-note').hidden = true;
     document.getElementById('securite-zero').hidden = v !== 0;
   }, 'icone-note');
+  const champObjectif = document.getElementById('prevision-objectif');
+  if (champObjectif) champObjectif.addEventListener('change', () => { s.prevObjectif = champObjectif.value === '' ? null : Number(champObjectif.value); champObjectif.dataset.touche = '1'; });
   const curseurPrev = brancherCurseur('prevision', 'ciel-prev', 'lecture-prev', 'lecture-prev-nom', (v) => {
+    // Objectif proposé automatiquement (prévision + 1) tant qu'il n'a pas été choisi à la main
+    if (champObjectif && experienceF && !champObjectif.dataset.touche) { s.prevObjectif = C.objectifPropose(v, experienceF.ecart); champObjectif.value = String(s.prevObjectif); }
     s.prevNote = v;
     document.getElementById('btn-prev-effacer').hidden = false;
   }, 'icone-prev');
@@ -1647,6 +1784,7 @@ function formulaire(cible, ev) {
         complement: document.getElementById('complement').value,
         prevision: {
           note: s.prevNote,
+          ...(Number.isInteger(s.prevObjectif) && s.prevNote !== null ? { objectif: s.prevObjectif } : {}),
           motif: document.getElementById('prevision-motif').value,
           motifs: resoudre(new Set([...form.querySelectorAll('[name="motif-prev"]:checked')].map((c) => c.value)), extraPrev),
         },
@@ -2141,10 +2279,48 @@ async function dialogueSimplification(plan) {
   vueMotifs();
 }
 
+/**
+ * Corriger ou supprimer une précision ajoutée soi-même (« Autre… »), aussi après l'envoi.
+ * Retourne null (annulé) ou { supprime, cible } pour mettre l'écran à jour.
+ */
+async function dialogueMaPrecision(m, { exclure = null } = {}) {
+  if (!m) return null;
+  const n = C.evaluationsAvecMotif(etat.evaluations.filter((e) => e.id !== exclure), m.id);
+  const parent = m.parentId ? etat.motifs.find((x) => x.id === m.parentId) : null;
+  const r = await dialogue(`<h2 id="dialogue-titre">Ta précision</h2>
+    ${parent ? `<p class="doux" style="margin-top:0">Sous « ${esc(parent.libelle)} »</p>` : ''}
+    <div class="champ"><label for="mp-lib">Libellé</label><input type="text" id="mp-lib" name="libelle" value="${esc(m.libelle)}" maxlength="120" autocomplete="off" lang="fr" spellcheck="true"></div>
+    ${n ? `<label class="interrupteur"><input type="checkbox" name="appliquer" checked> <span>Appliquer aussi aux ${n === 1 ? 'évaluation déjà enregistrée' : `${n} évaluations déjà enregistrées`} où elle est cochée <span class="doux">(l'historique de chaque évaluation en garde la trace)</span></span></label>` : '<p class="doux">Elle n\'est cochée dans aucune évaluation enregistrée.</p>'}
+    <div class="dialogue-actions"><button class="bouton-discret bouton-danger" value="supprimer" formnovalidate>Supprimer</button><button class="bouton-secondaire" value="non" formnovalidate>Annuler</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+  if (r.valeur !== 'oui' && r.valeur !== 'supprimer') return null;
+  const supprimer = r.valeur === 'supprimer';
+  const appliquer = !n || r.donnees.get('appliquer') === 'on';
+  if (supprimer && !(await confirmer(`Supprimer « ${m.libelle} » ?`, `Elle ne sera plus proposée.${n ? (appliquer ? ` Elle sera aussi retirée ${n === 1 ? 'de l\'évaluation où elle est cochée' : `des ${n} évaluations où elle est cochée`}.` : ' Les évaluations où elle est cochée la gardent.') : ''}`, 'Supprimer'))) return null;
+  let res;
+  try {
+    res = C.changerPrecisionPropre(m, { libelle: r.donnees.get('libelle'), supprimer, appliquer, evaluations: etat.evaluations, bibliotheque: etat.motifs, exclure, instant: maintenant() });
+  } catch (err) { annoncer(err.message); return null; }
+  if (!res.motifs.length && !res.supprimes.length) return { supprime: false, cible: m };
+  if (res.evaluations.length) await prendreInstantane('Avant correction d\'une précision');
+  for (const ev of res.evaluations) await enregistrerEvaluation(ev);
+  for (const x of res.motifs) await enregistrerMotif(x);
+  const le = new Date(maintenant()).toISOString();
+  for (const id of res.supprimes) {
+    await DB.supprimer('motifs', id);
+    etat.motifs = etat.motifs.filter((x) => x.id !== id);
+  }
+  if (res.supprimes.length) { await enregistrerParametres({ motifsSupprimes: [...(etat.parametres.motifsSupprimes || []), ...res.supprimes.map((id) => ({ id, le }))] }); planifierSynchro(); }
+  const corrigees = res.evaluations.length ? ` (${C.pluriel(res.evaluations.length, 'évaluation corrigée', 'évaluations corrigées')})` : '';
+  annoncer(supprimer ? `« ${m.libelle} » supprimée${corrigees}.` : res.supprimes.length ? `« ${m.libelle} » réunie avec « ${res.cible.libelle} »${corrigees}.` : `Renommée en « ${res.cible.libelle} »${corrigees}.`);
+  return { supprime: supprimer, cible: supprimer ? null : res.cible };
+}
+const boutonMaPrecision = (m) => (C.estPrecisionPropre(m) ? `<button type="button" class="puce-modifier" data-ma-precision="${esc(m.id)}" aria-label="Corriger ou supprimer « ${esc(m.libelle)} »" title="Corriger ou supprimer">✎</button>` : '');
+
 async function actionMotif(action, id) {
   const m = etat.motifs.find((x) => x.id === id);
   if (!m) return;
   const le = new Date(maintenant()).toISOString();
+  if ((action === 'motif-modifier' || action === 'motif-supprimer') && C.estPrecisionPropre(m)) { await dialogueMaPrecision(m); vueMotifs(); return; }
   if (action === 'motif-modifier') {
     const r = await dialogue(`<h2 id="dialogue-titre">Modifier le motif</h2>
       <div class="champ"><label for="m-lib">Libellé</label><input type="text" id="m-lib" name="libelle" value="${esc(m.libelle)}" maxlength="120" required autofocus></div>
@@ -2279,6 +2455,8 @@ function vueTextes([idCible]) {
         <small class="doux compte-version" data-compte="${k}">${compteVersion(r ? r[k] : '')}</small>
         <details class="repli" ${cible ? 'open' : ''}><summary>Ton texte original</summary><p class="texte-libre encre-2">${esc(t[k])}</p></details>
       </div>`).join('')}
+      ${auto && r ? `<div class="champ" style="margin-top:14px"><label for="t-${esc(ev.id)}-remarque">Pas d'accord avec cette version ? Dis ce qui ne va pas <span class="doux">(facultatif, pour la nouvelle proposition)</span></label>
+        <textarea id="t-${esc(ev.id)}-remarque" data-remarque rows="2" maxlength="1000" lang="fr" spellcheck="true" placeholder="Ex. : la phrase sur les enfants est sortie de son contexte ; le sevrage est répété deux fois"></textarea></div>` : ''}
       <div class="rangee">
         <button type="button" class="bouton" data-texte="valider">${r && r.statut === 'validee' ? 'Enregistrer et valider' : 'Valider cette version'}</button>
         ${auto ? `<button type="button" class="bouton-secondaire" data-texte="proposer">${r ? 'Nouvelle proposition' : 'Préparer automatiquement'}</button>` : ''}
@@ -2308,7 +2486,7 @@ function vueTextes([idCible]) {
       <div class="bloc">
         <h2>Préparation des versions</h2>
         ${auto ? `<p>Préparation automatique activée avec ${esc(C.majuscule(FOURNISSEURS[etat.parametres.ia.fournisseur].nom))} : chaque nouvelle évaluation commentée reçoit une proposition, que tu valides.</p>
-          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (redites possibles entre tes motifs et ton commentaire, motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). La nouvelle méthode écrit chaque point une seule fois, en réunissant le motif et ce que tu en dis. Tu peux les refaire : elles redeviendront des propositions à relire et valider ; sinon elles restent valables telles quelles.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
+          ${anciennes.length ? `<div class="bandeau bandeau-laiton"><strong>Nouvelle méthode de rédaction</strong>${anciennes.length > 1 ? `${anciennes.length} versions ont été préparées` : 'Une version a été préparée'} avec une méthode précédente (redites possibles entre tes motifs et ton commentaire, motifs absents, texte à la première personne ou de plus de ${C.LONGUEUR_VERSION} caractères). La nouvelle méthode suit ton commentaire dans son ordre, garde chaque fait dans son contexte et écrit chaque point une seule fois, en réunissant le motif et ce que tu en dis. Tu peux les refaire : elles redeviendront des propositions à relire et valider ; sinon elles restent valables telles quelles.<p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-anciennes">Refaire ${anciennes.length > 1 ? `les ${anciennes.length} versions` : 'cette version'}</button></p></div>` : ''}
           ${auto && autreStyle.length ? `<div class="bandeau"><strong>Style de rédaction : ${esc(styleActuel.libelle)}</strong>${autreStyle.length > 1 ? `${autreStyle.length} versions validées ont été rédigées` : 'Une version validée a été rédigée'} dans un autre style. Elles restent valables telles quelles ; tu peux les refaire dans le style choisi (elles redeviendront des propositions à relire). <a href="#/reglages/ia">Changer de style</a><p style="margin:10px 0 0"><button type="button" class="bouton-secondaire" id="btn-refaire-style">Refaire ${autreStyle.length > 1 ? `les ${autreStyle.length} versions` : 'cette version'} dans ce style</button></p></div>` : ''}
           ${aTraiter.length ? `<button type="button" class="bouton" id="btn-preparer-tout">Préparer maintenant ${aTraiter.length > 1 ? `les ${aTraiter.length} versions` : 'la version manquante'}</button>` : '<p class="doux">Aucune version à préparer.</p>'}`
     : `<p>Pour que les propositions soient préparées automatiquement après chaque évaluation, active la préparation automatique dans les Réglages.</p><a class="bouton" href="#/reglages/ia">Activer la préparation automatique</a>`}
@@ -2402,7 +2580,8 @@ function vueTextes([idCible]) {
       }
       if (b.dataset.texte === 'proposer') {
         b.disabled = true; b.textContent = 'Préparation en cours…';
-        const n = await preparerVersions([ev], { silencieux: false, force: true });
+        const remarque = (carteEl.querySelector('[data-remarque]') || {}).value || '';
+        const n = await preparerVersions([ev], { silencieux: false, force: true, remarques: remarque.trim() ? { [ev.id]: remarque.trim() } : null });
         if (n) annoncer('Nouvelle proposition prête : relis-la avant de valider.');
         rafraichir();
         return;
@@ -2447,14 +2626,14 @@ async function enregistrerPropositions(propositions, raison) {
 }
 
 /** Retourne le nombre de propositions enregistrées, ou null en cas d'échec. */
-async function preparerVersions(evaluations, { silencieux = true, force = false } = {}) {
+async function preparerVersions(evaluations, { silencieux = true, force = false, remarques = null } = {}) {
   const liste = evaluations.filter((e) => aDesTextesIA(e) && (force || aReformulerIA(e)));
   if (!liste.length || !iaPrete()) return 0;
   if (ui.preparationEnCours) return 0;
   ui.preparationEnCours = true;
   try {
     const { reformuler, FOURNISSEURS: F } = await import('./ia.js');
-    const { propositions } = await reformuler(etat.parametres, liste, { evenements: etat.parametres.evenements || [], motifs: etat.motifs });
+    const { propositions } = await reformuler(etat.parametres, liste, { evenements: etat.parametres.evenements || [], motifs: etat.motifs, remarques });
     await enregistrerPropositions(propositions, `Proposition de version professionnelle préparée automatiquement (${F[etat.parametres.ia.fournisseur].nom})`);
     return propositions.length;
   } catch (e) {
@@ -3413,6 +3592,21 @@ async function vueReglages([section] = []) {
         <p class="doux" style="margin:8px 0 0">Les jours d'avant gardent leur rythme : le rapport ne compte comme attendues que les évaluations prévues par le rythme de chaque jour, et l'indique en tête.</p>
       </fieldset>`;
   })()}
+  ${(() => {
+    const exp = C.experienceDu(p.experiencesPrevision, aujourdhui());
+    const toutes = C.normaliserExperiences(p.experiencesPrevision);
+    return `<fieldset class="champ" id="bloc-experience" style="margin-bottom:14px"><legend style="font-weight:600;margin-bottom:6px">Expérience de prévision <span class="doux">(objectif)</span></legend>
+        <p class="doux" style="margin:0 0 8px">À la question de prévision, note ce que tu attends vraiment, puis l'humeur que tu vises (par défaut : ta prévision + 1). Le rapport compare les deux avec la note réelle.</p>
+        <label class="interrupteur"><input type="checkbox" id="exp-active" ${exp ? 'checked' : ''}> <span>Demander aussi un objectif</span></label>
+        <div class="rangee" style="margin-top:10px;align-items:flex-end">
+          <div class="champ" style="margin:0"><label for="exp-depuis">Du</label><input type="date" id="exp-depuis" value="${exp ? exp.depuis : aujourdhui()}"></div>
+          <div class="champ" style="margin:0"><label for="exp-jusquau">au <small class="doux">(dernière prévision)</small></label><input type="date" id="exp-jusquau" value="${exp ? exp.jusquau : (() => { const pr = C.prochaineSeance(seances(), maintenant()); return pr ? C.ajouterJours(pr.date, -1) : ''; })()}"></div>
+          <div class="champ" style="margin:0"><label for="exp-ecart">Objectif</label><select id="exp-ecart">${[1, 2, 3].map((k) => `<option value="${k}" ${(exp ? exp.ecart : 1) === k ? 'selected' : ''}>prévision + ${k}</option>`).join('')}</select></div>
+          <button type="button" class="bouton-secondaire" id="btn-experience">Enregistrer</button>
+        </div>
+        ${toutes.length ? `<ul class="doux" style="margin:10px 0 0;padding-left:18px">${toutes.map((e) => `<li>Du ${esc(C.formatDateCourte(e.depuis))}${e.jusquau ? ` au ${esc(C.formatDateCourte(e.jusquau))}` : ''} : prévision + ${e.ecart}${e.arreteeLe ? ` (arrêtée le ${esc(C.formatDateCourte(e.arreteeLe))})` : ''}</li>`).join('')}</ul>` : ''}
+      </fieldset>`;
+  })()}
       <fieldset class="champ" style="margin-bottom:12px"><legend style="font-weight:600;margin-bottom:6px">Pour une nouvelle évaluation, ouvrir</legend>
         <label class="interrupteur"><input type="radio" name="mode-saisie" value="questions" ${p.modeSaisie !== 'formulaire' ? 'checked' : ''}> <span><strong>Les questions guidées</strong> <span class="doux">– une question à la fois, réponses en un geste, dans l'ordre qui compte le plus pour toi (environ une minute)</span></span></label>
         <label class="interrupteur" style="margin-top:8px"><input type="radio" name="mode-saisie" value="formulaire" ${p.modeSaisie === 'formulaire' ? 'checked' : ''}> <span><strong>Le formulaire complet</strong> <span class="doux">– toutes les questions sur une page</span></span></label>
@@ -3534,6 +3728,25 @@ async function vueReglages([section] = []) {
   if (caseAlerte) caseAlerte.addEventListener('change', async (e) => {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
+  });
+  document.getElementById('btn-experience').addEventListener('click', async () => {
+    const actif = document.getElementById('exp-active').checked;
+    const liste = C.normaliserExperiences(etat.parametres.experiencesPrevision);
+    const encours = C.experienceDu(liste, aujourdhui());
+    let suite;
+    if (!actif) {
+      if (!encours) { annoncer('Aucune expérience en cours.'); return; }
+      suite = liste.map((e) => (e.id === encours.id ? { ...e, arreteeLe: aujourdhui() } : e));
+    } else {
+      const depuis = document.getElementById('exp-depuis').value, jusquau = document.getElementById('exp-jusquau').value;
+      if (!C.estDateValide(depuis)) { annoncer('Choisis la date de début.'); return; }
+      if (jusquau && jusquau < depuis) { annoncer('La date de fin doit suivre la date de début.'); return; }
+      const e = { id: encours ? encours.id : `exp-${depuis}`, depuis, jusquau: jusquau || '', ecart: Number(document.getElementById('exp-ecart').value) || 1 };
+      suite = [...liste.filter((x) => x.id !== e.id), e];
+    }
+    await enregistrerParametres({ experiencesPrevision: C.normaliserExperiences(suite) });
+    annoncer(actif ? 'Expérience enregistrée : la question de prévision demandera aussi un objectif.' : 'Expérience arrêtée.');
+    vueReglages(['questionnaire']);
   });
   document.getElementById('btn-rythme').addEventListener('click', async () => {
     const choix = document.querySelector('[name="rythme"]:checked').value;
@@ -3899,7 +4112,7 @@ async function demarrer() {
   majEtatSynchro();
   enregistrerServiceWorker();
   // Après une courte attente (la synchronisation peut apporter une séance saisie sur un autre appareil)
-  if (etat.parametres) setTimeout(() => verifierRappelsOuverture().catch((e) => console.warn(e)), 2500);
+  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));

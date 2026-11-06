@@ -574,6 +574,10 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .guide-question { font-size: 1.45rem; line-height: 1.25; margin: 0 0 6px; outline: none; }
 .guide-aide { margin: 0 0 12px; font-size: .92rem; }
 .guide-corps { margin-top: 12px; }
+.guide-lieu-detail { padding: 12px 0; border-bottom: 1px solid var(--filet); }
+.guide-lieu-detail:last-of-type { border-bottom: 0; }
+.guide-petit { font-size: .9rem; margin: 2px 0 6px; }
+.guide-activite { margin-top: 8px; width: 100%; }
 .guide-sous { font-weight: 600; margin: 14px 0 8px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .guide-ou { margin: 12px 0 4px; }
 .guide-bas { margin-top: 22px; }
@@ -593,6 +597,10 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .gn-marque { grid-column: 1 / -1; font-size: .75rem; color: var(--laiton); font-weight: 600; }
 .choix-marque { border-color: var(--laiton); border-width: 2px; }
 .choix-puces { display: flex; flex-wrap: wrap; gap: 8px; }
+.puce-et-modifier { display: inline-flex; align-items: center; gap: 2px; }
+.puce-modifier { font: inherit; font-size: 1rem; min-width: 34px; min-height: 34px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: var(--encre-2); cursor: pointer; vertical-align: middle; }
+.puce-modifier:hover, .puce-modifier:focus-visible { background: var(--fond-doux, rgba(0,0,0,.06)); color: var(--encre); }
+.bouton-danger { color: #B3261E; margin-right: auto; }
 .puce-choix { font: inherit; font-size: .95rem; min-height: 42px; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--filet-fort); background: var(--surface); color: var(--encre); cursor: pointer; }
 .puce-choix[aria-pressed="true"] { background: var(--laiton-fond, #f3ead8); border-color: var(--laiton); font-weight: 600; }
 .puce-choix[aria-pressed="true"]::before { content: "✓ "; color: var(--laiton); }

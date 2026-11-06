@@ -1736,6 +1736,23 @@ export async function genererRapport(PDFLib, donnees, options) {
     } else { R.section(++numSection, 'Comparaison entre prévisions et réalité'); tableauPrev(); }
   }
 
+  // Expérience de prévision : objectif (prévision + 1, demandée par le thérapeute)
+  {
+    const rx = C.resultatsExperience(evals, toutes);
+    if (rx.lignes.length) {
+      const exps = C.normaliserExperiences(parametres.experiencesPrevision).filter((e) => e.depuis <= fin && (!e.jusquau || e.jusquau >= debut));
+      const ecartTxt = (x) => (x === null ? '—' : x === 0 ? '0' : C.signeFr(x, 1));
+      R.section(++numSection, 'Expérience : prévision et objectif', 120);
+      R.paragraphe(`${exps.length ? `Du ${exps.map((e) => `${C.formatDateCourte(e.depuis)}${e.jusquau ? ` au ${C.formatDateCourte(e.jusquau)}` : ''}`).join(', ')}, à` : 'À'} la demande du thérapeute, le patient a noté pour chaque prévision ce qu'il attendait réellement (« prévue ») et l'humeur qu'il visait (« objectif », en général la prévision + ${exps.length ? exps[0].ecart : 1}). Le tableau compare les deux avec la note constatée.`, { taille: 9.5 });
+      R.tableau(
+        [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Pour', part: 1.5 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Objectif', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Objectif atteint', part: 1.2 }],
+        rx.lignes.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, `${l.objectif}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, l.atteint === null ? 'pas encore' : l.atteint ? (l.reelle > l.objectif ? 'oui, dépassé' : 'oui') : 'non']),
+      );
+      const n = rx.nombreComparees;
+      R.paragraphe(n ? `Sur ${C.pluriel(n, 'prévision comparée', 'prévisions comparées')} : objectif atteint ou dépassé ${C.pluriel(rx.atteints, 'fois', 'fois')} ; note constatée supérieure à la prévision ${C.pluriel(rx.auDessusAttendue, 'fois', 'fois')}, égale ${C.pluriel(rx.egalAttendue, 'fois', 'fois')}. Écart moyen de la note constatée par rapport à la prévision : ${ecartTxt(rx.ecartAttendueMoyen)} ; par rapport à l'objectif : ${ecartTxt(rx.ecartObjectifMoyen)}.${rx.avant.nombre ? ` Avant l'expérience, cet écart par rapport à la prévision était de ${ecartTxt(rx.avant.ecartMoyen)} en moyenne (${C.pluriel(rx.avant.nombre, 'prévision', 'prévisions')}).` : ''} Ces chiffres sont descriptifs : sur peu de jours, ils ne permettent pas de conclure à un effet de l'objectif.` : 'Aucune prévision de l\'expérience ne peut encore être comparée à une note constatée.', { taille: 9.5 });
+    }
+  }
+
   // ===== Partie V – Conclusion et points à aborder
   await R.partie('V', 'Conclusion', { besoin: 200 });
   // 11. Synthèse neutre

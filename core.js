@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.35.0';
+export const VERSION_APP = '1.36.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -760,6 +760,58 @@ export function creerSousMotifPropre(parent, libelle, bibliotheque, instant = Da
   return { motif: { ...creerMotif(l, parent.polarite, instant, ordre), parentId: parent.id, propre: true, origine: 'precision' }, nouveau: true };
 }
 
+/**
+ * Corrige ou supprime une précision ajoutée par le patient (« Autre… »).
+ * - libelle : nouveau libellé ; s'il existe déjà sous le même motif, les deux sont réunies.
+ * - supprimer : la précision est retirée de la bibliothèque.
+ * - appliquer : les évaluations déjà enregistrées où elle est cochée sont corrigées aussi (avec une trace dans leur historique).
+ * Retourne { motifs, supprimes, evaluations, cible, echecs } : ce qu'il faut enregistrer.
+ */
+export function changerPrecisionPropre(m, { libelle = null, supprimer = false, appliquer = true, evaluations = [], bibliotheque = [], exclure = null, instant = Date.now() } = {}) {
+  if (!m) throw new Error('Précision introuvable.');
+  const le = new Date(instant).toISOString();
+  const res = { motifs: [], supprimes: [], evaluations: [], cible: null, echecs: 0 };
+  let remplacer = null; // (liste de motifs d'une évaluation) → nouvelle liste
+  let raison;
+  if (supprimer) {
+    res.supprimes.push(m.id);
+    remplacer = (l) => l.filter((x) => x.id !== m.id);
+    raison = `Précision « ${m.libelle} » supprimée par le patient`;
+  } else {
+    const l = String(libelle || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!l) throw new Error('Le libellé ne peut pas être vide.');
+    const soeur = bibliotheque.find((x) => x.id !== m.id && x.parentId && x.parentId === m.parentId && normaliserLibelle(x.libelle) === normaliserLibelle(l));
+    if (soeur) {
+      const cible = soeur.actif && !soeur.regroupeDans ? soeur : { ...soeur, actif: true, regroupeDans: null, modifieLeUtc: le };
+      if (cible !== soeur) res.motifs.push(cible);
+      res.supprimes.push(m.id);
+      res.cible = cible;
+      const inst = instantaneMotif(cible);
+      remplacer = (liste) => { const out = liste.map((x) => (x.id === m.id ? inst : x)); return out.filter((x, i) => out.findIndex((y) => y.id === x.id) === i); };
+      raison = `Précision « ${m.libelle} » réunie avec « ${cible.libelle} » par le patient`;
+    } else {
+      if (l === m.libelle) return res;
+      const cible = { ...m, libelle: l, modifieLeUtc: le };
+      res.motifs.push(cible);
+      res.cible = cible;
+      remplacer = (liste) => liste.map((x) => (x.id === m.id ? instantaneMotif(cible) : x));
+      raison = `Précision « ${m.libelle} » renommée en « ${l} » par le patient`;
+    }
+  }
+  if (appliquer) {
+    for (const ev of evaluations) {
+      if (!ev || ev.id === exclure || !(ev.motifs || []).some((x) => x.id === m.id)) continue;
+      try {
+        const nouvelle = modifierEvaluation(ev, { motifs: remplacer(ev.motifs) }, raison, instant);
+        if (nouvelle) res.evaluations.push(nouvelle);
+      } catch { res.echecs++; }
+    }
+  }
+  return res;
+}
+/** Nombre d'évaluations où un motif est coché. */
+export const evaluationsAvecMotif = (evaluations, id) => (evaluations || []).filter((e) => (e.motifs || []).some((x) => x.id === id)).length;
+
 /** Motifs à enregistrer pour appliquer la simplification (renommés, regroupés, créés, rattachés). Rien n'est supprimé. */
 export function appliquerSimplification(motifs, plan, instant = Date.now()) {
   const le = new Date(instant).toISOString();
@@ -1431,6 +1483,8 @@ export function validerSaisie(s, { maxLieux = MAX_LIEUX } = {}) {
   if (!Number.isInteger(s.note) || s.note < 0 || s.note > 10) erreurs.push('Choisissez une note entière entre 0 et 10 pour la question 1.');
   if (s.prevision && s.prevision.note !== null && s.prevision.note !== undefined) {
     if (!Number.isInteger(s.prevision.note) || s.prevision.note < 0 || s.prevision.note > 10) erreurs.push('La note prévue doit être un entier entre 0 et 10.');
+    const o = s.prevision.objectif;
+    if (o !== null && o !== undefined && (!Number.isInteger(o) || o < 0 || o > 10)) erreurs.push('L\'objectif doit être un entier entre 0 et 10.');
   }
   if (!estDateValide(s.date)) erreurs.push('Date invalide.');
   if (!CRENEAUX.includes(s.creneau)) erreurs.push('Créneau invalide.');
@@ -1466,6 +1520,8 @@ function construirePrevision(date, creneau, prevision) {
     niveau: nomNiveau(prevision.note),
     motif: nettoyerTexte(prevision.motif),
     motifs: (prevision.motifs || []).map(instantaneMotif),
+    // Expérience « objectif » (demandée par le thérapeute) : note visée, en plus de la note attendue
+    ...(Number.isInteger(prevision.objectif) ? { objectif: prevision.objectif } : {}),
   };
 }
 
@@ -1591,7 +1647,7 @@ export function textesOriginaux(ev) {
  * Méthode de rédaction des versions pour le thérapeute : 3 = complète, motifs intégrés, traduite, toujours « le patient » ;
  * 4 = idem, 500 caractères au plus par texte, sans redite quand des motifs se ressemblent.
  */
-export const METHODE_VERSION = 5;
+export const METHODE_VERSION = 6;
 
 /**
  * Styles de rédaction proposés au patient (Réglages). La consigne s'ajoute aux règles communes
@@ -1729,7 +1785,7 @@ export function textesPourRapport(ev, mode = 'reformule', evenements = null) {
 }
 
 /** Ce qui est transmis pour la rédaction : textes et motifs cochés, sans nom, note, date, lieu ni situation. */
-export function entreesReformulation(evaluations, { evenements = null, bibliotheque = [] } = {}) {
+export function entreesReformulation(evaluations, { evenements = null, bibliotheque = [], remarques = null } = {}) {
   return trierChrono(evaluations).filter((e) => aDesTextes(e, evenements)).map((e) => {
     const t = textesOriginaux(e);
     // Sous-catégorie présentée avec son motif, sans le motif seul (pas de « manque » si seule la culpabilité est cochée)
@@ -1741,9 +1797,32 @@ export function entreesReformulation(evaluations, { evenements = null, bibliothe
       explication: t.explication, complement: t.complement,
       prevision: t.prevision, motifs_prevision: ((e.prevision && e.prevision.motifs) || []).map((m) => m.libelle),
       ...(evenementsPourRedaction(e, evenements).length ? { evenements_marquants: evenementsPourRedaction(e, evenements) } : {}),
+      ...(remarques && remarques[e.id] && String(remarques[e.id]).trim() ? {
+        remarque_du_patient: String(remarques[e.id]).trim().slice(0, 1000),
+        ...(e.reformulation ? { version_precedente: { explication: e.reformulation.explication || '', complement: e.reformulation.complement || '', prevision: e.reformulation.prevision || '' } } : {}),
+      } : {}),
     };
   });
 }
+
+/**
+ * Phrases qui disent deux fois la même chose dans une proposition (« explication », « complement », « prevision » ensemble) :
+ * mêmes mots porteurs de sens pour l'essentiel. Retourne les paires [phrase, phrase].
+ */
+export function redites(p) {
+  const phrases = ['explication', 'complement', 'prevision'].flatMap((k) => String((p && p[k]) || '').split(/(?<=[.!?…])\s+|\s*;\s*/))
+    .map((t) => t.trim()).filter(Boolean).map((t) => ({ t, m: motsCles(t).filter((x) => !MOTS_SANS_POIDS.has(x)) })).filter((x) => x.m.length >= 3);
+  const paires = [];
+  for (let i = 0; i < phrases.length; i++) {
+    for (let j = i + 1; j < phrases.length; j++) {
+      const a = phrases[i].m, b = phrases[j].m;
+      const commun = a.filter((x) => b.includes(x)).length;
+      if (commun >= 3 && commun / Math.min(a.length, b.length) >= 0.8) paires.push([phrases[i].t, phrases[j].t]);
+    }
+  }
+  return paires;
+}
+const MOTS_SANS_POIDS = new Set(['patient', 'il', 'elle', 'signale', 'indique', 'mentionne', 'evoque', 'dit', 'se', 'aussi', 'egalement', 'journee', 'soiree', 'jour', 'ce', 'cette', 'tre', 'avoir', 'fait', 'plus', 'tres']);
 
 /** Pronoms et possessifs de la première personne (hors citations) : la version doit parler du « patient ». */
 const PREMIERE_PERSONNE = /(^|[^\p{L}])(?:(?:je|moi|me|mon|ma|mes|nous|notre|nos)(?=[^\p{L}]|$)|[jm]['’](?=\p{L}))/iu;
@@ -1758,11 +1837,12 @@ export function instructionsReformulation({ style: idStyle = 'sobre' } = {}) {
   return `Tu es un rédacteur francophone de très haut niveau. Tu reçois des entrées du journal d'humeur d'un patient, destinées à son psychothérapeute. Le patient relira et validera chaque texte.
 
 Pour chaque entrée, rédige en français, ${style}, dans une langue soignée, précise et naturelle, d'un registre professionnel, neutre et factuel :
-- « explication » : un seul texte, organisé par thème, qui réunit les éléments cochés par le patient (« motifs_favorables », « motifs_defavorables », « motifs_mixtes »), le contenu du texte « explication » et les « evenements_marquants » s'il y en a (titre, description, ressenti, impact positif ou négatif indiqué par le patient). Méthode :
-  1. Repère les thèmes : chaque motif coché est un thème ; un passage du commentaire ou un événement qui parle du même sujet appartient à ce thème (par exemple le motif « Sevrage : difficultés – Prise au besoin » et la phrase « j'ai dû prendre un comprimé en plus ce soir »).
-  2. Écris chaque thème une seule fois, en une phrase qui fusionne le motif et les détails du commentaire ou de l'événement (« Le patient signale des difficultés de sevrage : il a dû prendre un comprimé supplémentaire au besoin dans la soirée »), au lieu de citer le motif puis de le répéter avec les mots du commentaire.
-  3. Les motifs dont le commentaire ne dit rien sont présentés brièvement, regroupés (favorables ensemble, défavorables ensemble) ; le contenu du commentaire qui ne correspond à aucun motif est ensuite repris en entier.
+- « explication » : un seul texte qui réunit le commentaire du patient (« explication »), les éléments qu'il a cochés (« motifs_favorables », « motifs_defavorables », « motifs_mixtes ») et les « evenements_marquants » s'il y en a (titre, description, ressenti, impact positif ou négatif indiqué par le patient). Méthode :
+  1. Pars du commentaire du patient : garde son fil et son ordre. Chaque fait reste dans son contexte d'origine : avec la personne, le moment, le lieu, la cause ou la conséquence que le patient y associe (« après la course, il était épuisé mais content » ne devient jamais deux faits séparés). Ne coupe jamais une phrase du patient pour en ranger les morceaux sous des thèmes différents, et ne rapproche pas deux faits que le patient n'a pas liés.
+  2. Un motif coché dont le commentaire parle s'intègre à la phrase du commentaire qui en parle, en une seule mention qui réunit le motif et les détails (motif « Sevrage : difficultés – Prise au besoin » et « j'ai dû prendre un comprimé en plus ce soir » → « Il signale des difficultés de sevrage : il a dû prendre un comprimé supplémentaire au besoin dans la soirée »). Ne rattache un passage à un motif que s'ils parlent clairement du même sujet ; dans le doute, laisse le passage tel quel, à sa place.
+  3. Les motifs dont le commentaire ne dit rien sont mentionnés ensuite, brièvement et regroupés (favorables ensemble, défavorables ensemble), sans leur inventer de lien avec le reste.
   Une sous-catégorie est donnée avec son motif sous la forme « motif – précision » : n'écris que ce que dit la précision (par exemple « Mes enfants : ce qui me pèse – Culpabilité : je me suis isolé » signifie seulement que le patient s'est isolé et en éprouve de la culpabilité, sans manque). S'il n'y a que des motifs, une ou deux phrases suffisent. S'il n'y a ni motifs, ni explication, ni événement, renvoie une chaîne vide.
+  Si une « remarque_du_patient » accompagne l'entrée, c'est sa critique de la version précédente (« version_precedente ») : corrige exactement ce qu'il signale, sans rien ajouter d'autre.
 - « complement » : le contenu du complément qui n'est pas déjà dans « explication » ; chaîne vide s'il est vide ou si tout y figure déjà.
 - « prevision » : la raison de la prévision, en y intégrant les « motifs_prevision » s'il y en a, sans répéter ce qui est déjà dit dans « explication » ; chaîne vide si les deux sont vides.
 
@@ -1833,6 +1913,11 @@ export function donneesSynthese(evaluations, motifs, { debut, fin, instant = Dat
     motifs_favorables: freq.filter((f) => f.polarite === 'favorable').map((f) => ({ motif: f.libelle, fois: f.nombre })),
     motifs_defavorables: freq.filter((f) => f.polarite === 'defavorable').map((f) => ({ motif: f.libelle, fois: f.nombre })),
     previsions: { comparees: prev.nombreComparees, identiques: prev.exactes, realite_superieure: prev.realiteSuperieure, realite_inferieure: prev.realiteInferieure, ecart_moyen: arrondi(prev.ecartMoyen) },
+    ...(() => {
+      // Expérience « objectif » (prévision + 1, demandée par le thérapeute) : chiffres agrégés seulement
+      const x = resultatsExperience(evaluations, evaluations);
+      return x.lignes.length ? { experience_objectif: { description: 'à chaque prévision, le patient note aussi l\'humeur qu\'il vise (objectif, en général prévision + 1)', prevision_comparees: x.nombreComparees, objectif_atteint_ou_depasse: x.atteints, constatee_superieure_a_la_prevision: x.auDessusAttendue, ecart_moyen_constate_moins_prevu: arrondi(x.ecartAttendueMoyen), ecart_moyen_constate_moins_objectif: arrondi(x.ecartObjectifMoyen), avant_experience: { comparees: x.avant.nombre, ecart_moyen_constate_moins_prevu: arrondi(x.avant.ecartMoyen) } } } : {};
+    })(),
     verifications_securite: evals.filter((e) => e.securite && e.securite.declenchee).length,
     // Avec l'accord du patient : événements marquants, rattachés à un jour numéroté (sans date ni heure)
     ...(Array.isArray(evenements) ? (() => {
@@ -2309,6 +2394,47 @@ export function comparaisonsPrevisions(evaluations, toutesEvaluations = evaluati
     // Nombre de prévisions pour chaque couple (prévue, constatée), pour le nuage de points
     couples: [...comparees.reduce((m, l) => { const k = `${l.prevue}|${l.reelle}`; m.set(k, (m.get(k) || 0) + 1); return m; }, new Map())]
       .map(([k, n]) => { const [p, r] = k.split('|').map(Number); return { prevue: p, reelle: r, nombre: n }; }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Expérience de prévision : en plus de la note attendue, le patient note un objectif (attendue + 1 par défaut),
+// pour voir dans quelle mesure il peut orienter son humeur à l'avance. Réglage partagé :
+// experiencesPrevision: [{ id, depuis, jusquau, ecart }] (dates des évaluations où la prévision est faite).
+
+export function normaliserExperiences(x) {
+  return (Array.isArray(x) ? x : []).filter((e) => e && estDateValide(e.depuis) && (!e.jusquau || (estDateValide(e.jusquau) && e.jusquau >= e.depuis)))
+    .map((e) => ({ id: String(e.id || `exp-${e.depuis}`), depuis: e.depuis, jusquau: e.jusquau || '', ecart: Number.isInteger(e.ecart) && e.ecart >= 1 && e.ecart <= 3 ? e.ecart : 1, ...(e.arreteeLe ? { arreteeLe: e.arreteeLe } : {}) }))
+    .sort((a, b) => (a.depuis < b.depuis ? -1 : 1));
+}
+/** Expérience en cours pour une évaluation de ce jour, ou null. */
+export function experienceDu(experiences, date) {
+  return normaliserExperiences(experiences).find((e) => !e.arreteeLe && e.depuis <= date && (!e.jusquau || date <= e.jusquau)) || null;
+}
+export const objectifPropose = (note, ecart = 1) => (Number.isInteger(note) ? Math.min(10, note + ecart) : null);
+
+/**
+ * Résultats de l'expérience : pour chaque prévision avec objectif, notes attendue, visée et constatée ;
+ * comparaison descriptive avec les prévisions faites avant l'expérience (sans conclusion).
+ */
+export function resultatsExperience(evaluations, toutesEvaluations = evaluations, experience = null) {
+  const toutes = comparaisonsPrevisions(toutesEvaluations, toutesEvaluations).lignes;
+  const dansPeriode = new Set(evaluations.map((e) => e.id));
+  const exp = experience ? normaliserExperiences([experience])[0] : null;
+  const dans = (l) => (exp ? l.source.date >= exp.depuis && (!exp.jusquau || l.source.date <= exp.jusquau) : true);
+  const lignes = toutes.filter((l) => dansPeriode.has(l.source.id) && Number.isInteger(l.source.prevision.objectif) && dans(l))
+    .map((l) => ({ ...l, objectif: l.source.prevision.objectif, atteint: l.reelle === null ? null : l.reelle >= l.source.prevision.objectif, ecartObjectif: l.reelle === null ? null : l.reelle - l.source.prevision.objectif }));
+  const c = lignes.filter((l) => l.reelle !== null);
+  const debut = lignes.length ? lignes[0].source.date : (exp ? exp.depuis : null);
+  const avant = debut ? toutes.filter((l) => l.source.date < debut && l.reelle !== null && !Number.isInteger(l.source.prevision.objectif)) : [];
+  return {
+    lignes, nombreComparees: c.length,
+    atteints: c.filter((l) => l.atteint).length,
+    auDessusAttendue: c.filter((l) => l.reelle > l.prevue).length,
+    egalAttendue: c.filter((l) => l.reelle === l.prevue).length,
+    ecartAttendueMoyen: moyenne(c.map((l) => l.ecart)),
+    ecartObjectifMoyen: moyenne(c.map((l) => l.ecartObjectif)),
+    avant: { nombre: avant.length, ecartMoyen: moyenne(avant.map((l) => l.ecart)), auDessus: avant.filter((l) => l.ecart > 0).length },
   };
 }
 
@@ -2991,7 +3117,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision'];
 
 function empreinteTexte(s) {
   let h = 5381;
