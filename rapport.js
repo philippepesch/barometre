@@ -905,7 +905,11 @@ class Redacteur {
    * Nuage de points « note prévue » (horizontal) et « note constatée » (vertical), sur fond quadrillé.
    * La diagonale correspond à une prévision exacte ; la taille d'un disque, au nombre de prévisions.
    */
-  nuagePrevisions(prev) {
+  /**
+   * Nuage de corrélation (note visée horizontalement, constatée verticalement).
+   * Libellés par défaut : prévision réaliste ; « objectif » pour l'expérience prévision + 1.
+   */
+  nuagePrevisions(prev, { axeX = 'Note prévue', unite = ['prévision comparée', 'prévisions comparées'], diag = 'prévision exacte', dessus = 'réalité meilleure que prévu', dessous = 'réalité moins bonne que prévu', ecart = 'Écart moyen : ', complement = null } = {}) {
     const cote = 230, marge = 30, hTotal = cote + 46;
     this.place(hTotal);
     const x0 = MARGE + marge, yH = this.y + 6, yB = yH + cote;
@@ -930,7 +934,7 @@ class Redacteur {
       this.page.drawCircle({ x: X(k.prevue), y: A4[1] - Y(k.reelle), size: r, color: this.couleur(COULEURS_NIVEAUX[k.reelle]), borderColor: this.couleur('#FFFFFF'), borderWidth: 1, opacity: 0.9 });
       if (k.nombre > 1) { const t = String(k.nombre); this.texte(t, X(k.prevue) - this.largeur(t, 7, 'gras') / 2, Y(k.reelle) + 2.5, { taille: 7, police: 'gras', couleur: '#FFFFFF' }); }
     }
-    this.texte('Note prévue', x0 + cote / 2 - this.largeur('Note prévue', 8, 'gras') / 2, yB + 22, { taille: 8, police: 'gras', couleur: DOUX });
+    this.texte(axeX, x0 + cote / 2 - this.largeur(axeX, 8, 'gras') / 2, yB + 22, { taille: 8, police: 'gras', couleur: DOUX });
     // Axe vertical : libellé écrit verticalement
     this.page.drawText(texteWinAnsi('Note constatée'), { x: MARGE + 4, y: A4[1] - (yH + cote / 2 + this.largeur('Note constatée', 8, 'gras') / 2), size: 8, font: this.polices.gras, color: this.couleur(DOUX), rotate: this.PDFLib.degrees(90) });
     // Chiffres à droite du nuage
@@ -945,12 +949,13 @@ class Redacteur {
     };
     const r = prev.correlation;
     ligne([['Corrélation : ', 'gras'], [r === null ? '—' : `r = ${C.nombreFr(r, 2)}`, 'gras', LAITON]], 11);
-    ligne([[C.majuscule(C.libelleCorrelation(r)) + (r === null ? '' : ` (sur ${C.pluriel(prev.nombreComparees, 'prévision comparée', 'prévisions comparées')})`)]], 9);
+    ligne([[C.majuscule(C.libelleCorrelation(r)) + (r === null ? '' : ` (sur ${C.pluriel(prev.nombreComparees, unite[0], unite[1])})`)]], 9);
     y += 4;
-    ligne([['Sur la diagonale : ', 'gras'], [`${prev.exactes} (prévision exacte)`]], 9);
-    ligne([['Au-dessus : ', 'gras'], [`${prev.realiteSuperieure} (réalité meilleure que prévu)`]], 9);
-    ligne([['En dessous : ', 'gras'], [`${prev.realiteInferieure} (réalité moins bonne que prévu)`]], 9);
-    ligne([['Écart moyen : ', 'gras'], [`${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point`]], 9);
+    ligne([['Sur la diagonale : ', 'gras'], [`${prev.exactes} (${diag})`]], 9);
+    ligne([['Au-dessus : ', 'gras'], [`${prev.realiteSuperieure} (${dessus})`]], 9);
+    ligne([['En dessous : ', 'gras'], [`${prev.realiteInferieure} (${dessous})`]], 9);
+    ligne([[ecart, 'gras'], [prev.ecartMoyen === null ? '—' : `${C.signeFr(prev.ecartMoyen)} point ; écart absolu moyen : ${C.nombreFr(prev.ecartAbsoluMoyen)} point`]], 9);
+    if (complement) { y += 4; for (const l of complement) ligne(l, 9); }
     this.y = Math.max(yB + 30, y);
   }
 
@@ -1748,6 +1753,17 @@ export async function genererRapport(PDFLib, donnees, options) {
         [{ titre: 'Prévision faite le', part: 1.6 }, { titre: 'Pour', part: 1.5 }, { titre: 'Prévue', part: 0.9 }, { titre: 'Objectif', part: 0.9 }, { titre: 'Constatée', part: 1 }, { titre: 'Objectif atteint', part: 1.2 }],
         rx.lignes.map((l) => [libCreneau(l.source), libCreneau(l.cible), `${l.prevue}/10`, `${l.objectif}/10`, l.reelle === null ? '—' : `${l.reelle}/10`, l.atteint === null ? 'pas encore' : l.atteint ? (l.reelle > l.objectif ? 'oui, dépassé' : 'oui') : 'non']),
       );
+      // Second nuage de corrélation : objectif (prévision + 1) face à la note constatée, à côté du nuage classique
+      if (rx.nombreComparees) {
+        const ra = rx.correlationAttendue;
+        R.paragraphe(`Ce second nuage reprend le schéma classique, mais avec l'objectif en abscisse : il montre si la note constatée suit l'objectif que le patient s'est fixé (« je rajoute un point »). À droite, la corrélation de la prévision réaliste sur les mêmes jours permet de comparer les deux.`, { taille: 9.5 });
+        R.encadre(300, () => R.nuagePrevisions(rx.comparaisonObjectif, {
+          axeX: 'Objectif (prévision + 1)', unite: ['objectif comparé', 'objectifs comparés'],
+          diag: 'objectif atteint exactement', dessus: 'objectif dépassé', dessous: 'objectif non atteint',
+          ecart: 'Écart moyen à l\'objectif : ',
+          complement: [[['Mêmes jours, prévision réaliste : ', 'gras'], [ra === null ? '—' : `r = ${C.nombreFr(ra, 2)}`, 'gras', LAITON]], [[C.majuscule(C.libelleCorrelation(ra))]]],
+        }));
+      }
       const n = rx.nombreComparees;
       R.paragraphe(n ? `Sur ${C.pluriel(n, 'prévision comparée', 'prévisions comparées')} : objectif atteint ou dépassé ${C.pluriel(rx.atteints, 'fois', 'fois')} ; note constatée supérieure à la prévision ${C.pluriel(rx.auDessusAttendue, 'fois', 'fois')}, égale ${C.pluriel(rx.egalAttendue, 'fois', 'fois')}. Écart moyen de la note constatée par rapport à la prévision : ${ecartTxt(rx.ecartAttendueMoyen)} ; par rapport à l'objectif : ${ecartTxt(rx.ecartObjectifMoyen)}.${rx.avant.nombre ? ` Avant l'expérience, cet écart par rapport à la prévision était de ${ecartTxt(rx.avant.ecartMoyen)} en moyenne (${C.pluriel(rx.avant.nombre, 'prévision', 'prévisions')}).` : ''} Ces chiffres sont descriptifs : sur peu de jours, ils ne permettent pas de conclure à un effet de l'objectif.` : 'Aucune prévision de l\'expérience ne peut encore être comparée à une note constatée.', { taille: 9.5 });
     }

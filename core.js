@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.36.0';
+export const VERSION_APP = '1.37.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2435,6 +2435,20 @@ export function resultatsExperience(evaluations, toutesEvaluations = evaluations
     ecartAttendueMoyen: moyenne(c.map((l) => l.ecart)),
     ecartObjectifMoyen: moyenne(c.map((l) => l.ecartObjectif)),
     avant: { nombre: avant.length, ecartMoyen: moyenne(avant.map((l) => l.ecart)), auDessus: avant.filter((l) => l.ecart > 0).length },
+    // Second nuage : objectif (prévision + 1) face à la note constatée, même forme que comparaisonsPrevisions
+    comparaisonObjectif: {
+      nombreComparees: c.length,
+      exactes: c.filter((l) => l.ecartObjectif === 0).length,
+      realiteSuperieure: c.filter((l) => l.ecartObjectif > 0).length,
+      realiteInferieure: c.filter((l) => l.ecartObjectif < 0).length,
+      ecartMoyen: moyenne(c.map((l) => l.ecartObjectif)),
+      ecartAbsoluMoyen: moyenne(c.map((l) => Math.abs(l.ecartObjectif))),
+      correlation: correlation(c.map((l) => l.objectif), c.map((l) => l.reelle)),
+      couples: [...c.reduce((m, l) => { const k = `${l.objectif}|${l.reelle}`; m.set(k, (m.get(k) || 0) + 1); return m; }, new Map())]
+        .map(([k, nombre]) => { const [prevue, reelle] = k.split('|').map(Number); return { prevue, reelle, nombre }; }),
+    },
+    // Pour comparer : prévision réaliste face à la note constatée, sur les mêmes jours
+    correlationAttendue: correlation(c.map((l) => l.prevue), c.map((l) => l.reelle)),
   };
 }
 

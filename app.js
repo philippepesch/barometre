@@ -53,17 +53,20 @@ async function enregistrerSeances(liste) {
  */
 const SEANCES_MISE_A_JOUR = [{ id: 'maj-2026-11-13', des: '2026-11-06', date: '2026-11-13', debut: '13:00', fin: '13:50' }];
 /** Expérience demandée par le thérapeute, activée par la mise à jour : jusqu'à la veille de la séance du 13/11. */
-const EXPERIENCES_MISE_A_JOUR = [{ id: 'exp-objectif-2026-11', des: '2026-11-06', jusquau: '2026-11-12', ecart: 1 }];
+const EXPERIENCES_MISE_A_JOUR = [{ id: 'exp-objectif-2026-11', des: '2026-11-06', depuis: '2026-11-06', jusquau: '2026-11-12', ecart: 1 }];
 async function ajouterSeancesMiseAJour() {
   if (!etat.parametres) return;
   const deja = new Set(etat.parametres.seancesMiseAJour || []);
   const messages = [];
-  const expATraiter = EXPERIENCES_MISE_A_JOUR.filter((x) => !deja.has(x.id) && aujourdhui() >= x.des);
+  const expATraiter = EXPERIENCES_MISE_A_JOUR.filter((x) => !deja.has(`${x.id}-debut`) && aujourdhui() >= x.des);
   if (expATraiter.length) {
     const liste = C.normaliserExperiences(etat.parametres.experiencesPrevision);
-    const ajout = expATraiter.filter((x) => aujourdhui() <= x.jusquau && !liste.some((e) => e.id === x.id)).map(({ des: _d, ...x }) => ({ ...x, depuis: aujourdhui() }));
-    await enregistrerParametres({ ...(ajout.length ? { experiencesPrevision: C.normaliserExperiences([...liste, ...ajout]) } : {}), seancesMiseAJour: [...deja, ...expATraiter.map((x) => x.id)] });
-    expATraiter.forEach((x) => deja.add(x.id));
+    const ajout = expATraiter.filter((x) => aujourdhui() <= x.jusquau && !deja.has(x.id) && !liste.some((e) => e.id === x.id)).map(({ des: _d, ...x }) => x);
+    await enregistrerParametres({ ...(ajout.length ? { experiencesPrevision: C.normaliserExperiences([...liste, ...ajout]) } : {}), seancesMiseAJour: [...deja, ...expATraiter.flatMap((x) => [x.id, `${x.id}-debut`])] });
+    expATraiter.forEach((x) => { deja.add(x.id); deja.add(`${x.id}-debut`); });
+    // Début fixé au 06/11 (demande du patient), même si la version 1.36 a été installée plus tard sur cet appareil
+    const corrige = C.normaliserExperiences((ajout.length ? [...liste, ...ajout] : liste).map((e) => (e.id === 'exp-objectif-2026-11' && e.depuis > '2026-11-06' ? { ...e, depuis: '2026-11-06' } : e)));
+    if (JSON.stringify(corrige) !== JSON.stringify(C.normaliserExperiences(etat.parametres.experiencesPrevision))) await enregistrerParametres({ experiencesPrevision: corrige });
     if (ajout.length) messages.push(`Expérience activée jusqu'au ${C.formatDateCourte(ajout[0].jusquau)} : à la prévision, tu notes aussi ton objectif (prévision + 1).`);
   }
   const aTraiter = SEANCES_MISE_A_JOUR.filter((s) => !deja.has(s.id) && aujourdhui() >= s.des);
@@ -670,6 +673,7 @@ function tableauDeBord() {
       </tbody></table></div>` : ''}
     </section>
   </div>
+  ${blocExperience(evals)}
   <section class="bloc" aria-labelledby="titre-motifs">
     <h2 id="titre-motifs">Fréquence des motifs</h2>
     <p class="doux">Seuls les motifs cochés sont comptés, en part des ${C.pluriel(evals.length, 'évaluation')} de la période.</p>
@@ -677,6 +681,35 @@ function tableauDeBord() {
   </section>
   <p><a class="bouton-secondaire" href="#/calendrier">Voir le calendrier complet</a></p>`;
 }
+
+/** Petit nuage de corrélation SVG (0 à 10 sur les deux axes), diagonale = note visée atteinte exactement. */
+function nuageSVG(couples, axeX, titre) {
+  const c = 150, m = 24, pas = c / 10, max = Math.max(1, ...couples.map((k) => k.nombre));
+  const X = (v) => m + v * pas, Y = (v) => c - v * pas + 14;
+  const grille = Array.from({ length: 11 }, (_, v) => `<line x1="${X(v)}" y1="${Y(0)}" x2="${X(v)}" y2="${Y(10)}"/><line x1="${X(0)}" y1="${Y(v)}" x2="${X(10)}" y2="${Y(v)}"/>`).join('');
+  const etiq = [0, 5, 10].map((v) => `<text x="${X(v)}" y="${Y(0) + 12}" text-anchor="middle">${v}</text><text x="${m - 5}" y="${Y(v) + 3}" text-anchor="end">${v}</text>`).join('');
+  const points = [...couples].sort((a, b) => b.nombre - a.nombre).map((k) => `<circle cx="${X(k.prevue)}" cy="${Y(k.reelle)}" r="${(3 + 5 * Math.sqrt(k.nombre / max)).toFixed(1)}" fill="var(--n${k.reelle})" stroke="#fff" stroke-width="1"><title>${k.nombre} × : ${esc(axeX.toLowerCase())} ${k.prevue}, constatée ${k.reelle}</title></circle>`).join('');
+  return `<figure class="nuage-mini"><svg viewBox="0 0 ${c + m + 6} ${c + 42}" role="img" aria-label="${esc(titre)}"><g class="nuage-grille">${grille}</g>
+    <line class="nuage-diag" x1="${X(0)}" y1="${Y(0)}" x2="${X(10)}" y2="${Y(10)}"/>${points}<g class="nuage-etiq">${etiq}<text x="${X(5)}" y="${Y(0) + 26}" text-anchor="middle">${esc(axeX)} →</text><text x="${m - 18}" y="8">↑ Constatée</text></g></svg>
+    <figcaption>${esc(titre)}</figcaption></figure>`;
+}
+/** Tableau de bord : expérience « objectif » — nuage classique et nuage de l'objectif, sur les mêmes jours. */
+function blocExperience(evals) {
+  const rx = C.resultatsExperience(evals, etat.evaluations);
+  if (!rx.lignes.length) return '';
+  const c = rx.lignes.filter((l) => l.reelle !== null);
+  const couplesPrev = [...c.reduce((m, l) => { const k = `${l.prevue}|${l.reelle}`; m.set(k, (m.get(k) || 0) + 1); return m; }, new Map())].map(([k, nombre]) => { const [prevue, reelle] = k.split('|').map(Number); return { prevue, reelle, nombre }; });
+  const r = (x) => (x === null ? '—' : C.nombreFr(x, 2));
+  const o = rx.comparaisonObjectif;
+  return `<section class="bloc" aria-labelledby="titre-experience">
+    <h2 id="titre-experience">Expérience : prévision et objectif (+1)</h2>
+    ${rx.nombreComparees ? `<div class="tuiles" style="margin-bottom:12px">${tuile2(`${rx.atteints}/${rx.nombreComparees}`, 'Objectifs atteints ou dépassés')}${tuile2(r(o.correlation), 'Corrélation objectif ↔ constatée')}${tuile2(r(rx.correlationAttendue), 'Corrélation prévision ↔ constatée (mêmes jours)')}</div>
+    <div class="nuages-mini">${nuageSVG(couplesPrev, 'Prévue', 'Prévision réaliste face au ressenti réel')}${nuageSVG(o.couples, 'Objectif', 'Objectif (prévision + 1) face au ressenti réel')}</div>
+    <p class="doux" style="margin-top:8px">Chaque disque : une ou plusieurs journées (plus il est grand, plus elles sont nombreuses). Sur la diagonale, la note visée a été atteinte exactement ; au-dessus, la journée a été meilleure. La corrélation (−1 à 1) se calcule à partir de 3 journées.${rx.nombreComparees < 5 ? ' Avec si peu de journées, ces chiffres sont encore très incertains.' : ''}</p>`
+    : '<p class="doux">Aucune prévision de l\'expérience ne peut encore être comparée au ressenti réel : les schémas apparaîtront après la première journée évaluée.</p>'}
+  </section>`;
+}
+const tuile2 = (v, l) => `<div class="tuile"><div class="tuile-valeur">${v}</div><div class="tuile-libelle">${l}</div></div>`;
 
 let donneesGraphique = null;
 
