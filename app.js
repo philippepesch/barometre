@@ -1129,6 +1129,10 @@ function questionsGuidees(cible) {
             <span class="sous-autre guide-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-guide-ajouter="${esc(m.id)}">Ajouter</button></span></div>`;
         }).join('') + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="paire-ok">Continuer</button></p>';
       }
+      // Motif encore sans précision (ex. « Santé : douleurs ») : option discrète pour en ajouter une, sans geste de plus sinon
+      if (!c && [p.favorable, p.defavorable, p.mixte].some((m) => m && !C.sousMotifs(m, etat.motifs).length)) {
+        corps += `<p class="guide-preciser"><button type="button" class="bouton-discret" data-guide="preciser" aria-pressed="${!!w.preciser}">${w.preciser ? '✓ Après ta réponse : ajouter une précision' : '+ Ajouter une précision à ma réponse'}</button></p>`;
+      }
       ecran(esc(p.question), corps, { aide: !c && w.auto === 1 && !w.reponses.length ? 'Les questions suivent tes réponses : celles qui comptent le plus pour toi viennent en premier.' : '' });
       return;
     }
@@ -1300,6 +1304,7 @@ function questionsGuidees(cible) {
     }
     if (d.situation) { w = { ...w, situation: { statut: d.situation, ...(w.situation && w.situation.statut === d.situation && w.situation.modalite ? { modalite: w.situation.modalite } : {}) } }; rendre(); return; }
     if (d.modalite) { w = { ...w, situation: { ...w.situation, modalite: d.modalite } }; rendre(); return; }
+    if (d.guide === 'preciser') { w = { ...w, preciser: !w.preciser }; rendre(); return; }
     if (d.guide === 'contexte-ok') { avancer({ situation: C.normaliserSituation(w.situation), ...(besoinDetailLieux() ? { etape: 'lieux-detail' } : apresContexte()) }); return; }
     if (d.ressentiLieu !== undefined) {
       const i = Number(d.ressentiLieu), v = Number(d.v);
@@ -1321,9 +1326,9 @@ function questionsGuidees(cible) {
       const motifs = d.paire === 'fav' ? [p.favorable] : d.paire === 'def' ? [p.defavorable] : d.paire === 'deux' ? [p.favorable, p.defavorable] : [p.mixte || (!p.defavorable ? p.favorable : p.defavorable) || seul];
       const choisis = [...w.choisis, ...motifs.map((m) => m.id).filter((id) => !w.choisis.includes(id))];
       const reponses = [...w.reponses, { cle: p.cle, choix: d.paire }];
-      const avecSous = motifs.some((m) => C.sousMotifs(m, etat.motifs).length);
-      if (avecSous) avancer({ choisis, reponses, choixPaire: d.paire });
-      else { const x = { ...w, choisis, reponses }; avancer({ choisis, reponses, ...apresPaire(x) }); }
+      const avecSous = motifs.some((m) => C.sousMotifs(m, etat.motifs).length) || w.preciser;
+      if (avecSous) avancer({ choisis, reponses, choixPaire: d.paire, preciser: false });
+      else { const x = { ...w, choisis, reponses }; avancer({ choisis, reponses, preciser: false, ...apresPaire(x) }); }
       return;
     }
     if (d.sous) {
@@ -1429,7 +1434,10 @@ function brancherExplicationsMotifs(racine, idEvaluation = null) {
       if (!caseM) {
         const modele = document.createElement('div');
         modele.innerHTML = `<label class="puce"${motif.description ? ` title="${esc(motif.description)}"` : ''}><input type="checkbox" name="${nom}" value="${esc(motif.id)}"><span><span class="pastille ${motif.polarite}" aria-hidden="true"></span>${esc(motif.libelle)}<span class="visuellement-cache"> (${C.LIBELLE_POLARITE[motif.polarite].toLowerCase()})</span></span></label>`;
-        champ.closest('.sous-autre').before(modele.firstElementChild);
+        modele.insertAdjacentHTML('beforeend', boutonMaPrecision(motif));
+        champ.closest('.sous-autre').before(...modele.children);
+        const bloc = champ.closest('.sous-motifs');
+        if (bloc && bloc.classList.contains('sous-motifs-vide')) { bloc.classList.remove('sous-motifs-vide'); const t = bloc.querySelector('.sous-motifs-titre'); if (t) t.innerHTML = `${esc(parent.questionSous || 'Précise :')} <small class="doux">(facultatif)</small>`; }
         caseM = groupe.querySelector(`[name="${nom}"][value="${CSS.escape(motif.id)}"]`);
       }
       if (!caseM.checked) { caseM.checked = true; caseM.dispatchEvent(new Event('change', { bubbles: true })); }
@@ -1492,7 +1500,7 @@ function pucesMotifs(nom, selection, extra = []) {
     const sous = tous.filter((x) => x.parentId === m.id);
     // « Autre… » : une précision écrite ici devient une sous-catégorie, proposée ensuite comme les autres
     const autre = `<span class="sous-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-ajouter-sous="${esc(m.id)}">Ajouter</button></span>`;
-    return puce(m, coche(m)) + (sous.length ? `<div class="sous-motifs" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :')} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id)) + boutonMaPrecision(x)).join('')}${autre}</div>` : '');
+    return puce(m, coche(m)) + `<div class="sous-motifs${sous.length ? '' : ' sous-motifs-vide'}" data-sous-de="${esc(m.id)}" ${coche(m) ? '' : 'hidden'}><span class="sous-motifs-titre">${sous.length ? esc((etat.motifs.find((x) => x.id === m.id) || m).questionSous || 'Précise :') : 'Une précision ?'} <small class="doux">(facultatif)</small></span>${sous.map((x) => puce(x, selection.has(x.id)) + boutonMaPrecision(x)).join('')}${autre}</div>`;
   }).join('');
   const ordre = (a, b) => C.POLARITES.indexOf(a.polarite) - C.POLARITES.indexOf(b.polarite) || (a.ordre ?? 0) - (b.ordre ?? 0) || a.libelle.localeCompare(b.libelle, 'fr');
   const racines = tous.filter((m) => !estSous(m));

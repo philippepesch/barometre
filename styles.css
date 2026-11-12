@@ -637,3 +637,7 @@ details.domaine > .puces { padding: 0 12px 12px; }
 .nuage-diag { stroke: var(--laiton); stroke-width: 1.2; stroke-dasharray: 4 3; }
 .nuage-etiq text { font-size: 8px; fill: var(--encre-2); }
 .nuage-mini figcaption { font-size: .85rem; color: var(--encre-2); margin-top: 4px; }
+
+/* Motif encore sans précision : « Ajouter une précision » discret */
+.guide-preciser { margin: 10px 0 0; text-align: center; }
+.guide-preciser [aria-pressed="true"] { font-weight: 600; }
