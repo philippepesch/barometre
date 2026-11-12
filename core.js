@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.38.0';
+export const VERSION_APP = '1.39.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2079,7 +2079,7 @@ export const LONGUEUR_CONTEXTE = 2000;
 
 /** Influence d'un événement sur l'humeur (obligatoire à la saisie d'un nouvel événement). */
 export const IMPACTS = { positif: 'Impact positif', negatif: 'Impact négatif' };
-export const MAX_EVENEMENTS_EVALUATION = 3;
+export const MAX_EVENEMENTS_EVALUATION = 10;
 
 const heureValide = (h) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(h || ''));
 const texteBorne = (v, n) => String(v || '').replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, n);

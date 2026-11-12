@@ -1319,6 +1319,12 @@ export async function genererRapport(PDFLib, donnees, options) {
   // ===== Partie I – Introduction : présentation, aperçu de la période (évolution validée), contexte, évaluations
   await R.partie('I', 'Introduction', { nouvellePage: true });
   R.section(++numSection, 'Introduction', 120);
+  // Mot du patient pour le thérapeute (écrit à la relecture, avant la création du PDF)
+  const motsPatient = options.mots || {};
+  if (String(motsPatient.intro || '').trim()) {
+    R.paragraphe('Mot du patient :', { taille: 10, police: 'gras', apres: 3 });
+    for (const para of String(motsPatient.intro).trim().split(/\n\s*\n|\n/).filter((x) => x.trim())) R.paragraphe(para.trim(), { taille: 10, apres: 4 });
+  }
   {
     const nbJours = C.joursEntre(debut, fin) + 1;
     R.paragraphe(`Ce rapport présente le suivi de l'humeur du patient du ${C.formatDateLongue(debut)} au ${C.formatDateLongue(fin)} (${C.pluriel(nbJours, 'jour')}). ${changementRythme ? `L'humeur est évaluée sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil). ${phraseRythme()}` : 'L\'humeur est évaluée deux fois par jour, le matin et le soir, sur une échelle de 0 (Alerte rouge) à 10 (Plein soleil).'} Chaque évaluation peut comporter des motifs cochés (favorables ou défavorables), un commentaire, le ou les lieux, la situation professionnelle et une prévision pour le créneau suivant ; le patient peut aussi noter des événements marquants.`, { taille: 10, apres: 6 });
@@ -1789,6 +1795,11 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.paragraphe('Relevé factuel établi automatiquement à partir des saisies, sans interprétation (aucune conclusion rédigée et validée pour cette période) ; libre au patient et au thérapeute de s\'en saisir ou non.', { taille: 9, couleur: DOUX });
       R.puces(C.sujetsDeDiscussion(evals, freq, prev, comptes));
     }
+  }
+
+  if (String(motsPatient.fin || '').trim()) {
+    R.section(++numSection, 'Mot de la fin du patient', 80);
+    for (const para of String(motsPatient.fin).trim().split(/\n\s*\n|\n/).filter((x) => x.trim())) R.paragraphe(para.trim(), { taille: 10.5, apres: 5 });
   }
 
   R.dessinerSommaire(pageSommaire, ySommaire, 1);

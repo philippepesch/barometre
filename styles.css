@@ -641,3 +641,10 @@ details.domaine > .puces { padding: 0 12px 12px; }
 /* Motif encore sans précision : « Ajouter une précision » discret */
 .guide-preciser { margin: 10px 0 0; text-align: center; }
 .guide-preciser [aria-pressed="true"] { font-weight: 600; }
+/* Questions guidées : événements déjà notés */
+.guide-evts { list-style: none; padding: 0; margin: 0 0 12px; }
+.guide-evts li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--filet); }
+.guide-evts li span:not(.pastille) { flex: 1; }
+/* Relecture du rapport avant le PDF */
+#pdf-relecture textarea { width: 100%; margin: 2px 0 8px; }
+.relecture-jour { border-top: 1px solid var(--filet); padding-top: 4px; }

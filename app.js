@@ -1003,7 +1003,7 @@ function questionsGuidees(cible) {
   const lieuxP = C.lieuxProposes(etat.evaluations, cible);
   const exigerTout = etat.parametres.saisieComplete !== false;
   // État des réponses ; « pile » garde les états précédents pour revenir en arrière
-  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, prevNote: null, prevObjectif: null, mot: '', retourAutre: false };
+  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, evts: [], prevNote: null, prevObjectif: null, mot: '', retourAutre: false };
   const pile = [];
   let champLieuGuide = null;
   const copie = (x) => JSON.parse(JSON.stringify(x));
@@ -1066,7 +1066,8 @@ function questionsGuidees(cible) {
       const autresLieux = [...lieuxChoisis, ...lieuxP.frequents, ...lieuxP.derniers].filter((l, i, a) => a.findIndex((x) => C.cleLieu(x) === C.cleLieu(l)) === i);
       const besoinModalite = sitChoisie && C.SITUATIONS_AVEC_MODALITE.includes(sitChoisie.statut);
       ecran('Où étais-tu, et quelle est ta situation ?', `
-        ${habituel.length && !w.lieux ? `<div class="choix-liste">${bouton('data-guide="habituel"', `<strong>Comme d'habitude</strong><span class="doux">${esc(C.libelleLieux(habituel))}${sitHab ? ` · ${esc(libSituation(sitHab))}` : ' · situation à choisir'}</span>`, 'choix choix-large choix-principal')}</div><p class="doux guide-ou">ou précise :</p>` : ''}
+        ${habituel.length && !w.lieux ? `<div class="choix-liste">${bouton('data-guide="habituel"', `<strong>Comme d'habitude</strong><span class="doux">${esc(C.libelleLieux(habituel))}${sitHab ? ` · ${esc(libSituation(sitHab))}` : ' · situation à choisir'}</span>`, 'choix choix-large choix-principal')}</div>
+          <p class="guide-preciser" style="margin-top:6px">${bouton('data-guide="habituel-plus"', `+ ${esc(C.libelleLieux(habituel))}, et un ou plusieurs autres lieux`, 'bouton-discret')}</p><p class="doux guide-ou">ou précise :</p>` : ''}
         <p class="guide-sous">Lieu${lieuxChoisis.length > 1 ? 'x' : ''} <span class="doux">(touche-en un ou plusieurs)</span></p>
         <div class="choix-puces">${autresLieux.map((l) => bouton(`data-lieu="${esc(C.cleLieu(l))}" aria-pressed="${cles.has(C.cleLieu(l))}"`, `${esc(C.libelleLieu(l))}${symbolesLieuHTML(l, 15)}`, 'puce-choix')).join('')}
           ${w.champLieu ? '' : bouton('data-guide="autre-lieu"', 'Autre lieu…', 'puce-choix puce-autre')}</div>
@@ -1077,7 +1078,12 @@ function questionsGuidees(cible) {
         <p style="margin-top:16px"><button type="button" class="bouton" data-guide="contexte-ok" ${lieuxChoisis.length && sitChoisie && (!besoinModalite || sitChoisie.modalite) ? '' : 'disabled'}>Continuer</button></p>`);
       contenu.dataset.lieux = JSON.stringify(autresLieux);
       if (w.champLieu) {
-        champLieuGuide = L.brancherChampLieu('g-lieu', { connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false });
+        champLieuGuide = L.brancherChampLieu('g-lieu', {
+          connus: C.lieuxConnus(etat.evaluations), enLigne: etat.parametres.rechercheLieux !== false,
+          // Une proposition choisie dans la liste est ajoutée tout de suite (la liste ne cache plus le bouton)
+          surChangement: (l) => { if (l) setTimeout(() => ajouterLieuGuide(l), 0); },
+        });
+        document.getElementById('g-lieu').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.defaultPrevented) { e.preventDefault(); const l = champLieuGuide.valeur(); if (l) ajouterLieuGuide(l); } });
         document.getElementById('g-lieu').focus();
       }
       return;
@@ -1127,7 +1133,9 @@ function questionsGuidees(cible) {
           return `<div class="guide-precision"><p class="guide-sous">${pastille(m.polarite)} ${esc(m.libelle)} : ${esc(m.questionSous || 'précise')} <span class="doux">(facultatif, plusieurs possibles)</span></p>
             <div class="choix-puces">${sous.map((x) => (C.estPrecisionPropre(x) ? `<span class="puce-et-modifier">${bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix')}${boutonMaPrecision(x)}</span>` : bouton(`data-sous="${esc(x.id)}" aria-pressed="${w.choisis.includes(x.id)}"`, esc(x.libelle), 'puce-choix'))).join('')}</div>
             <span class="sous-autre guide-autre"><input type="text" maxlength="120" data-autre-sous="${esc(m.id)}" placeholder="Autre…" aria-label="Autre précision pour ${esc(m.libelle)}" autocomplete="off" lang="fr"><button type="button" class="bouton-discret" data-guide-ajouter="${esc(m.id)}">Ajouter</button></span></div>`;
-        }).join('') + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="paire-ok">Continuer</button></p>';
+        }).join('') + ((c === 'fav' && p.defavorable) || (c === 'def' && p.favorable)
+          ? `<p class="guide-preciser">${bouton('data-guide="aussi-autre-cote"', c === 'fav' ? `+ Aussi du négatif : ${esc(p.defavorable.libelle)}` : `+ Aussi du positif : ${esc(p.favorable.libelle)}`, 'bouton-discret')}</p>` : '')
+          + '<p style="margin-top:16px"><button type="button" class="bouton" data-guide="paire-ok">Continuer</button></p>';
       }
       // Motif encore sans précision (ex. « Santé : douleurs ») : option discrète pour en ajouter une, sans geste de plus sinon
       if (!c && [p.favorable, p.defavorable, p.mixte].some((m) => m && !C.sousMotifs(m, etat.motifs).length)) {
@@ -1146,15 +1154,19 @@ function questionsGuidees(cible) {
     }
     if (w.etape === 'evenement') {
       const e = w.evt;
+      const notes = w.evts || [];
       if (!e) {
-        ecran('Un événement marquant à noter ?', `<div class="choix-liste">${bouton('data-evt="non"', '<strong>Non</strong>', 'choix choix-large choix-principal')}
-          ${bouton('data-evt="positif"', `${pastille('favorable')}<span>Oui, avec un impact positif</span>`, 'choix choix-large')}
-          ${bouton('data-evt="negatif"', `${pastille('defavorable')}<span>Oui, avec un impact négatif</span>`, 'choix choix-large')}</div>`,
-        { aide: 'Par exemple une victoire du KSC, un appel difficile, une bonne nouvelle.' });
+        // Plusieurs événements possibles, positifs et négatifs : la question revient après chacun
+        const liste = notes.length ? `<ul class="guide-evts">${notes.map((x, i) => `<li>${pastille(x.impact === 'positif' ? 'favorable' : 'defavorable')} <span>${esc(x.titre)}</span> <button type="button" class="bouton-discret" data-evt-retirer="${i}" aria-label="Retirer « ${esc(x.titre)} »">Retirer</button></li>`).join('')}</ul>` : '';
+        const plein = notes.length >= C.MAX_EVENEMENTS_EVALUATION;
+        ecran(notes.length ? 'Un autre événement marquant ?' : 'Un événement marquant à noter ?', `${liste}<div class="choix-liste">${bouton('data-evt="non"', `<strong>${notes.length ? 'Non, c\'est tout' : 'Non'}</strong>`, 'choix choix-large choix-principal')}
+          ${plein ? '' : `${bouton('data-evt="positif"', `${pastille('favorable')}<span>${notes.length ? 'Oui, encore un' : 'Oui'}, avec un impact positif</span>`, 'choix choix-large')}
+          ${bouton('data-evt="negatif"', `${pastille('defavorable')}<span>${notes.length ? 'Oui, encore un' : 'Oui'}, avec un impact négatif</span>`, 'choix choix-large')}`}</div>`,
+        { aide: notes.length ? `${C.pluriel(notes.length, 'événement noté', 'événements notés')}. Tu peux en ajouter d'autres, positifs ou négatifs.` : 'Par exemple une victoire du KSC, un appel difficile, une bonne nouvelle. Tu peux en noter plusieurs, positifs et négatifs.' });
       } else {
         ecran(`Événement ${e.impact === 'positif' ? 'positif' : 'négatif'}`, `<div class="champ"><label for="g-evt-titre">En quelques mots</label><input type="text" id="g-evt-titre" maxlength="${C.LONGUEUR_TITRE_EVENEMENT}" value="${esc(e.titre || '')}" autocomplete="off" lang="fr" placeholder="Ex. : victoire du KSC 4-0"></div>
           <div class="champ"><label for="g-evt-faits">Ce qui s'est passé <span class="doux">(facultatif)</span></label><textarea id="g-evt-faits" rows="2" maxlength="${C.LONGUEUR_TEXTE_EVENEMENT}" lang="fr">${esc(e.faits || '')}</textarea></div>
-          <p><button type="button" class="bouton" data-guide="evt-ok">Continuer</button> <button type="button" class="bouton-discret" data-guide="evt-annuler">Pas d'événement</button></p>`);
+          <p><button type="button" class="bouton" data-guide="evt-ok">Ajouter</button> <button type="button" class="bouton-discret" data-guide="evt-annuler">Annuler</button></p>`);
       }
       return;
     }
@@ -1187,7 +1199,7 @@ function questionsGuidees(cible) {
           <dt>Lieu${(w.lieux || []).length > 1 ? 'x' : ''}</dt><dd>${(w.lieux || []).map((l) => `${esc(C.libelleLieu(l))}${[l.activite && l.activite.trim() ? esc(l.activite.trim()) : '', (w.lieux || []).length > 1 && Number.isInteger(l.ressenti) ? `humeur sur place ${l.ressenti}/10` : ''].filter(Boolean).length ? ` <span class="doux">(${[l.activite && l.activite.trim() ? esc(l.activite.trim()) : '', (w.lieux || []).length > 1 && Number.isInteger(l.ressenti) ? `humeur sur place ${l.ressenti}/10` : ''].filter(Boolean).join(', ')})</span>` : ''}`).join(' → ')}</dd>
           <dt>Situation</dt><dd>${esc(libSituation(w.situation))}</dd>
           <dt>Motifs</dt><dd>${racines.length ? `<ul>${racines.map((m) => `<li>${pastille(m.polarite)} ${esc(m.libelle)}${sousDe(m).length ? ` <span class="doux">: ${sousDe(m).map((x) => esc(x.libelle)).join(', ')}</span>` : ''}</li>`).join('')}</ul>` : '<span class="doux">aucun</span>'}</dd>
-          ${w.evt ? `<dt>Événement</dt><dd>${pastille(w.evt.impact === 'positif' ? 'favorable' : 'defavorable')} ${esc(w.evt.titre)}</dd>` : ''}
+          ${(w.evts || []).length ? `<dt>Événement${w.evts.length > 1 ? 's' : ''}</dt><dd>${w.evts.map((x) => `${pastille(x.impact === 'positif' ? 'favorable' : 'defavorable')} ${esc(x.titre)}`).join('<br>')}</dd>` : ''}
           <dt>Prévision</dt><dd>${esc(C.majuscule(prevLib))} : <strong>${esc(C.libelleNote(w.prevNote))}</strong>${Number.isInteger(w.prevObjectif) ? `<br>Objectif : <strong>${esc(C.libelleNote(w.prevObjectif))}</strong>` : ''}</dd>
           ${w.mot.trim() ? `<dt>Commentaire</dt><dd>${esc(w.mot.trim())}</dd>` : ''}
         </dl>
@@ -1199,7 +1211,7 @@ function questionsGuidees(cible) {
 
   // Formulaire complet : les réponses déjà données y sont reprises
   const versFormulaire = () => {
-    ui.brouillonGuide = { cible: idCible, note: w.note, lieux: w.lieux, situation: w.situation, motifs: w.choisis, prevNote: w.prevNote, prevObjectif: w.prevObjectif, explication: w.mot, evt: w.evt };
+    ui.brouillonGuide = { cible: idCible, note: w.note, lieux: w.lieux, situation: w.situation, motifs: w.choisis, prevNote: w.prevNote, prevObjectif: w.prevObjectif, explication: w.mot, evts: [...(w.evts || []), ...(w.evt && w.evt.titre ? [w.evt] : [])] };
     aller(`#/evaluer/${cible.date}/${cible.creneau}/formulaire`);
   };
 
@@ -1220,7 +1232,10 @@ function questionsGuidees(cible) {
       if (erreurs.length) throw new Error(erreurs.join(' '));
       const resultat = C.creerEvaluation(saisie, instant);
       await enregistrerEvaluation(resultat);
-      if (w.evt) await enregistrerParametres({ evenements: C.evenementsDepuisFormulaire(etat.parametres.evenements, idCible, [{ titre: w.evt.titre, faits: w.evt.faits || '', impact: w.evt.impact }], instant) });
+      if ((w.evts || []).length) {
+        const existants = C.evenementsDuCreneau(etat.parametres.evenements, idCible).map((x) => ({ id: x.id, titre: x.titre, faits: x.faits, impact: x.impact }));
+        await enregistrerParametres({ evenements: C.evenementsDepuisFormulaire(etat.parametres.evenements, idCible, [...existants, ...w.evts.map((x) => ({ titre: x.titre, faits: x.faits || '', impact: x.impact }))], instant) });
+      }
       annoncer(`Évaluation enregistrée à ${C.formatHeure(instant)}.`);
       aller('#/');
       if (resultat.securite && resultat.securite.declenchee) await verificationSecurite(resultat);
@@ -1275,6 +1290,13 @@ function questionsGuidees(cible) {
       return;
     }
     if (d.guide === 'apres-zero') { avancer({ etape: 'contexte' }); return; }
+    if (d.guide === 'habituel-plus') {
+      // Lieu(x) et situation habituels déjà cochés, on reste sur l'écran pour en ajouter d'autres
+      const habituel = proposition.lieu ? [proposition.lieu] : lieuxP.derniers.slice(-1);
+      w = { ...w, lieux: habituel, situation: proposition.situation || w.situation || null };
+      rendre();
+      return;
+    }
     if (d.guide === 'habituel') {
       const habituel = proposition.lieu ? [proposition.lieu] : lieuxP.derniers.slice(-1);
       const sit = proposition.situation;
@@ -1297,13 +1319,20 @@ function questionsGuidees(cible) {
     if (d.guide === 'lieu-ajouter') {
       const l = champLieuGuide ? champLieuGuide.valeur() : null;
       if (!l) { annoncer('Tape d\'abord le nom du lieu.'); document.getElementById('g-lieu').focus(); return; }
-      const actuels = w.lieux || [];
-      w = { ...w, champLieu: false, lieux: actuels.some((x) => C.cleLieu(x) === C.cleLieu(l)) ? actuels : [...actuels, l].slice(0, C.MAX_LIEUX) };
-      rendre();
+      ajouterLieuGuide(l);
       return;
     }
     if (d.situation) { w = { ...w, situation: { statut: d.situation, ...(w.situation && w.situation.statut === d.situation && w.situation.modalite ? { modalite: w.situation.modalite } : {}) } }; rendre(); return; }
     if (d.modalite) { w = { ...w, situation: { ...w.situation, modalite: d.modalite } }; rendre(); return; }
+    if (d.guide === 'aussi-autre-cote') {
+      // Positif ET négatif pour le même thème (ex. santé : un soin reçu et des douleurs) : les deux côtés, chacun avec ses précisions
+      const p = paires.find((x) => x.cle === w.paire);
+      const autre = w.choixPaire === 'fav' ? p.defavorable : p.favorable;
+      if (!autre) return;
+      w = { ...w, choixPaire: 'deux', choisis: w.choisis.includes(autre.id) ? w.choisis : [...w.choisis, autre.id], reponses: w.reponses.map((r, i) => (i === w.reponses.length - 1 && r.cle === p.cle ? { ...r, choix: 'deux' } : r)) };
+      rendre();
+      return;
+    }
     if (d.guide === 'preciser') { w = { ...w, preciser: !w.preciser }; rendre(); return; }
     if (d.guide === 'contexte-ok') { avancer({ situation: C.normaliserSituation(w.situation), ...(besoinDetailLieux() ? { etape: 'lieux-detail' } : apresContexte()) }); return; }
     if (d.ressentiLieu !== undefined) {
@@ -1352,14 +1381,16 @@ function questionsGuidees(cible) {
     if (d.theme) { avancer({ etape: 'paire', paire: d.theme, choixPaire: null, retourAutre: true }); return; }
     if (d.evt) {
       if (d.evt === 'non') { avancer({ evt: null, etape: 'prevision' }); return; }
+      if ((w.evts || []).length >= C.MAX_EVENEMENTS_EVALUATION) return;
       avancer({ evt: { impact: d.evt, titre: '', faits: '' } });
       return;
     }
-    if (d.guide === 'evt-annuler') { avancer({ evt: null, etape: 'prevision' }); return; }
+    if (d.guide === 'evt-annuler') { avancer({ evt: null }); return; }
+    if (d.evtRetirer !== undefined) { const i = Number(d.evtRetirer); w = { ...w, evts: (w.evts || []).filter((_, k) => k !== i) }; rendre(); return; }
     if (d.guide === 'evt-ok') {
       const titre = document.getElementById('g-evt-titre').value.trim();
       if (!titre) { annoncer('Écris l\'événement en quelques mots.'); document.getElementById('g-evt-titre').focus(); return; }
-      avancer({ evt: { ...w.evt, titre, faits: document.getElementById('g-evt-faits').value.trim() }, etape: 'prevision' });
+      avancer({ evts: [...(w.evts || []), { ...w.evt, titre, faits: document.getElementById('g-evt-faits').value.trim() }], evt: null });
       return;
     }
     if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), prevObjectif: null, etape: experience ? 'objectif' : 'mot' }); return; }
@@ -1369,6 +1400,15 @@ function questionsGuidees(cible) {
   };
   // Plusieurs lieux, ou une sortie : humeur sur place (ressenti) et activité, à chaque endroit
   function lieuxHabituels() { return [proposition.lieu, ...lieuxP.frequents.slice(0, 2)].filter(Boolean).map(C.cleLieu); }
+  function ajouterLieuGuide(l) {
+    if (!l || w.etape !== 'contexte' || !w.champLieu) return;
+    const actuels = w.lieux || [];
+    const deja = actuels.some((x) => C.cleLieu(x) === C.cleLieu(l));
+    if (!deja && actuels.length >= C.MAX_LIEUX) annoncer(`${C.MAX_LIEUX} lieux au plus.`);
+    w = { ...w, champLieu: false, lieux: deja ? actuels : [...actuels, l].slice(0, C.MAX_LIEUX), lieuxAjoutes: [...(w.lieuxAjoutes || []), l] };
+    annoncer(`${C.libelleLieu(l)} ajouté.`);
+    rendre();
+  }
   function besoinDetailLieux(x = w) {
     const ls = x.lieux || [];
     return ls.length > 1 || (ls.length === 1 && !C.estItinerance(ls[0]) && !lieuxHabituels().includes(C.cleLieu(ls[0])));
@@ -1718,10 +1758,10 @@ function formulaire(cible, ev) {
   document.getElementById('btn-autre-ajouter').addEventListener('click', ajouterAutre);
   document.getElementById('autre-libelle').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ajouterAutre(); } });
 
-  // Événements marquants de cette évaluation (3 au maximum), impact positif ou négatif obligatoire
+  // Événements marquants de cette évaluation (plusieurs possibles), impact positif ou négatif obligatoire
   const idCreneauCible = C.idCreneau(cible.date, cible.creneau);
   let evts = C.evenementsDuCreneau(etat.parametres.evenements, idCreneauCible).map((x) => ({ id: x.id, titre: x.titre, faits: x.faits, impact: x.impact || '', cle: C.nouvelId() }));
-  if (pre && pre.evt && pre.evt.titre && evts.length < C.MAX_EVENEMENTS_EVALUATION) evts.push({ titre: pre.evt.titre, faits: pre.evt.faits || '', impact: pre.evt.impact, cle: C.nouvelId() });
+  for (const x of (pre && (pre.evts || (pre.evt ? [pre.evt] : []))) || []) if (x && x.titre && evts.length < C.MAX_EVENEMENTS_EVALUATION) evts.push({ titre: x.titre, faits: x.faits || '', impact: x.impact, cle: C.nouvelId() });
   const zoneEvts = document.getElementById('liste-evts');
   const lireEvts = () => { zoneEvts.querySelectorAll('[data-evt]').forEach((b) => { const x = evts.find((y) => y.cle === b.dataset.evt); if (!x) return; x.titre = b.querySelector('[data-champ=titre]').value; x.faits = b.querySelector('[data-champ=faits]').value; const r = b.querySelector('input[type=radio]:checked'); x.impact = r ? r.value : ''; }); return evts; };
   const dessinerEvts = () => {
@@ -3040,7 +3080,8 @@ async function ouvrirPdf({ periode = null, seanceProposee = null } = {}) {
     <div class="bloc-synthese" id="pdf-evenements"></div>
     <div id="pdf-message" class="erreurs" hidden></div>
     <div id="pdf-resultat" hidden></div>
-    <div class="dialogue-actions"><button type="button" class="bouton-secondaire" data-fermer>Fermer</button><button type="submit" class="bouton" id="pdf-generer">Générer le PDF</button></div>
+    <div class="bloc-synthese" id="pdf-relecture" hidden></div>
+    <div class="dialogue-actions"><button type="button" class="bouton-secondaire" data-fermer>Fermer</button><button type="button" class="bouton-discret" id="pdf-retour-reglages" hidden>← Réglages du rapport</button><button type="button" class="bouton-discret" id="pdf-sans-relire">Créer sans relire</button><button type="submit" class="bouton" id="pdf-generer">Relire et modifier</button></div>
   </form>`;
   dlg.showModal();
   const form = document.getElementById('form-pdf');
@@ -3255,6 +3296,92 @@ async function ouvrirPdf({ periode = null, seanceProposee = null } = {}) {
   for (const id of ['pdf-debut', 'pdf-fin']) document.getElementById(id).addEventListener('input', () => { const perso = form.querySelector('[name="pdf-periode"][value="perso"]'); if (perso) perso.checked = true; if (zoneEntre) zoneEntre.hidden = true; });
   const caseCns = document.getElementById('pdf-cns');
   if (caseCns) caseCns.addEventListener('change', () => enregistrerParametres({ rapportAvecCNS: caseCns.checked }));
+  // ---- Relecture : tous les textes du rapport, modifiables, avant la création du PDF
+  const zoneRelecture = document.getElementById('pdf-relecture');
+  const bRetour = document.getElementById('pdf-retour-reglages');
+  const bSansRelire = document.getElementById('pdf-sans-relire');
+  let relecture = null; // { debut, fin, mode, jours: [{ ev, champs, valeurs }], synthese }
+  let sansRelire = false;
+  const CHAMPS_JOUR = { explication: 'Commentaire', complement: 'Complément', prevision: 'Prévision' };
+  function afficherReglages(visible) {
+    [...form.children].forEach((x) => {
+      if (x === zoneRelecture || x.classList.contains('dialogue-actions') || x.id === 'pdf-message' || x.id === 'pdf-resultat') return;
+      if (visible) { if (x.dataset.cacheRelecture) { x.hidden = x.dataset.cacheRelecture === 'oui'; delete x.dataset.cacheRelecture; } }
+      else { x.dataset.cacheRelecture = x.hidden ? 'oui' : 'non'; x.hidden = true; }
+    });
+    zoneRelecture.hidden = visible;
+    bRetour.hidden = visible;
+    bSansRelire.hidden = !visible;
+    document.getElementById('pdf-generer').textContent = visible ? 'Relire et modifier' : 'Créer le PDF';
+  }
+  function ouvrirRelecture(debut, fin, mode) {
+    const evs = C.trierChrono(C.dansPeriode(etat.evaluations, debut, fin));
+    const caseSy = document.getElementById('pdf-avec-synthese');
+    const sy = caseSy && caseSy.checked ? C.syntheseDe(etat.parametres, debut, fin) : null;
+    const prop = sy ? JSON.parse(JSON.stringify(C.propositionsDe(sy))) : null;
+    const mots = etat.parametres.motsRapport && etat.parametres.motsRapport.debut === debut && etat.parametres.motsRapport.fin === fin ? etat.parametres.motsRapport : {};
+    const jours = evs.map((ev) => {
+      const t = C.textesPourRapport(ev, mode === 'original' ? 'original' : 'reformule', evtsIA());
+      const permis = C.champsVersion(ev, evtsIA());
+      const champs = Object.keys(CHAMPS_JOUR).filter((k) => permis[k] && String(t[k] || '').trim());
+      return { ev, champs, valeurs: Object.fromEntries(Object.keys(CHAMPS_JOUR).map((k) => [k, t[k] || ''])) };
+    }).filter((j) => j.champs.length);
+    relecture = { debut, fin, mode, jours, sy, prop };
+    const zoneTexte = (id, valeur, { rows = 3, max = 10000, label = '' } = {}) => `<textarea id="${id}" rows="${rows}" maxlength="${max}" lang="fr" spellcheck="true" aria-label="${esc(label)}">${esc(valeur)}</textarea>`;
+    const choisis = (cle) => (prop ? prop[cle].map((x, i) => ({ ...x, i })).filter((x) => x.choisi && String(x.texte || '').trim()) : []);
+    zoneRelecture.innerHTML = `<h3 style="margin:0 0 4px">Relire et modifier le rapport</h3>
+      <p class="doux" style="margin:0 0 12px">Du ${esc(C.formatDateCourte(debut))} au ${esc(C.formatDateCourte(fin))}. Tout ce que tu changes ici est enregistré et repris dans le PDF. Les chiffres, tableaux et graphiques sont calculés à partir de tes évaluations.</p>
+      <div class="champ"><label for="rl-intro"><strong>I. Mot d'introduction</strong> <span class="doux">(facultatif : ce que tu veux dire à ton thérapeute en ouvrant le rapport)</span></label>${zoneTexte('rl-intro', mots.intro || '', { rows: 3, max: 2000, label: 'Mot d\'introduction' })}</div>
+      ${prop ? `<div class="champ"><label for="rl-evolution"><strong>Évolution</strong> <span class="doux">(aperçu dans l'introduction)</span></label>${zoneTexte('rl-evolution', prop.evolution || '', { rows: 4, max: C.LONGUEUR_EVOLUTION, label: 'Évolution' })}</div>` : ''}
+      <h4 style="margin:14px 0 6px">II. Jour par jour <span class="doux" style="font-weight:400">(${C.pluriel(jours.length, 'évaluation avec texte', 'évaluations avec texte')})</span></h4>
+      ${mode === 'original' ? '<p class="doux" style="margin:0 0 6px">Tu as choisi « textes originaux » : si tu modifies un texte ici, le rapport utilisera tes versions validées.</p>' : ''}
+      ${jours.length ? jours.map((j, n) => `<div class="relecture-jour"><p class="guide-sous" style="margin:8px 0 4px">${esc(C.majuscule(C.formatDateLongue(j.ev.date)))} · ${j.ev.creneau === 'matin' ? 'matin' : 'soir'} · ${esc(C.libelleNote(j.ev.note))}</p>
+        ${j.champs.map((k) => `<label class="doux" for="rl-j${n}-${k}" style="font-size:.85rem">${CHAMPS_JOUR[k]}</label>${zoneTexte(`rl-j${n}-${k}`, j.valeurs[k], { rows: 3, label: `${CHAMPS_JOUR[k]}, ${C.formatDateCourte(j.ev.date)}` })}`).join('')}</div>`).join('') : '<p class="doux">Aucun texte sur cette période.</p>'}
+      ${prop ? `<h4 style="margin:14px 0 6px">V. Conclusion</h4>
+        ${choisis('conclusions').map((x) => zoneTexte(`rl-c${x.i}`, x.texte, { rows: 2, max: C.LONGUEUR_PROPOSITION, label: 'Conclusion' })).join('') || '<p class="doux">Aucune conclusion cochée.</p>'}
+        <h4 style="margin:14px 0 6px">Points à aborder en séance</h4>
+        ${choisis('points').map((x) => zoneTexte(`rl-p${x.i}`, x.texte, { rows: 2, max: C.LONGUEUR_PROPOSITION, label: 'Point à aborder' })).join('')}
+        ${zoneTexte('rl-p-nouveau', '', { rows: 2, max: C.LONGUEUR_PROPOSITION, label: 'Nouveau point à aborder' }).replace('<textarea', '<textarea placeholder="Ajouter un point (facultatif)"')}
+        <p class="doux" style="margin:4px 0 0">Vide un texte pour le retirer du rapport.</p>` : ''}
+      <div class="champ" style="margin-top:14px"><label for="rl-fin"><strong>Mot de la fin</strong> <span class="doux">(facultatif, à la fin du rapport)</span></label>${zoneTexte('rl-fin', mots.motFin || '', { rows: 3, max: 2000, label: 'Mot de la fin' })}</div>`;
+    zoneRelecture.querySelectorAll('textarea').forEach((t) => { ajusterHauteur(t); t.addEventListener('input', () => ajusterHauteur(t)); });
+    afficherReglages(false);
+    zoneRelecture.scrollIntoView({ block: 'start' });
+  }
+  /** Enregistre ce qui a été modifié à la relecture ; retourne les mots du patient pour le PDF et le mode de textes à utiliser. */
+  async function enregistrerRelecture() {
+    const r = relecture;
+    const val = (id) => { const t = document.getElementById(id); return t ? t.value : null; };
+    let modifies = 0;
+    for (const [n, j] of r.jours.entries()) {
+      const nouv = { ...j.valeurs };
+      let change = false;
+      for (const k of j.champs) { const v = val(`rl-j${n}-${k}`); if (v !== null && v.trim() !== String(j.valeurs[k] || '').trim()) { nouv[k] = v; change = true; } }
+      if (!change) continue;
+      const ev = etat.evaluations.find((x) => x.id === j.ev.id) || j.ev;
+      const maj = C.definirReformulation(ev, { explication: nouv.explication, complement: nouv.complement, prevision: nouv.prevision, statut: 'validee', source: ev.reformulation ? ev.reformulation.source : 'manuelle', ...(ev.reformulation ? {} : { empreinteEvenements: C.empreinteEvenements(ev, evtsIA()) }) }, 'Texte du rapport modifié à la relecture', maintenant(), evtsIA());
+      if (maj) { await enregistrerEvaluation(maj); modifies++; }
+    }
+    if (r.prop) {
+      const p = JSON.parse(JSON.stringify(r.prop));
+      const ev = val('rl-evolution'); if (ev !== null) p.evolution = ev;
+      for (const cle of ['conclusions', 'points']) {
+        p[cle] = p[cle].map((x, i) => { const v = val(`rl-${cle === 'conclusions' ? 'c' : 'p'}${i}`); return v === null ? x : v.trim() ? { ...x, texte: v.trim() } : { ...x, choisi: false }; });
+      }
+      const nouveau = (val('rl-p-nouveau') || '').trim();
+      if (nouveau) p.points.push({ texte: nouveau, choisi: true, propre: true });
+      if (JSON.stringify(p) !== JSON.stringify(r.prop)) {
+        await sauverSynthese({ ...r.sy, propositions: p, texte: C.composerSynthese(p), statut: 'validee', valideeLeUtc: maintenantIso() });
+        modifies++;
+      }
+    }
+    const intro = (val('rl-intro') || '').trim(), motFin = (val('rl-fin') || '').trim();
+    await enregistrerParametres({ motsRapport: { debut: r.debut, fin: r.fin, intro, motFin } });
+    if (modifies) annoncer(`${C.pluriel(modifies, 'modification enregistrée', 'modifications enregistrées')}.`);
+    return { mots: { intro, fin: motFin }, mode: r.mode === 'original' && r.jours.some((j, n) => j.champs.some((k) => (val(`rl-j${n}-${k}`) || '').trim() !== String(j.valeurs[k] || '').trim())) ? 'reformule' : r.mode };
+  }
+  bRetour.addEventListener('click', () => { afficherReglages(true); relecture = null; });
+  bSansRelire.addEventListener('click', () => { sansRelire = true; form.requestSubmit(); });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const msg = document.getElementById('pdf-message');
@@ -3264,10 +3391,20 @@ async function ouvrirPdf({ periode = null, seanceProposee = null } = {}) {
     const debut = document.getElementById('pdf-debut').value;
     const finChoisie = document.getElementById('pdf-fin').value;
     const type = form.querySelector('[name="type"]:checked').value;
-    const textes = form.querySelector('[name="textes"]:checked').value;
+    let textes = form.querySelector('[name="textes"]:checked').value;
     if (!C.estDateValide(debut) || !C.estDateValide(finChoisie) || debut > finChoisie) {
       msg.hidden = false; msg.textContent = 'Choisis une date de début antérieure ou égale à la date de fin.'; return;
     }
+    // Étape de relecture avant le PDF (sauf « Créer sans relire »)
+    if (!sansRelire && !relecture) { ouvrirRelecture(debut, finChoisie, textes); return; }
+    let mots = null;
+    if (relecture) {
+      try { const rr = await enregistrerRelecture(); mots = rr.mots; textes = rr.mode; } catch (err) { msg.hidden = false; msg.textContent = err.message; return; }
+    } else {
+      const m = etat.parametres.motsRapport;
+      if (m && m.debut === debut && m.fin === finChoisie) mots = { intro: m.intro || '', fin: m.motFin || '' };
+    }
+    sansRelire = false;
     bouton.disabled = true; bouton.textContent = 'Génération…';
     try {
       const PDFLib = await chargerPdfLib();
@@ -3281,7 +3418,7 @@ async function ouvrirPdf({ periode = null, seanceProposee = null } = {}) {
       let logoPng = null;
       try { const r = await fetch('./icone-192.png'); if (r.ok) logoPng = new Uint8Array(await r.arrayBuffer()); } catch { /* sans logo */ }
       // Jamais plus de 10 pages : condensé automatiquement si la période est longue
-      const { octets, niveau: niveauCondense, pages: nbPages } = await genererRapportLimite(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), logoPng, inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
+      const { octets, niveau: niveauCondense, pages: nbPages } = await genererRapportLimite(PDFLib, { evaluations: etat.evaluations, motifs: etat.motifs, parametres: { ...etat.parametres, seances: seances() } }, { debut, fin: finChoisie, type, textes, instant: maintenant(), logoPng, inclureCNS: !!(caseCns && caseCns.checked), fondCarte, synthese, mots, evenements: avecEvenements ? (etat.parametres.evenements || []) : null, contexte: avecEvenements && ctxRapport && ctxRapport.rapport ? ctxRapport : null });
       const blob = new Blob([octets], { type: 'application/pdf' });
       const nom = nomFichierRapport(debut, finChoisie, type);
       res.hidden = false;
