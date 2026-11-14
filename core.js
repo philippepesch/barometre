@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.39.0';
+export const VERSION_APP = '1.40.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2598,7 +2598,100 @@ export function normaliserSeance(x) {
   if (fin && !debut) throw new Error('Indique aussi l\'heure de début.');
   if (debut && fin && fin <= debut) throw new Error('L\'heure de fin doit être après l\'heure de début.');
   // Séance annulée (par le patient ou le thérapeute) : gardée dans l'historique, mais ni « prochaine » ni « dernière »
-  return { id: x.id || nouvelId(), date: x.date, debut, fin, ...(x.annulee ? { annulee: true, annuleeLeUtc: x.annuleeLeUtc || null } : {}) };
+  return {
+    id: x.id || nouvelId(), date: x.date, debut, fin, ...(x.annulee ? { annulee: true, annuleeLeUtc: x.annuleeLeUtc || null } : {}),
+    // Séance reprise de Google Agenda : identifiant et date de mise à jour de l'événement ; « corrigee » si le patient l'a modifiée dans l'app
+    ...(x.googleId ? { googleId: String(x.googleId), googleMaj: x.googleMaj ? String(x.googleMaj) : '' } : {}),
+    ...(x.corrigee ? { corrigee: true } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Google Agenda : séances reprises des rendez-vous du patient (lecture seule, directement depuis l'appareil)
+
+export const PORTEE_GOOGLE = 'https://www.googleapis.com/auth/calendar.events.readonly';
+export function normaliserGoogle(x) {
+  const g = x && typeof x === 'object' ? x : {};
+  return {
+    clientId: String(g.clientId || '').trim(),
+    mot: String(g.mot || '').trim().slice(0, 60),
+    calendrier: String(g.calendrier || '').trim() || 'primary',
+    actif: g.actif !== false,
+  };
+}
+/** Mot cherché dans les rendez-vous : celui des réglages, sinon le nom de famille du thérapeute. */
+export function motRendezVous(parametres) {
+  const g = normaliserGoogle(parametres && parametres.google);
+  if (g.mot) return g.mot;
+  const nom = String(((parametres && parametres.therapeute) || {}).nom || '').trim().split(/\s+/).filter(Boolean);
+  return nom.length ? nom[nom.length - 1] : '';
+}
+/** Adresse d'autorisation Google (jeton d'accès en lecture seule, renvoyé à l'app elle-même). */
+export function urlAutorisationGoogle({ clientId, redirection, etat, indice = '' }) {
+  const q = new URLSearchParams({ client_id: clientId, redirect_uri: redirection, response_type: 'token', scope: PORTEE_GOOGLE, include_granted_scopes: 'true', state: etat, ...(indice ? { login_hint: indice } : {}) });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
+}
+/** Réponse de Google dans l'adresse (#access_token=…&expires_in=…&state=…) ou null. */
+export function lireRetourGoogle(hash) {
+  const h = String(hash || '').replace(/^#\/?/, '');
+  if (!/(^|&)(access_token|error)=/.test(h)) return null;
+  const p = new URLSearchParams(h);
+  return { jeton: p.get('access_token') || '', expire: Number(p.get('expires_in') || 0), etat: p.get('state') || '', erreur: p.get('error') || '' };
+}
+const deuxChiffres = (n) => String(n).padStart(2, '0');
+/** Date et heure locales (Luxembourg) d'un instant. */
+function dateHeureLocales(instant) {
+  const f = new Intl.DateTimeFormat('fr-CA', { timeZone: 'Europe/Luxembourg', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const v = Object.fromEntries(f.formatToParts(new Date(instant)).map((x) => [x.type, x.value]));
+  return { date: `${v.year}-${v.month}-${v.day}`, heure: `${deuxChiffres(Number(v.hour) % 24)}:${v.minute}` };
+}
+/** Rendez-vous Google → { googleId, googleMaj, date, debut, fin } (null si annulé, sans date ou sans le mot cherché). */
+export function seanceDepuisGoogle(ev, mot = '') {
+  if (!ev || ev.status === 'cancelled' || !ev.start) return null;
+  const texte = normaliserLibelle([ev.summary, ev.description, ev.location].filter(Boolean).join(' '));
+  if (mot && !texte.includes(normaliserLibelle(mot))) return null;
+  if (ev.start.dateTime) {
+    const d = dateHeureLocales(Date.parse(ev.start.dateTime));
+    const f = ev.end && ev.end.dateTime ? dateHeureLocales(Date.parse(ev.end.dateTime)) : null;
+    const fin = f && f.date === d.date && f.heure > d.heure ? f.heure : finParDefaut(d.heure);
+    return { googleId: ev.id, googleMaj: ev.updated || '', date: d.date, debut: d.heure, fin };
+  }
+  if (ev.start.date && estDateValide(ev.start.date)) return { googleId: ev.id, googleMaj: ev.updated || '', date: ev.start.date, debut: '', fin: '' };
+  return null;
+}
+/**
+ * Applique les rendez-vous Google aux séances de l'app :
+ * - rendez-vous nouveau → séance ajoutée (ou rattachée à une séance déjà notée ce jour-là, sans changer ses heures) ;
+ * - rendez-vous déplacé dans Google → séance mise à jour, sauf si le patient l'a corrigée dans l'app (sa correction l'emporte).
+ * Rien n'est supprimé. Retourne { seances, ajoutees, modifiees, rattachees }.
+ */
+export function appliquerRendezVousGoogle(seances, evenements, { mot = '' } = {}) {
+  let liste = [...(seances || [])];
+  const ajoutees = [], modifiees = [], rattachees = [];
+  for (const ev of evenements || []) {
+    const g = seanceDepuisGoogle(ev, mot);
+    if (!g) continue;
+    const meme = liste.find((s) => s.googleId === g.googleId);
+    if (meme) {
+      if (meme.googleMaj === g.googleMaj || meme.corrigee) continue;
+      const maj = normaliserSeance({ ...meme, date: g.date, debut: g.debut, fin: g.fin, googleMaj: g.googleMaj });
+      if (maj.date === meme.date && maj.debut === meme.debut && maj.fin === meme.fin) { liste = liste.map((s) => (s.id === meme.id ? maj : s)); continue; }
+      liste = liste.map((s) => (s.id === meme.id ? maj : s));
+      modifiees.push({ avant: meme, apres: maj });
+      continue;
+    }
+    const jour = liste.find((s) => s.date === g.date && !s.annulee && !s.googleId);
+    if (jour) {
+      const lie = normaliserSeance({ ...jour, googleId: g.googleId, googleMaj: g.googleMaj, ...(jour.debut ? {} : { debut: g.debut, fin: g.fin }) });
+      liste = liste.map((s) => (s.id === jour.id ? lie : s));
+      rattachees.push(lie);
+      continue;
+    }
+    const nouvelle = normaliserSeance({ date: g.date, debut: g.debut, fin: g.fin, googleId: g.googleId, googleMaj: g.googleMaj });
+    liste.push(nouvelle);
+    ajoutees.push(nouvelle);
+  }
+  return { seances: liste, ajoutees, modifiees, rattachees };
 }
 
 /** Début et fin de la séance (ms UTC). Sans heure : toute la journée ; sans fin : une heure. */
@@ -3131,7 +3224,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision', 'google'];
 
 function empreinteTexte(s) {
   let h = 5381;

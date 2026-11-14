@@ -46,6 +46,109 @@ async function enregistrerSeances(liste) {
   await enregistrerParametres({ seances: triees, prochaineSeance: proch ? proch.date : '', ...(proch ? { seanceAConvenir: false } : {}) });
 }
 
+// ---------------------------------------------------------------------------
+// Google Agenda : lecture seule des rendez-vous, depuis l'appareil (jeton d'une heure, jamais enregistré durablement)
+const CLE_JETON_GOOGLE = 'barometre-google-jeton';
+let jetonGoogle = null;
+const redirectionGoogle = () => location.origin + location.pathname.replace(/index\.html$/, ''); // toujours le dossier de l'app (une seule adresse à déclarer)
+function lireJetonGoogle() {
+  if (jetonGoogle && jetonGoogle.expireA > Date.now() + 60000) return jetonGoogle.jeton;
+  try { const j = JSON.parse(sessionStorage.getItem(CLE_JETON_GOOGLE) || 'null'); if (j && j.expireA > Date.now() + 60000) { jetonGoogle = j; return j.jeton; } } catch { /* sans stockage */ }
+  return null;
+}
+function garderJetonGoogle(jeton, expire) {
+  jetonGoogle = { jeton, expireA: Date.now() + Math.max(60, Number(expire) || 3600) * 1000 };
+  try { sessionStorage.setItem(CLE_JETON_GOOGLE, JSON.stringify(jetonGoogle)); } catch { /* sans stockage */ }
+}
+function oublierJetonGoogle() { jetonGoogle = null; try { sessionStorage.removeItem(CLE_JETON_GOOGLE); } catch { /* rien */ } }
+/** Dans la petite fenêtre Google : la réponse est transmise à la fenêtre de l'app, puis la fenêtre se ferme. */
+function traiterRetourGoogle() {
+  const r = C.lireRetourGoogle(location.hash);
+  if (!r) return false;
+  const msg = { type: 'google', ...r };
+  history.replaceState(null, '', location.pathname + '#/');
+  if (window.name !== 'barometre-google' && !window.opener) return false; // pas une fenêtre de connexion
+  try { const c = new BroadcastChannel('barometre-google'); c.postMessage(msg); c.close(); } catch { /* ancien navigateur */ }
+  try { localStorage.setItem('barometre-google-retour', JSON.stringify({ ...msg, t: Date.now() })); } catch { /* sans stockage */ }
+  document.body.innerHTML = '<p style="font:16px system-ui,sans-serif;padding:24px">Connexion à Google Agenda terminée. Tu peux fermer cette fenêtre.</p>';
+  setTimeout(() => window.close(), 400);
+  return true;
+}
+/** Ouvre la fenêtre Google (à appeler directement dans un clic) ; promesse du jeton. */
+function connecterGoogle() {
+  const g = C.normaliserGoogle(etat.parametres.google);
+  const etatOAuth = C.nouvelId();
+  const fenetre = window.open(C.urlAutorisationGoogle({ clientId: g.clientId, redirection: redirectionGoogle(), etat: etatOAuth }), 'barometre-google', 'width=500,height=650');
+  return new Promise((ok, ko) => {
+    let fini = false, canal = null;
+    const finir = () => { fini = true; if (canal) canal.close(); window.removeEventListener('storage', surStockage); clearTimeout(minuterie); try { localStorage.removeItem('barometre-google-retour'); } catch { /* rien */ } };
+    const traiter = (m) => {
+      if (fini || !m || m.type !== 'google' || m.etat !== etatOAuth) return;
+      finir();
+      if (m.erreur || !m.jeton) ko(new Error(m.erreur === 'access_denied' ? 'Accès refusé dans la fenêtre Google.' : `Google a répondu : ${m.erreur || 'pas de jeton'}.`));
+      else { garderJetonGoogle(m.jeton, m.expire); ok(m.jeton); }
+    };
+    const surStockage = (e) => { if (e.key === 'barometre-google-retour' && e.newValue) { try { traiter(JSON.parse(e.newValue)); } catch { /* rien */ } } };
+    try { canal = new BroadcastChannel('barometre-google'); canal.onmessage = (e) => traiter(e.data); } catch { /* ancien navigateur */ }
+    window.addEventListener('storage', surStockage);
+    const minuterie = setTimeout(() => { if (!fini) { finir(); ko(new Error('Pas de réponse de Google : la fenêtre a peut-être été fermée.')); } }, 180000);
+    if (!fenetre) { finir(); ko(new Error('Le navigateur a bloqué la fenêtre Google : autorise les fenêtres (pop-up) pour ce site, puis réessaie.')); }
+  });
+}
+/**
+ * Lit les rendez-vous à venir dans Google Agenda et met les séances à jour.
+ * interactif : ouvre la fenêtre Google s'il n'y a pas de jeton valable (uniquement depuis un clic).
+ */
+function verifierGoogle({ interactif = false, bouton = null } = {}) {
+  const g = C.normaliserGoogle(etat.parametres && etat.parametres.google);
+  if (!g.clientId) { if (interactif) aller('#/reglages/seances'); return Promise.resolve(null); }
+  const mot = C.motRendezVous(etat.parametres);
+  if (!mot) { if (interactif) annoncer('Indique le nom de ton thérapeute ou le mot à chercher (Réglages > Séances > Google Agenda).'); return Promise.resolve(null); }
+  const jeton = lireJetonGoogle();
+  const attente = jeton ? Promise.resolve(jeton) : (interactif ? connecterGoogle() : null);
+  if (!attente) return Promise.resolve(null);
+  if (bouton) { bouton.disabled = true; bouton.dataset.texte = bouton.textContent; bouton.textContent = 'Vérification…'; }
+  return attente.then(async (j) => {
+    const q = new URLSearchParams({ timeMin: new Date(maintenant() - 2 * 3600000).toISOString(), timeMax: new Date(maintenant() + 180 * 86400000).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '25', q: mot });
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(g.calendrier)}/events?${q}`, { headers: { Authorization: `Bearer ${j}` } });
+    if (r.status === 401) { oublierJetonGoogle(); throw new Error('Connexion Google expirée : touche à nouveau « Vérifier ».'); }
+    if (r.status === 404) throw new Error(`Agenda « ${g.calendrier} » introuvable.`);
+    if (!r.ok) throw new Error(`Google Agenda ne répond pas (${r.status}).`);
+    const donnees = await r.json();
+    const res = C.appliquerRendezVousGoogle(seances(), donnees.items || [], { mot });
+    ui.googleVerifie = Date.now();
+    if (res.ajoutees.length || res.modifiees.length || res.rattachees.length) {
+      await enregistrerSeances(res.seances);
+      await resultatGoogle(res);
+    } else if (interactif) annoncer('Google Agenda vérifié : rien de nouveau.');
+    rafraichirAccueil();
+    return res;
+  }).catch((e) => { if (interactif) annoncer(e.message); else console.warn(e); return null; })
+    .finally(() => { if (bouton && bouton.isConnected) { bouton.disabled = false; bouton.textContent = bouton.dataset.texte || 'Vérifier'; } });
+}
+/** Ce qui vient d'être repris de Google Agenda, avec un bouton pour corriger chaque séance. */
+async function resultatGoogle(res) {
+  const lignes = [
+    ...res.ajoutees.map((s) => ({ s, quoi: 'ajoutée' })),
+    ...res.modifiees.map((m) => ({ s: m.apres, quoi: `déplacée (avant : ${C.libelleSeance(m.avant)})` })),
+    ...res.rattachees.map((s) => ({ s, quoi: 'reliée au rendez-vous Google' })),
+  ];
+  const attente = dialogue(`<h2 id="dialogue-titre">Séances reprises de Google Agenda</h2>
+    <ul class="liste-simple">${lignes.map((l) => `<li><span><strong>${esc(C.libelleSeance(l.s))}</strong> <span class="doux">– ${esc(l.quoi)}</span></span><button type="button" class="bouton-discret" data-corriger-seance="${esc(l.s.id)}">Corriger</button></li>`).join('')}</ul>
+    <p class="doux">Tu peux toujours les corriger : ta correction l'emporte sur Google Agenda.</p>
+    <div class="dialogue-actions"><button class="bouton" value="oui">OK</button></div>`);
+  let aCorriger = null;
+  dlg.querySelectorAll('[data-corriger-seance]').forEach((b) => b.addEventListener('click', () => { aCorriger = b.dataset.corrigerSeance; dlg.close('corriger'); }));
+  await attente;
+  if (aCorriger) { const s = seances().find((x) => x.id === aCorriger); if (s) await dialogueSeance(s); rafraichirAccueil(); }
+}
+/** Accueil : rappel de vérifier Google Agenda (un clic, la fenêtre Google ne s'ouvre que depuis un clic). */
+function ligneGoogle() {
+  const g = C.normaliserGoogle(etat.parametres.google);
+  if (!g.clientId || !g.actif || ui.googleVerifie) return '';
+  return `<div class="bandeau bandeau-rythme rangee-espacee"><span><strong>Google Agenda</strong> : vérifier tes prochains rendez-vous avec ${esc(C.motRendezVous(etat.parametres) || 'ton thérapeute')}.</span><button type="button" class="bouton-secondaire" data-action="google-verifier">Vérifier</button></div>`;
+}
+
 /**
  * Séances transmises avec une mise à jour, à la demande du patient : ajoutées une seule fois sur chaque appareil,
  * seulement si elles sont encore à venir et qu'aucune séance n'est déjà notée ce jour-là. Ni nom ni adresse ici :
@@ -138,7 +241,9 @@ async function dialogueSeance(existante = null, { proposition = null, intro = ''
     }
     if (r.valeur !== 'oui') return null;
     try {
-      const sea = C.normaliserSeance({ id: existante ? existante.id : undefined, date: r.donnees.get('date'), debut: r.donnees.get('debut'), fin: r.donnees.get('fin'), annulee: existante && existante.annulee, annuleeLeUtc: existante && existante.annuleeLeUtc });
+      const champs = { date: r.donnees.get('date'), debut: r.donnees.get('debut'), fin: r.donnees.get('fin') };
+      const corrigee = !!(existante && existante.googleId && (existante.corrigee || champs.date !== existante.date || champs.debut !== existante.debut || champs.fin !== existante.fin));
+      const sea = C.normaliserSeance({ id: existante ? existante.id : undefined, ...champs, annulee: existante && existante.annulee, annuleeLeUtc: existante && existante.annuleeLeUtc, ...(existante && existante.googleId ? { googleId: existante.googleId, googleMaj: existante.googleMaj, corrigee } : {}) });
       const liste = seances().filter((x) => x.id !== sea.id);
       await enregistrerSeances([...liste, sea]);
       annoncer(`Séance enregistrée : ${C.libelleSeance(sea)}.`);
@@ -468,7 +573,7 @@ function vueAccueil() {
   contenu.innerHTML = `
     ${ui.majDisponible ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>Une nouvelle version de l\'application est prête.</span><button class="bouton-secondaire" data-action="mettre-a-jour">Mettre à jour</button></div>' : ''}
     ${ui.alerteDossier ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>La sauvegarde automatique dans ton dossier attend ton autorisation.</span><button class="bouton-secondaire" data-action="autoriser-dossier">Autoriser</button></div>' : ''}
-    ${ligneRythme()}${ligneExperience()}
+    ${ligneRythme()}${ligneExperience()}${ligneGoogle()}
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
     ${bandeauContexte()}
@@ -3748,6 +3853,19 @@ async function vueReglages([section] = []) {
       ${futures.length ? `<h3>À venir</h3><ul class="liste-simple">${futures.map(ligne).join('')}</ul>` : ''}
       ${passees.length ? `<h3 style="margin-top:14px">${passees.some((x) => x.annulee) ? 'Passées et annulées' : 'Passées'}</h3><ul class="liste-simple">${passees.slice(0, 12).map(ligne).join('')}</ul>` : ''}`;
   })()}
+      ${(() => {
+    const g = C.normaliserGoogle(etat.parametres.google);
+    const mot = C.motRendezVous(etat.parametres);
+    return `<fieldset class="champ" id="bloc-google" style="margin-top:16px"><legend style="font-weight:600;margin-bottom:6px">Google Agenda</legend>
+        <p class="doux" style="margin:0 0 8px">L'application lit tes rendez-vous à venir dans Google Agenda (lecture seule, directement depuis cet appareil : ni tes mails ni ton mot de passe ne sont utilisés) et ajoute ceux qui contiennent le mot ci-dessous comme séances. Tu peux toujours les corriger ici : ta correction l'emporte.</p>
+        <div class="champ"><label for="google-client">Identifiant client Google <small class="doux">(à créer une fois, voir le guide)</small></label><input type="text" id="google-client" value="${esc(g.clientId)}" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="…apps.googleusercontent.com"></div>
+        <div class="champ"><label for="google-mot">Mot à chercher dans le rendez-vous</label><input type="text" id="google-mot" value="${esc(g.mot)}" maxlength="60" autocomplete="off" placeholder="${esc(mot || 'Nom du thérapeute')}"><small class="doux">${g.mot ? '' : (mot ? `Vide : « ${esc(mot)} » (nom de ton thérapeute).` : '')}</small></div>
+        <div class="champ"><label for="google-calendrier">Agenda <small class="doux">(« primary » = ton agenda principal)</small></label><input type="text" id="google-calendrier" value="${esc(g.calendrier)}" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <label class="interrupteur"><input type="checkbox" id="google-actif" ${g.actif ? 'checked' : ''}> <span>Vérifier à chaque ouverture de l'application</span></label>
+        <p class="doux" style="margin:8px 0">Adresse de retour à déclarer chez Google : <code id="google-redirection">${esc(redirectionGoogle())}</code></p>
+        <p class="rangee"><button type="button" class="bouton-secondaire" id="btn-google-enregistrer">Enregistrer</button>${g.clientId ? '<button type="button" class="bouton" data-action="google-verifier">Vérifier maintenant</button>' : ''}</p>
+      </fieldset>`;
+  })()}
     </div>
 
     <div class="bloc" id="questionnaire"><h2>Questionnaire</h2>
@@ -3906,6 +4024,14 @@ async function vueReglages([section] = []) {
   if (caseAlerte) caseAlerte.addEventListener('change', async (e) => {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
+  });
+  document.getElementById('btn-google-enregistrer').addEventListener('click', async () => {
+    const g = C.normaliserGoogle({ clientId: document.getElementById('google-client').value, mot: document.getElementById('google-mot').value, calendrier: document.getElementById('google-calendrier').value, actif: document.getElementById('google-actif').checked });
+    if (g.clientId && !/\.apps\.googleusercontent\.com$/.test(g.clientId)) { annoncer('L\'identifiant client se termine par « .apps.googleusercontent.com ».'); return; }
+    await enregistrerParametres({ google: g });
+    oublierJetonGoogle();
+    annoncer(g.clientId ? 'Google Agenda enregistré. Touche « Vérifier maintenant ».' : 'Google Agenda désactivé.');
+    vueReglages(['seances']);
   });
   document.getElementById('btn-experience').addEventListener('click', async () => {
     const actif = document.getElementById('exp-active').checked;
@@ -4188,6 +4314,7 @@ document.addEventListener('click', (e) => {
   if (action === 'synchro-code') { copierCodeConnexion(); return; }
   if (action === 'demarrer-vide') { initialiser().then(() => { annoncer('Suivi démarré.'); aller('#/'); }); return; }
   if (action === 'retirer') { retirerEvaluation(id); return; }
+  if (action === 'google-verifier') { verifierGoogle({ interactif: true, bouton: cible }); return; }
   if (action === 'rythme-corriger') { const [d, cr] = String(id).split('|'); if (C.estDateValide(d) && C.CRENEAUX.includes(cr)) appliquerRythme(d, [cr]).then(() => router()); return; }
   if (action === 'mettre-a-jour') { if (ui.majDisponible) { ui.majDemandee = true; ui.majDisponible.postMessage({ type: 'activer' }); } return; }
   if (action.startsWith('motif-')) { actionMotif(action, id); return; }
@@ -4276,6 +4403,7 @@ async function verifierRappelsOuverture() {
 }
 
 async function demarrer() {
+  if (traiterRetourGoogle()) return; // petite fenêtre de connexion Google : rien d'autre à faire
   try {
     await chargerEtat();
   } catch (e) {
@@ -4290,7 +4418,7 @@ async function demarrer() {
   majEtatSynchro();
   enregistrerServiceWorker();
   // Après une courte attente (la synchronisation peut apporter une séance saisie sur un autre appareil)
-  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
+  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => (lireJetonGoogle() && C.normaliserGoogle(etat.parametres.google).actif ? verifierGoogle() : null)).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));
