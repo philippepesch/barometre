@@ -868,6 +868,140 @@ class Redacteur {
   }
 
   /** Histogramme des notes de 0 à 10, avec pictogrammes. */
+  // ---- Vue d'ensemble (1.41)
+  /** Bande météo : un pictogramme par jour (jour de la semaine, date, note), séances signalées. */
+  bandeMeteo(jours, { seances = new Set() } = {}) {
+    const n = Math.max(1, jours.length);
+    const pas = LARGEUR / n, t = Math.min(26, pas - 6);
+    const h = t + 34;
+    this.place(h + 4);
+    const y0 = this.y;
+    const jr = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+    jours.forEach((j, i) => {
+      const xc = MARGE + i * pas + pas / 2;
+      const js = jr[(new Date(`${j.date}T12:00:00Z`).getUTCDay() + 6) % 7];
+      const lib = `${js} ${Number(j.date.slice(8))}`;
+      this.texte(lib, xc - this.largeur(lib, 7, 'gras') / 2, y0 + 7, { taille: 7, police: 'gras', couleur: seances.has(j.date) ? LAITON : DOUX });
+      if (j.note !== null && j.note !== undefined) {
+        this.meteo(j.note, xc - t / 2, y0 + 10, t);
+        const v = String(j.note);
+        this.texte(v, xc - this.largeur(v, 8.5, 'gras') / 2, y0 + 10 + t + 10, { taille: 8.5, police: 'gras' });
+      } else this.texte('–', xc - 2, y0 + 10 + t / 2 + 3, { taille: 10, couleur: DOUX });
+      if (seances.has(j.date)) this.cadre(xc - pas / 2 + 2, y0, pas - 4, h - 4, { bord: LAITON, epaisseur: 0.8, rayon: 4 });
+    });
+    this.y = y0 + h;
+  }
+
+  /** Calendrier météo d'un mois (C.meteoMois) : une case par jour, séance (bord doré), événements (points). */
+  calendrierMeteo(m) {
+    const w = LARGEUR / 7, hc = 32, nbS = m.semaines.length;
+    const h = 14 + nbS * hc;
+    this.place(h + 22);
+    const y0 = this.y;
+    ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'].forEach((j, i) => this.texte(j, MARGE + i * w + w / 2 - this.largeur(j, 7.5, 'gras') / 2, y0 + 8, { taille: 7.5, police: 'gras', couleur: DOUX }));
+    const grille = this.couleur(TRAIT_GRILLE);
+    m.semaines.forEach((sem, k) => sem.forEach((c, i) => {
+      const x = MARGE + i * w, y = y0 + 14 + k * hc;
+      this.page.drawRectangle({ x, y: A4[1] - y - hc, width: w, height: hc, color: this.couleur(c ? (c.note !== null ? '#FFFFFF' : FOND_GRILLE) : '#FFFFFF'), borderColor: grille, borderWidth: 0.5 });
+      if (!c) return;
+      this.texte(String(c.jour), x + 3, y + 9, { taille: 7, police: 'gras', couleur: c.seance ? LAITON : DOUX });
+      if (c.note !== null) {
+        this.meteo(c.note, x + w / 2 - 10, y + 4, 20);
+        const v = String(c.note);
+        this.texte(v, x + w - 4 - this.largeur(v, 7.5, 'gras'), y + hc - 4, { taille: 7.5, police: 'gras' });
+      }
+      if (c.seance) this.page.drawRectangle({ x: x + 1.2, y: A4[1] - y - hc + 1.2, width: w - 2.4, height: hc - 2.4, borderColor: this.couleur(LAITON), borderWidth: 1.4 });
+      let xp = x + 4;
+      for (let q = 0; q < Math.min(3, c.positifs); q++, xp += 5) this.page.drawCircle({ x: xp, y: A4[1] - y - hc + 5, size: 1.8, color: this.couleur(COULEUR_IMPACT.positif) });
+      for (let q = 0; q < Math.min(3, c.negatifs); q++, xp += 5) this.page.drawCircle({ x: xp, y: A4[1] - y - hc + 5, size: 1.8, color: this.couleur(COULEUR_IMPACT.negatif) });
+    }));
+    this.y = y0 + h + 4;
+    // Légende
+    let x = MARGE;
+    const yL = this.y + 8;
+    this.page.drawRectangle({ x, y: A4[1] - yL - 1, width: 10, height: 8, borderColor: this.couleur(LAITON), borderWidth: 1.2 });
+    this.texte('séance', x + 13, yL + 6, { taille: 7.5, couleur: DOUX }); x += 50;
+    this.page.drawCircle({ x: x + 3, y: A4[1] - yL - 3, size: 2, color: this.couleur(COULEUR_IMPACT.positif) });
+    this.texte('événement positif', x + 8, yL + 6, { taille: 7.5, couleur: DOUX }); x += 82;
+    this.page.drawCircle({ x: x + 3, y: A4[1] - yL - 3, size: 2, color: this.couleur(COULEUR_IMPACT.negatif) });
+    this.texte('événement négatif', x + 8, yL + 6, { taille: 7.5, couleur: DOUX }); x += 84;
+    this.page.drawRectangle({ x, y: A4[1] - yL - 1, width: 10, height: 8, color: this.couleur(FOND_GRILLE), borderColor: this.couleur(TRAIT_GRILLE), borderWidth: 0.5 });
+    this.texte('sans évaluation', x + 13, yL + 6, { taille: 7.5, couleur: DOUX });
+    this.y = yL + 12;
+  }
+
+  /** Courbe de l'humeur moyenne de J−3 à J+3 autour des séances, avec la moyenne générale en pointillés. */
+  courbeAutourSeances(r) {
+    const h = 110, g = 26, l = LARGEUR - g;
+    this.place(h + 30);
+    const y0 = this.y, base = y0 + h;
+    const X = (i) => MARGE + g + (i + 0.5) * (l / r.decalages.length);
+    const Y = (v) => base - (v / 10) * (h - 8);
+    const c = this.couleur(TRAIT_GRILLE);
+    this.page.drawRectangle({ x: MARGE + g, y: A4[1] - base, width: l, height: h - 8, color: this.couleur(FOND_GRILLE), borderColor: c, borderWidth: 0.6 });
+    for (let v = 2; v < 10; v += 2) { this.page.drawLine({ start: { x: MARGE + g, y: A4[1] - Y(v) }, end: { x: MARGE + g + l, y: A4[1] - Y(v) }, thickness: 0.4, color: c }); }
+    for (const v of [0, 5, 10]) this.texte(String(v), MARGE + g - 6 - this.largeur(String(v), 7.5), Y(v) + 3, { taille: 7.5, couleur: DOUX });
+    const iJ = r.decalages.findIndex((d) => d.decalage === 0);
+    this.page.drawRectangle({ x: X(iJ) - l / r.decalages.length / 2, y: A4[1] - base, width: l / r.decalages.length, height: h - 8, color: this.couleur(LAITON), opacity: 0.12 });
+    if (r.moyenneGenerale !== null) this.page.drawLine({ start: { x: MARGE + g, y: A4[1] - Y(r.moyenneGenerale) }, end: { x: MARGE + g + l, y: A4[1] - Y(r.moyenneGenerale) }, thickness: 0.8, color: this.couleur(DOUX), dashArray: [3, 3] });
+    const pts = r.decalages.map((d, i) => (d.moyenne === null ? null : { x: X(i), y: Y(d.moyenne), d }));
+    for (let i = 1; i < pts.length; i++) if (pts[i] && pts[i - 1]) this.page.drawLine({ start: { x: pts[i - 1].x, y: A4[1] - pts[i - 1].y }, end: { x: pts[i].x, y: A4[1] - pts[i].y }, thickness: 1.6, color: this.couleur(LAITON) });
+    for (const p of pts.filter(Boolean)) {
+      this.page.drawCircle({ x: p.x, y: A4[1] - p.y, size: 3.4, color: this.couleur(COULEURS_NIVEAUX[Math.round(p.d.moyenne)]), borderColor: this.couleur('#FFFFFF'), borderWidth: 0.8 });
+      const v = C.nombreFr(p.d.moyenne);
+      this.texte(v, p.x - this.largeur(v, 7.5, 'gras') / 2, p.y - 7, { taille: 7.5, police: 'gras' });
+    }
+    r.decalages.forEach((d, i) => {
+      const t = d.decalage === 0 ? 'jour de la séance' : `J${d.decalage > 0 ? '+' : '−'}${Math.abs(d.decalage)}`;
+      this.texte(t, X(i) - this.largeur(t, 7.5, d.decalage === 0 ? 'gras' : 'normal') / 2, base + 11, { taille: 7.5, police: d.decalage === 0 ? 'gras' : 'normal', couleur: d.decalage === 0 ? LAITON : DOUX });
+      const nb = `(${d.nombre})`;
+      this.texte(nb, X(i) - this.largeur(nb, 6.8) / 2, base + 20, { taille: 6.8, couleur: DOUX });
+    });
+    this.y = base + 26;
+  }
+
+  /** Paliers de sevrage (marches, échelle de gauche en mg) et humeur du jour (points, échelle de droite 0–10). */
+  courbeSevrage(s, { unite = 'mg' } = {}) {
+    const h = 130, gG = 34, gD = 22, l = LARGEUR - gG - gD;
+    this.place(h + 34);
+    const y0 = this.y, base = y0 + h, n = s.jours.length;
+    const X = (i) => MARGE + gG + (n <= 1 ? l / 2 : (i / (n - 1)) * l);
+    const maxDose = Math.max(0.5, ...s.jours.map((j) => j.dose || 0));
+    const YD = (v) => base - (v / maxDose) * (h - 18);
+    const YN = (v) => base - (v / 10) * (h - 18);
+    const c = this.couleur(TRAIT_GRILLE);
+    this.page.drawRectangle({ x: MARGE + gG, y: A4[1] - base, width: l, height: h - 8, color: this.couleur(FOND_GRILLE), borderColor: c, borderWidth: 0.6 });
+    for (let v = 2; v < 10; v += 2) this.page.drawLine({ start: { x: MARGE + gG, y: A4[1] - YN(v) }, end: { x: MARGE + gG + l, y: A4[1] - YN(v) }, thickness: 0.4, color: c });
+    for (const v of [0, 5, 10]) this.texte(String(v), MARGE + gG + l + 5, YN(v) + 3, { taille: 7.5, couleur: DOUX });
+    for (const v of [0, maxDose / 2, maxDose]) { const t = C.nombreFr(Math.round(v * 100) / 100, v % 1 ? 2 : 0); this.texte(t, MARGE + gG - 5 - this.largeur(t, 7.5), YD(v) + 3, { taille: 7.5, couleur: BARRE_DEF }); }
+    this.texte(unite, MARGE, y0 + 4, { taille: 7.5, police: 'gras', couleur: BARRE_DEF });
+    this.texte('humeur', MARGE + gG + l - 6, y0 + 4, { taille: 7.5, police: 'gras', couleur: DOUX });
+    // Marches de la dose
+    for (let i = 0; i < n; i++) {
+      const d = s.jours[i].dose;
+      if (d === null) continue;
+      const xa = X(i), xb = i + 1 < n ? X(i + 1) : xa;
+      this.page.drawLine({ start: { x: xa, y: A4[1] - YD(d) }, end: { x: xb, y: A4[1] - YD(d) }, thickness: 2.2, color: this.couleur(BARRE_DEF) });
+      if (i + 1 < n && s.jours[i + 1].dose !== null && s.jours[i + 1].dose !== d) this.page.drawLine({ start: { x: xb, y: A4[1] - YD(d) }, end: { x: xb, y: A4[1] - YD(s.jours[i + 1].dose) }, thickness: 1.2, color: this.couleur(BARRE_DEF), dashArray: [2, 2] });
+    }
+    // Humeur
+    const pts = s.jours.map((j, i) => (j.note === null ? null : { x: X(i), y: YN(j.note), n: j.note }));
+    for (let i = 1; i < pts.length; i++) if (pts[i] && pts[i - 1]) this.page.drawLine({ start: { x: pts[i - 1].x, y: A4[1] - pts[i - 1].y }, end: { x: pts[i].x, y: A4[1] - pts[i].y }, thickness: 0.8, color: this.couleur(DOUX) });
+    for (const p of pts.filter(Boolean)) this.page.drawCircle({ x: p.x, y: A4[1] - p.y, size: 2.4, color: this.couleur(COULEURS_NIVEAUX[Math.round(p.n)]) });
+    // Dates : début, paliers, fin
+    const marques = new Map([[0, s.jours[0].date], [n - 1, s.jours[n - 1].date]]);
+    s.paliers.forEach((p) => { const i = s.jours.findIndex((j) => j.date === p.date); if (i > 0) marques.set(i, p.date); });
+    let dernierX = -99;
+    for (const [i, d] of [...marques].sort((a, b) => a[0] - b[0])) {
+      const t = C.formatDateCourte(d).slice(0, 5);
+      const x = Math.min(MARGE + gG + l - this.largeur(t, 7), Math.max(MARGE + gG, X(i) - this.largeur(t, 7) / 2));
+      if (x - dernierX < 26) continue;
+      this.texte(t, x, base + 11, { taille: 7, couleur: DOUX });
+      dernierX = x;
+    }
+    this.y = base + 20;
+  }
+
   histogramme(compte) {
     const h = 96, hTotal = h + 44;
     this.place(hTotal);
@@ -1318,6 +1452,37 @@ export async function genererRapport(PDFLib, donnees, options) {
 
   // ===== Partie I – Introduction : présentation, aperçu de la période (évolution validée), contexte, évaluations
   await R.partie('I', 'Introduction', { nouvellePage: true });
+  // En bref pour la séance : l'essentiel en une minute
+  if (evals.length) {
+    const parJour = C.notesParJour(evals);
+    const nbJ = Math.min(14, C.joursEntre(debut, fin) + 1);
+    const jours = Array.from({ length: nbJ }, (_, i) => { const d = C.ajouterJours(fin, i - nbJ + 1); return { date: d, note: parJour.has(d) ? parJour.get(d).note : null }; });
+    const setSeances = new Set(listeSeances.filter((x) => !x.annulee).map((x) => x.date));
+    const nbPeriode = C.joursEntre(debut, fin) + 1;
+    const evo = C.evolution(toutes, fin, nbPeriode);
+    const pese = freq.filter((f) => f.polarite === 'defavorable').slice(0, 3);
+    const aide = freq.filter((f) => f.polarite === 'favorable').slice(0, 3);
+    const evtsP = C.evenementsActifs(evenementsTous, { debut, fin, rapportSeulement: true });
+    const noteDu = (d) => (parJour.has(d) ? parJour.get(d).moyenne : 5);
+    const beau = evtsP.filter((x) => x.impact === 'positif').sort((x, y) => noteDu(y.date) - noteDu(x.date))[0];
+    const dur = evtsP.filter((x) => x.impact === 'negatif').sort((x, y) => noteDu(x.date) - noteDu(y.date))[0];
+    const pointsBrief = synthese ? C.partiesSynthese(synthese.texte).points.slice(0, 4) : [];
+    R.section(++numSection, 'En bref pour la séance', 230);
+    R.encadre(230, () => {
+      R.paragraphe(nbJ < nbPeriode ? `Les ${nbJ} derniers jours de la période, jour par jour (séances encadrées) :` : 'La période jour par jour (séances encadrées) :', { taille: 8.8, couleur: DOUX, apres: 4 });
+      R.bandeMeteo(jours, { seances: setSeances });
+      R.chiffres([
+        { valeur: C.nombreFr(stats.moyenne), suffixe: '/10', libelle: `Humeur moyenne · ${C.pluriel(stats.nombre, 'évaluation')}`, icone: Math.round(stats.moyenne) },
+        { valeur: evo.difference === null ? '—' : C.signeFr(evo.difference), suffixe: evo.difference === null ? '' : 'pt', libelle: evo.difference === null ? 'Pas de période précédente comparable' : `Par rapport aux ${nbPeriode} jours précédents (${C.nombreFr(evo.moyennePrecedente)}/10)` },
+        { valeur: String(comptes.completees), suffixe: `/${comptes.attendues}`, libelle: 'Évaluations faites / attendues' },
+      ]);
+      const liste = (l) => (l.length ? l.map((f) => `${f.libelle} (${f.nombre}×)`).join(' ; ') : '—');
+      R.riche([['Ce qui a pesé : ', 'gras'], [liste(pese)]], { taille: 9.2, apres: 3 });
+      R.riche([['Ce qui a aidé : ', 'gras'], [liste(aide)]], { taille: 9.2, apres: 3 });
+      if (beau || dur) R.riche([['Moments marquants : ', 'gras'], [[beau ? `+ ${beau.titre} (${C.formatDateCourte(beau.date).slice(0, 5)})` : '', dur ? `− ${dur.titre} (${C.formatDateCourte(dur.date).slice(0, 5)})` : ''].filter(Boolean).join(' ; ')]], { taille: 9.2, apres: 3 });
+      if (pointsBrief.length) { R.riche([['À aborder : ', 'gras'], [pointsBrief.join(' • ')]], { taille: 9.2, apres: 2 }); }
+    });
+  }
   R.section(++numSection, 'Introduction', 120);
   // Mot du patient pour le thérapeute (écrit à la relecture, avant la création du PDF)
   const motsPatient = options.mots || {};
@@ -1383,6 +1548,21 @@ export async function genererRapport(PDFLib, donnees, options) {
 
   // ===== Partie II – Évaluations jour par jour (détail complet, ou tableau dans le rapport synthétique)
   await R.partie('II', 'Évaluations jour par jour', niveau ? { besoin: 230 } : { nouvellePage: true }); // rapport condensé : pas de page entamée laissée vide
+  // Météo du mois : dans le rapport complet ou peu condensé (ensuite, la bande météo de « En bref » suffit)
+  if (evals.length && niveau <= 2) {
+    const moisListe = [];
+    for (let m = debut.slice(0, 7); m <= fin.slice(0, 7); m = C.ajouterJours(`${m}-28`, 7).slice(0, 7)) moisListe.push(m);
+    const garder = moisListe.slice(-(niveau >= 1 ? 1 : 2));
+    R.section(++numSection, 'Météo du mois', 14 + 6 * 32 + 90);
+    R.paragraphe(`Une case par jour : la météo de la note du jour${moisListe.length > garder.length ? ` (les ${garder.length === 1 ? 'dernier mois' : `${garder.length} derniers mois`} de la période)` : ''}.`, { taille: 9, couleur: DOUX, apres: 4 });
+    for (const m of garder) {
+      const cal = C.meteoMois(toutes, m, { seances: listeSeances, evenements: evenementsTous, aujourdhui: C.dateLocale(instant), debutSuivi: parametres.debutSuiviUtc ? C.dateLocale(Date.parse(parametres.debutSuiviUtc)) : '' });
+      R.encadre(300, () => {
+        R.riche([[C.majuscule(C.formatMois(`${m}-01`)), 'gras'], [`  ·  ${cal.suivi.notes} jour${cal.suivi.notes > 1 ? 's' : ''} noté${cal.suivi.notes > 1 ? 's' : ''} sur ${cal.suivi.ecoules}`]], { taille: 10, apres: 4 });
+        R.calendrierMeteo(cal);
+      });
+    }
+  }
   R.section(++numSection, 'Évaluations jour par jour', 120);
   if (!evals.length) R.paragraphe('Aucune évaluation sur la période.');
   const heureValidation = (e) => (e.validationConnue && e.valideLeUtc ? C.formatDateHeure(e.valideLeUtc) : 'inconnue (donnée historique)');
@@ -1550,7 +1730,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // ===== Partie III – Impacts : événements marquants et facteurs cochés
-  await R.partie('III', 'Impacts : événements marquants et facteurs', { besoin: 230 });
+  await R.partie('III', 'Impacts : événements marquants et facteurs', { besoin: niveau ? 150 : 230 });
   {
     if (evenements.length) {
       R.section(++numSection, 'Événements marquants', 120);
@@ -1608,7 +1788,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // ===== Partie IV – Analyse
-  await R.partie('IV', 'Analyse', { besoin: 200 });
+  await R.partie('IV', 'Analyse', { besoin: niveau ? 130 : 200 });
   // 2. Moyennes
   R.section(++numSection, 'Moyennes');
   if (!stats.nombre) R.paragraphe('Aucune évaluation sur la période.');
@@ -1747,6 +1927,47 @@ export async function genererRapport(PDFLib, donnees, options) {
     } else { R.section(++numSection, 'Comparaison entre prévisions et réalité'); tableauPrev(); }
   }
 
+  // Humeur autour des séances (tout le suivi jusqu'à la fin de la période)
+  if (niveau < 5) {
+    const jusqua = toutes.filter((e) => e.date <= fin);
+    const ra = C.humeurAutourSeances(jusqua, listeSeances, Math.min(instant, C.localVersUtc(C.ajouterJours(fin, 1), '00:00')));
+    if (ra.seances >= 1 && ra.decalages.some((d) => d.nombre)) {
+      R.section(++numSection, 'Humeur autour des séances', 190);
+      R.paragraphe(`Humeur moyenne du patient de trois jours avant à trois jours après chaque séance (${C.pluriel(ra.seances, 'séance')} depuis le début du suivi ; entre parenthèses, le nombre de jours notés). En pointillés : sa moyenne générale${ra.moyenneGenerale !== null ? ` (${C.nombreFr(ra.moyenneGenerale)}/10)` : ''}.`, { taille: 9.2, apres: 4 });
+      R.encadre(150, () => R.courbeAutourSeances(ra));
+      if (ra.seances < 3) R.paragraphe('Avec si peu de séances, cette courbe est encore très indicative.', { taille: 8.6, couleur: DOUX });
+    }
+  }
+  // Ce qui précède les journées difficiles (tout le suivi jusqu'à la fin de la période)
+  if (niveau < 5) {
+    const ad = C.avantJoursDifficiles(toutes.filter((e) => e.date <= fin), donnees.motifs || [], { evenements: evenementsTous });
+    if (ad.suffisant && ad.facteurs.length) {
+      R.section(++numSection, 'Ce qui précède les journées difficiles', 150);
+      R.paragraphe(`Journée difficile : note du jour de ${C.nombreFr(ad.seuil)}/10 ou moins (le quart le plus bas du suivi, sous la moyenne) ; ${C.pluriel(ad.difficiles, 'journée difficile')} sur ${C.pluriel(ad.couples, 'jour')} dont la veille est notée. Le tableau indique ce que le patient avait noté la veille, plus souvent avant ces journées qu'en général. Il s'agit de coïncidences observées, pas de causes établies.`, { taille: 9.2, apres: 4 });
+      R.tableau(
+        [{ titre: 'Noté la veille', part: 3.2 }, { titre: 'Avant les journées difficiles', part: 1.6 }, { titre: 'En général', part: 1 }],
+        ad.facteurs.map((f) => [f.libelle, `${f.avant} sur ${f.difficiles} (${Math.round(f.part * 100)} %)`, `${Math.round(f.general * 100)} %`]),
+      );
+    }
+  }
+  // Paliers de sevrage saisis par le patient et humeur
+  if (parametres.sevrageRapport !== false) {
+    const parts = C.produitsDoses(parametres.doses, parametres.medicaments)
+      .map((pr) => ({ pr, sv: C.sevrageSurPeriode(parametres.doses, evals, debut, fin, { produit: pr }) })).filter((x) => x.sv.paliers.length);
+    if (parts.length) {
+      R.section(++numSection, 'Sevrage : paliers et humeur', 190);
+      R.paragraphe(`Doses quotidiennes indiquées par le patient (marches, échelle de gauche en mg) et note du jour (points, échelle de droite)${parts.length > 1 ? ', une courbe par médicament' : ''}. Les doses sont celles qu'il a saisies, en général la prescription notée après chaque rendez-vous médical ; l'application ne donne aucun avis médical.`, { taille: 9.2, apres: 4 });
+      for (const { pr, sv } of parts) {
+        if (pr) { R.place(200); R.paragraphe(pr, { taille: 10, police: 'gras', apres: 2 }); }
+        R.encadre(170, () => R.courbeSevrage(sv));
+        R.tableau(
+          [{ titre: 'Palier', part: 2.2 }, { titre: 'Dose par jour', part: 1 }, { titre: 'Humeur moyenne', part: 1.3 }, { titre: 'Remarque', part: 2.5 }],
+          sv.paliers.map((p) => [`${C.formatDateCourte(p.de)} – ${C.formatDateCourte(p.a)}`, `${C.doseFr(p.dose)} mg`, p.moyenne === null ? '—' : `${C.nombreFr(p.moyenne)}/10 (${p.nombre})`, p.remarque || '']),
+        );
+      }
+    }
+  }
+
   // Expérience de prévision : objectif (prévision + 1, demandée par le thérapeute)
   {
     const rx = C.resultatsExperience(evals, toutes);
@@ -1776,7 +1997,7 @@ export async function genererRapport(PDFLib, donnees, options) {
   }
 
   // ===== Partie V – Conclusion et points à aborder
-  await R.partie('V', 'Conclusion', { besoin: 200 });
+  await R.partie('V', 'Conclusion', { besoin: niveau ? 130 : 200 });
   // 11. Synthèse neutre
   // Fin du rapport : conclusion et points à aborder (synthèse validée, rédigée avec Claude) ;
   // à défaut, relevé factuel automatique des sujets possibles

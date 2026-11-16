@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.40.0';
+export const VERSION_APP = '1.42.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -2617,6 +2617,8 @@ export function normaliserGoogle(x) {
     mot: String(g.mot || '').trim().slice(0, 60),
     calendrier: String(g.calendrier || '').trim() || 'primary',
     actif: g.actif !== false,
+    // Rendez-vous chez le médecin qui suit le sevrage : mot cherché dans Google Agenda (vide = pas de recherche)
+    motMedecin: String(g.motMedecin || '').trim().slice(0, 60),
   };
 }
 /** Mot cherché dans les rendez-vous : celui des réglages, sinon le nom de famille du thérapeute. */
@@ -3224,7 +3226,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision', 'google'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision', 'google', 'doses', 'sevrageRapport', 'bilanVu', 'rdvMedecin', 'medicaments'];
 
 function empreinteTexte(s) {
   let h = 5381;
@@ -3376,4 +3378,241 @@ export function fusionnerSynchro(local, distant) {
     motifs: [...motifs.values()],
     archives: [...archives.values()],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Vue d'ensemble (1.41) : météo du mois, ce qui précède les journées difficiles, humeur autour des séances,
+// ressources personnelles, bilan de la semaine, paliers de sevrage. Chiffres descriptifs uniquement.
+
+/** Une note par jour : moyenne des évaluations de ce jour. Map date → { moyenne, note (arrondie), evaluations }. */
+export function notesParJour(evaluations) {
+  const m = new Map();
+  for (const e of evaluations || []) {
+    if (!e || !estDateValide(e.date) || !Number.isInteger(e.note)) continue;
+    if (!m.has(e.date)) m.set(e.date, []);
+    m.get(e.date).push(e);
+  }
+  const res = new Map();
+  for (const [d, l] of [...m].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const moy = moyenne(l.map((e) => e.note));
+    res.set(d, { moyenne: moy, note: Math.round(moy), evaluations: l });
+  }
+  return res;
+}
+const debutMois = (mois) => `${mois}-01`;
+const finMois = (mois) => ajouterJours(`${ajouterJours(debutMois(mois), 32).slice(0, 7)}-01`, -1);
+
+/**
+ * Météo du mois : semaines de lundi à dimanche, une case par jour (note du jour, séance, événements positifs / négatifs).
+ * suivi : jours notés sur les jours écoulés depuis le début du suivi (sans compter aujourd'hui s'il n'est pas encore noté).
+ */
+export function meteoMois(evaluations, mois, { seances = [], evenements = [], aujourdhui = '', debutSuivi = '' } = {}) {
+  const premier = debutMois(mois), dernier = finMois(mois);
+  const parJour = notesParJour(evaluations);
+  const sea = new Set((seances || []).filter((s) => !s.annulee).map((s) => s.date));
+  const evts = evenementsActifs(evenements, { debut: premier, fin: dernier });
+  const decalage = (new Date(`${premier}T12:00:00Z`).getUTCDay() + 6) % 7;
+  const cases = Array.from({ length: decalage }, () => null);
+  let notes = 0, ecoules = 0;
+  const premiereNote = [...parJour.keys()][0] || '';
+  const premierSuivi = [debutSuivi && estDateValide(debutSuivi) ? debutSuivi : '', premiereNote].filter(Boolean).sort()[0] || premier;
+  for (let d = premier; d <= dernier; d = ajouterJours(d, 1)) {
+    const j = parJour.get(d);
+    const ev = evts.filter((x) => x.date === d);
+    const futur = aujourdhui && d > aujourdhui;
+    const suivi = d >= premierSuivi && !futur;
+    if (suivi && (d < aujourdhui || j)) ecoules++;
+    if (j && suivi) notes++;
+    cases.push({ date: d, jour: Number(d.slice(8)), note: j ? j.note : null, moyenne: j ? j.moyenne : null, evaluations: j ? j.evaluations : [], seance: sea.has(d), positifs: ev.filter((x) => x.impact === 'positif').length, negatifs: ev.filter((x) => x.impact === 'negatif').length, futur: !!futur, aujourdhui: d === aujourdhui });
+  }
+  while (cases.length % 7) cases.push(null);
+  const semaines = [];
+  for (let i = 0; i < cases.length; i += 7) semaines.push(cases.slice(i, i + 7));
+  return { mois, premier, dernier, semaines, suivi: { notes, ecoules } };
+}
+
+/**
+ * Ce qui précède les journées difficiles : motifs et événements de la veille, plus fréquents avant une journée difficile
+ * qu'en général. Journée difficile : note du jour dans le quart le plus bas et sous la moyenne. Il faut au moins
+ * 10 couples veille → lendemain et 3 journées difficiles. Rien n'est conclu : c'est une coïncidence observée.
+ */
+export function avantJoursDifficiles(evaluations, motifs = [], { evenements = [] } = {}) {
+  const parJour = notesParJour(evaluations);
+  const dates = [...parJour.keys()];
+  const couples = dates.filter((d) => parJour.has(ajouterJours(d, 1))).map((d) => ({ veille: d, jour: ajouterJours(d, 1) }));
+  const notes = dates.map((d) => parJour.get(d).moyenne).sort((a, b) => a - b);
+  const vide = { suffisant: false, couples: couples.length, difficiles: 0, seuil: null, facteurs: [] };
+  if (couples.length < 10) return vide;
+  const moy = moyenne(notes);
+  const q1 = notes[Math.floor((notes.length - 1) * 0.25)];
+  const seuil = Math.min(q1, moy - 0.5);
+  const difficiles = couples.filter((c) => parJour.get(c.jour).moyenne <= seuil);
+  if (difficiles.length < 3) return { ...vide, difficiles: difficiles.length, seuil };
+  const evts = evenementsActifs(evenements);
+  const libMotif = new Map((motifs || []).map((m) => [m.id, m]));
+  const traits = (d) => {
+    const t = new Map();
+    for (const e of parJour.get(d).evaluations) for (const m of e.motifs || []) {
+      const ref = libMotif.get(m.id) || m;
+      t.set(`m:${m.id}`, { libelle: ref.libelle, polarite: ref.polarite || m.polarite || 'mixte', type: 'motif' });
+    }
+    for (const x of evts.filter((x) => x.date === d && x.impact)) t.set(`e:${x.impact}`, { libelle: x.impact === 'negatif' ? 'Un événement à impact négatif' : 'Un événement à impact positif', polarite: x.impact === 'negatif' ? 'defavorable' : 'favorable', type: 'evenement' });
+    return t;
+  };
+  const tous = new Map(), avant = new Map();
+  for (const c of couples) for (const [k, v] of traits(c.veille)) { tous.set(k, { ...v, n: (tous.get(k) || { n: 0 }).n + 1 }); }
+  for (const c of difficiles) for (const [k, v] of traits(c.veille)) { avant.set(k, { ...v, n: (avant.get(k) || { n: 0 }).n + 1 }); }
+  const facteurs = [...avant].map(([k, v]) => {
+    const general = tous.get(k).n / couples.length, part = v.n / difficiles.length;
+    return { cle: k, libelle: v.libelle, polarite: v.polarite, type: v.type, avant: v.n, difficiles: difficiles.length, part, general, rapport: general ? part / general : 0 };
+  }).filter((f) => f.avant >= 2 && f.rapport >= 1.3).sort((a, b) => b.rapport * b.avant - a.rapport * a.avant || b.avant - a.avant).slice(0, 6);
+  return { suffisant: true, couples: couples.length, difficiles: difficiles.length, seuil, facteurs };
+}
+
+/** Humeur de 3 jours avant à 3 jours après chaque séance passée : moyenne par décalage (0 = jour de la séance). */
+export function humeurAutourSeances(evaluations, seances, instant, { avant = 3, apres = 3 } = {}) {
+  const parJour = notesParJour(evaluations);
+  const passees = (seances || []).filter((s) => !s.annulee && bornesSeance(s).debut <= instant);
+  const decalages = [];
+  for (let k = -avant; k <= apres; k++) {
+    const v = passees.map((s) => parJour.get(ajouterJours(s.date, k))).filter(Boolean).map((j) => j.moyenne);
+    decalages.push({ decalage: k, moyenne: v.length ? moyenne(v) : null, nombre: v.length });
+  }
+  const avecDonnees = passees.filter((s) => [...Array(avant + apres + 1)].some((_, i) => parJour.has(ajouterJours(s.date, i - avant)))).length;
+  return { seances: avecDonnees, decalages, moyenneGenerale: parJour.size ? moyenne([...parJour.values()].map((j) => j.moyenne)) : null };
+}
+
+/**
+ * Ce qui t'a fait du bien : motifs favorables et activités les plus souvent présents les jours où la note dépasse
+ * ta moyenne (au moins 2 fois). Tiré uniquement de tes propres évaluations.
+ */
+export function ressourcesPersonnelles(evaluations, motifs = [], { max = 3 } = {}) {
+  const evs = (evaluations || []).filter((e) => Number.isInteger(e.note));
+  if (evs.length < 5) return [];
+  const moy = moyenne(evs.map((e) => e.note));
+  const ref = new Map((motifs || []).map((m) => [m.id, m]));
+  const acc = new Map();
+  const ajouter = (cle, libelle, type, note) => { const a = acc.get(cle) || { libelle, type, notes: [] }; a.notes.push(note); acc.set(cle, a); };
+  for (const e of evs) {
+    for (const m of e.motifs || []) { const r = ref.get(m.id) || m; if ((r.polarite || m.polarite) === 'favorable') ajouter(`m:${m.id}`, r.libelle, 'motif', e.note); }
+    for (const l of lieuxDe(e)) if (l.activite && String(l.activite).trim()) ajouter(`a:${normaliserLibelle(l.activite)}`, String(l.activite).trim(), 'activite', Number.isInteger(l.ressenti) ? l.ressenti : e.note);
+  }
+  return [...acc.values()].map((a) => ({ libelle: a.libelle, type: a.type, nombre: a.notes.length, moyenne: moyenne(a.notes) }))
+    .filter((a) => a.nombre >= 2 && a.moyenne >= moy + 0.5)
+    .sort((a, b) => b.moyenne - a.moyenne || b.nombre - a.nombre).slice(0, max);
+}
+
+/** Lundi de la semaine d'une date. */
+export function lundiDe(date) { const d = (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7; return ajouterJours(date, -d); }
+
+/** Bilan d'une semaine (lundi → dimanche) : météo de chaque jour, moyenne, comparaison, meilleur moment, objectifs (+1). */
+export function bilanSemaine(evaluations, lundi, { evenements = [] } = {}) {
+  const parJour = notesParJour(evaluations);
+  const jours = Array.from({ length: 7 }, (_, i) => { const d = ajouterJours(lundi, i); const j = parJour.get(d); return { date: d, note: j ? j.note : null, moyenne: j ? j.moyenne : null }; });
+  const notes = jours.filter((j) => j.moyenne !== null);
+  const prec = Array.from({ length: 7 }, (_, i) => parJour.get(ajouterJours(lundi, i - 7))).filter(Boolean);
+  const dimanche = ajouterJours(lundi, 6);
+  const evts = evenementsActifs(evenements, { debut: lundi, fin: dimanche });
+  const positifs = evts.filter((x) => x.impact === 'positif');
+  const meilleurJour = notes.length ? [...notes].sort((a, b) => b.moyenne - a.moyenne || (a.date < b.date ? 1 : -1))[0] : null;
+  const evtMeilleur = positifs.find((x) => meilleurJour && x.date === meilleurJour.date) || positifs[0] || null;
+  const semaine = (evaluations || []).filter((e) => e.date >= lundi && e.date <= dimanche);
+  const rx = resultatsExperience(semaine, evaluations);
+  return {
+    lundi, dimanche, jours, nombre: notes.length,
+    moyenne: notes.length ? moyenne(notes.map((j) => j.moyenne)) : null,
+    moyennePrecedente: prec.length ? moyenne(prec.map((j) => j.moyenne)) : null,
+    meilleur: meilleurJour ? { date: meilleurJour.date, note: meilleurJour.note, evenement: evtMeilleur ? evtMeilleur.titre : '' } : null,
+    positifs: positifs.length,
+    objectifs: rx.nombreComparees ? { atteints: rx.atteints, compares: rx.nombreComparees } : null,
+  };
+}
+
+/** Paliers de sevrage saisis par le patient : [{ id, date, dose (mg), produit, remarque }], triés par date. */
+export function normaliserDoses(x) {
+  return (Array.isArray(x) ? x : []).filter((d) => d && estDateValide(d.date) && Number.isFinite(Number(d.dose)) && Number(d.dose) >= 0 && Number(d.dose) <= 1000)
+    .map((d) => ({ id: String(d.id || nouvelId()), date: d.date, dose: Math.round(Number(d.dose) * 100) / 100, produit: String(d.produit || '').trim().slice(0, 60), remarque: String(d.remarque || '').trim().slice(0, 200) }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+/** Dose lisible : « 1,5 », « 2 », « 0,25 ». */
+export const doseFr = (v) => String(Math.round(Number(v) * 100) / 100).replace('.', ',');
+/** Dose en vigueur à une date (dernier palier ≤ date), ou null. */
+export function doseLe(doses, date) {
+  let r = null;
+  for (const d of (Array.isArray(doses) && doses.every((x) => x && x.id) ? [...doses].sort((a, b) => (a.date < b.date ? -1 : 1)) : normaliserDoses(doses))) { if (d.date <= date) r = d; else break; }
+  return r;
+}
+/** Paliers et humeur jour par jour sur une période, avec la moyenne de l'humeur sur chaque palier. */
+export function sevrageSurPeriode(doses, evaluations, debut, fin, { produit = null } = {}) {
+  const ds = produit === null ? normaliserDoses(doses) : dosesDe(doses, produit);
+  if (!ds.length) return { paliers: [], jours: [] };
+  const parJour = notesParJour(evaluations);
+  const jours = [];
+  for (let d = debut; d <= fin; d = ajouterJours(d, 1)) { const p = doseLe(ds, d); jours.push({ date: d, dose: p ? p.dose : null, note: parJour.has(d) ? parJour.get(d).moyenne : null }); }
+  const paliers = ds.filter((p, i) => (ds[i + 1] ? ds[i + 1].date > debut : true) && p.date <= fin).map((p, i, l) => {
+    const de = p.date < debut ? debut : p.date;
+    const suivant = ds[ds.indexOf(p) + 1];
+    const a = suivant && suivant.date <= fin ? ajouterJours(suivant.date, -1) : fin;
+    const notes = jours.filter((j) => j.date >= de && j.date <= a && j.note !== null).map((j) => j.note);
+    return { ...p, de, a, moyenne: notes.length ? moyenne(notes) : null, nombre: notes.length };
+  });
+  return { paliers, jours };
+}
+
+// ---------------------------------------------------------------------------
+// Sevrage (1.42) : médicaments suivis, rendez-vous chez le médecin repris de Google Agenda, dose prescrite à chaque rendez-vous
+
+/** Médicaments suivis (saisis par le patient), sans doublon. */
+export function normaliserMedicaments(x) {
+  const l = (Array.isArray(x) ? x : String(x || '').split(/[,;\n]/)).map((m) => String(m || '').trim().slice(0, 60)).filter(Boolean);
+  return l.filter((m, i) => l.findIndex((y) => normaliserLibelle(y) === normaliserLibelle(m)) === i).slice(0, 6);
+}
+/** Médicaments présents dans les paliers (ou suivis), dans l'ordre des réglages ; « » = palier sans médicament. */
+export function produitsDoses(doses, medicaments = []) {
+  const ds = normaliserDoses(doses);
+  const suivis = normaliserMedicaments(medicaments);
+  const vus = [...suivis];
+  for (const d of ds) if (!vus.some((v) => normaliserLibelle(v) === normaliserLibelle(d.produit))) vus.push(d.produit);
+  return vus.filter((v) => ds.some((d) => normaliserLibelle(d.produit) === normaliserLibelle(v)));
+}
+/** Paliers d'un seul médicament (comparaison sans accents ni majuscules). */
+export const dosesDe = (doses, produit) => normaliserDoses(doses).filter((d) => normaliserLibelle(d.produit) === normaliserLibelle(produit || ''));
+
+export function normaliserRdvMedecin(x) {
+  return (Array.isArray(x) ? x : []).filter((r) => r && r.googleId && estDateValide(r.date))
+    .map((r) => ({ googleId: String(r.googleId), googleMaj: String(r.googleMaj || ''), date: r.date, debut: estHeure(r.debut) ? r.debut : '', fin: estHeure(r.fin) ? r.fin : '', ...(r.reponduLe ? { reponduLe: String(r.reponduLe) } : {}) }))
+    .sort((a, b) => (a.date + a.debut < b.date + b.debut ? -1 : 1));
+}
+/** Ajoute ou met à jour les rendez-vous chez le médecin trouvés dans Google Agenda (un rendez-vous déjà renseigné ne bouge plus). */
+export function fusionnerRdvMedecin(liste, evenementsGoogle, mot) {
+  const res = normaliserRdvMedecin(liste);
+  for (const ev of evenementsGoogle || []) {
+    const g = seanceDepuisGoogle(ev, mot);
+    if (!g) continue;
+    const i = res.findIndex((r) => r.googleId === g.googleId);
+    if (i < 0) res.push({ googleId: g.googleId, googleMaj: g.googleMaj, date: g.date, debut: g.debut, fin: g.fin });
+    else if (!res[i].reponduLe && res[i].googleMaj !== g.googleMaj) res[i] = { ...res[i], googleMaj: g.googleMaj, date: g.date, debut: g.debut, fin: g.fin };
+  }
+  return normaliserRdvMedecin(res);
+}
+/** Rendez-vous passés (terminés depuis au moins une demi-heure) dont la dose prescrite n'a pas encore été demandée. */
+export function rdvEnAttente(liste, instant) {
+  return normaliserRdvMedecin(liste).filter((r) => !r.reponduLe && bornesSeance(r).fin + 30 * 60000 <= instant);
+}
+/** Lecture d'une dose saisie (« 1,5 », « 25 mg », « 12.5 ») ; null si vide ou illisible. */
+export function lireDose(texte) {
+  const t = String(texte || '').trim().replace(/mg$/i, '').trim().replace(',', '.');
+  if (!t) return null;
+  const v = Number(t);
+  return Number.isFinite(v) && v >= 0 && v <= 2000 ? Math.round(v * 100) / 100 : NaN;
+}
+/** Enregistre les doses prescrites à un rendez-vous : un palier par médicament renseigné (remplace un palier du même jour). */
+export function dosesApresRdv(doses, date, valeurs) {
+  let ds = normaliserDoses(doses);
+  for (const [produit, dose] of Object.entries(valeurs || {})) {
+    if (dose === null || dose === undefined || Number.isNaN(dose)) continue;
+    ds = ds.filter((d) => !(d.date === date && normaliserLibelle(d.produit) === normaliserLibelle(produit)));
+    ds.push({ id: nouvelId(), date, dose, produit, remarque: `Prescription du ${formatDateCourte(date)}` });
+  }
+  return normaliserDoses(ds);
 }

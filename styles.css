@@ -648,3 +648,58 @@ details.domaine > .puces { padding: 0 12px 12px; }
 /* Relecture du rapport avant le PDF */
 #pdf-relecture textarea { width: 100%; margin: 2px 0 8px; }
 .relecture-jour { border-top: 1px solid var(--filet); padding-top: 4px; }
+
+/* ---- Vue d'ensemble (1.41) ---- */
+/* Météo du mois */
+.mm-grille { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.mm-jour { text-align: center; font-size: .75rem; color: var(--encre-2); }
+.mm-case { position: relative; min-height: 54px; border: 1px solid var(--filet); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; align-items: center; justify-content: center; text-decoration: none; color: inherit; padding: 14px 2px 4px; }
+a.mm-case:hover, a.mm-case:focus-visible { border-color: var(--laiton); outline: none; box-shadow: 0 0 0 2px color-mix(in oklab, var(--laiton) 35%, transparent); }
+.mm-vide { border: 0; background: transparent; }
+.mm-sans { background: color-mix(in oklab, var(--filet) 30%, var(--surface)); }
+.mm-futur { opacity: .45; }
+.mm-auj { border-width: 2px; border-color: var(--encre-2); }
+.mm-seance { box-shadow: inset 0 0 0 2px var(--laiton); }
+.mm-num { position: absolute; top: 2px; left: 5px; font-size: .7rem; color: var(--encre-2); font-weight: 600; }
+.mm-seance .mm-num { color: var(--laiton); }
+.mm-note { position: absolute; bottom: 2px; right: 5px; font-size: .72rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mm-points { position: absolute; bottom: 4px; left: 5px; display: flex; gap: 2px; }
+.mm-pos, .mm-neg { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.mm-pos { background: #2F6E9E; }
+.mm-neg { background: #8A3B4A; }
+.mm-l-seance { display: inline-block; width: 12px; height: 10px; border: 2px solid var(--laiton); border-radius: 3px; vertical-align: -1px; }
+@media (max-width: 480px) { .mm-case { min-height: 44px; padding-top: 12px; } .mm-icone svg { width: 20px; height: 20px; } .mm-note { display: none; } }
+/* Petits graphiques SVG */
+.svg-mini { width: 100%; height: auto; display: block; }
+.svg-mini text { font-size: 9px; fill: var(--encre-2); }
+.svg-fond { fill: color-mix(in oklab, var(--filet) 25%, var(--surface)); stroke: var(--filet); stroke-width: .6; }
+.svg-grille { stroke: var(--filet); stroke-width: .5; }
+.svg-jour { fill: color-mix(in oklab, var(--laiton) 18%, transparent); }
+.svg-moyenne { stroke: var(--encre-2); stroke-width: 1; stroke-dasharray: 4 3; }
+.svg-ligne { fill: none; stroke: var(--laiton); stroke-width: 2; }
+.svg-ligne-fine { fill: none; stroke: var(--encre-2); stroke-width: 1; opacity: .6; }
+.svg-val { font-weight: 700; fill: var(--encre) !important; }
+.svg-j0 { font-weight: 700; fill: var(--laiton) !important; }
+.svg-dose { stroke: #8A3B4A; stroke-width: 3; }
+.svg-tirets { stroke-width: 1.4; stroke-dasharray: 3 3; }
+.svg-dose-txt { fill: #8A3B4A !important; font-weight: 600; }
+/* Bilan de la semaine */
+.bilan-semaine { border-left: 4px solid var(--laiton); }
+.bilan-jours { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+.bilan-jour { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.bilan-vide { height: 32px; line-height: 32px; color: var(--encre-2); }
+/* Questions guidées : aide clavier */
+.guide-clavier { font-size: .8rem; margin-top: 14px; }
+.guide-clavier kbd { font: inherit; font-size: .75rem; padding: 1px 5px; border: 1px solid var(--filet); border-bottom-width: 2px; border-radius: 4px; background: var(--surface); }
+
+.cal-legende i.mm-pos, .cal-legende i.mm-neg { width: 8px; height: 8px; border: 0; border-radius: 50%; }
+.cal-legende i.mm-pos { background: #2F6E9E; }
+.cal-legende i.mm-neg { background: #8A3B4A; }
+.cal-legende i.mm-l-seance { width: 12px; height: 10px; border: 2px solid var(--laiton); border-radius: 3px; background: transparent; }
+
+/* 1.42 : dose prescrite après les rendez-vous chez le médecin */
+.rdv-doses { max-height: 55vh; overflow-y: auto; margin: 8px 0; }
+.rdv-dose { border: 1px solid var(--filet); border-radius: var(--rayon-petit); padding: 8px 12px 12px; margin: 0 0 10px; }
+.rdv-dose legend { font-weight: 600; padding: 0 4px; }
+.rdv-dose .rangee { gap: 12px; flex-wrap: wrap; }
+#titre-sevrage ~ h3 { margin: 14px 0 4px; }

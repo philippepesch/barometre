@@ -103,29 +103,91 @@ function verifierGoogle({ interactif = false, bouton = null } = {}) {
   const g = C.normaliserGoogle(etat.parametres && etat.parametres.google);
   if (!g.clientId) { if (interactif) aller('#/reglages/seances'); return Promise.resolve(null); }
   const mot = C.motRendezVous(etat.parametres);
-  if (!mot) { if (interactif) annoncer('Indique le nom de ton thérapeute ou le mot à chercher (Réglages > Séances > Google Agenda).'); return Promise.resolve(null); }
+  if (!mot && !g.motMedecin) { if (interactif) annoncer('Indique le nom de ton thérapeute ou le mot à chercher (Réglages > Séances > Google Agenda).'); return Promise.resolve(null); }
   const jeton = lireJetonGoogle();
   const attente = jeton ? Promise.resolve(jeton) : (interactif ? connecterGoogle() : null);
   if (!attente) return Promise.resolve(null);
   if (bouton) { bouton.disabled = true; bouton.dataset.texte = bouton.textContent; bouton.textContent = 'Vérification…'; }
-  return attente.then(async (j) => {
-    const q = new URLSearchParams({ timeMin: new Date(maintenant() - 2 * 3600000).toISOString(), timeMax: new Date(maintenant() + 180 * 86400000).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '25', q: mot });
-    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(g.calendrier)}/events?${q}`, { headers: { Authorization: `Bearer ${j}` } });
+  const chercher = async (j, q, depuis, jusqua, max) => {
+    const params = new URLSearchParams({ timeMin: new Date(depuis).toISOString(), timeMax: new Date(jusqua).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: String(max), q });
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(g.calendrier)}/events?${params}`, { headers: { Authorization: `Bearer ${j}` } });
     if (r.status === 401) { oublierJetonGoogle(); throw new Error('Connexion Google expirée : touche à nouveau « Vérifier ».'); }
     if (r.status === 404) throw new Error(`Agenda « ${g.calendrier} » introuvable.`);
     if (!r.ok) throw new Error(`Google Agenda ne répond pas (${r.status}).`);
-    const donnees = await r.json();
-    const res = C.appliquerRendezVousGoogle(seances(), donnees.items || [], { mot });
+    return (await r.json()).items || [];
+  };
+  return attente.then(async (j) => {
+    let res = null;
+    if (mot) {
+      const items = await chercher(j, mot, maintenant() - 2 * 3600000, maintenant() + 180 * 86400000, 25);
+      res = C.appliquerRendezVousGoogle(seances(), items, { mot });
+    }
+    // Rendez-vous chez le médecin (sevrage) : passés (un an) et à venir, gardés à part des séances
+    let rdvAvant = null, rdvApres = null;
+    if (g.motMedecin) {
+      const items = await chercher(j, g.motMedecin, maintenant() - 365 * 86400000, maintenant() + 180 * 86400000, 100);
+      rdvAvant = C.normaliserRdvMedecin(etat.parametres.rdvMedecin);
+      rdvApres = C.fusionnerRdvMedecin(rdvAvant, items, g.motMedecin);
+    }
     ui.googleVerifie = Date.now();
-    if (res.ajoutees.length || res.modifiees.length || res.rattachees.length) {
+    if (rdvApres && JSON.stringify(rdvApres) !== JSON.stringify(rdvAvant)) await enregistrerParametres({ rdvMedecin: rdvApres });
+    if (res && (res.ajoutees.length || res.modifiees.length || res.rattachees.length)) {
       await enregistrerSeances(res.seances);
       await resultatGoogle(res);
-    } else if (interactif) annoncer('Google Agenda vérifié : rien de nouveau.');
+    } else if (interactif && !(rdvApres && C.rdvEnAttente(rdvApres, maintenant()).length)) annoncer('Google Agenda vérifié : rien de nouveau.');
     rafraichirAccueil();
+    await demanderDosesRdv();
     return res;
   }).catch((e) => { if (interactif) annoncer(e.message); else console.warn(e); return null; })
     .finally(() => { if (bouton && bouton.isConnected) { bouton.disabled = false; bouton.textContent = bouton.dataset.texte || 'Vérifier'; } });
 }
+
+/**
+ * Après chaque rendez-vous chez le médecin (repris de Google Agenda) : demander une seule fois la dose quotidienne prescrite
+ * pour chaque médicament suivi. Vide = inchangée ou je ne sais plus ; « Plus tard » = redemander à la prochaine ouverture.
+ * Les noms (médecin, médicaments) sont saisis par le patient dans les réglages : rien de tel dans le code public.
+ */
+async function demanderDosesRdv({ seulement = null } = {}) {
+  if (!etat.parametres) return;
+  const tous = C.normaliserRdvMedecin(etat.parametres.rdvMedecin);
+  const liste = seulement ? tous.filter((r) => r.googleId === seulement) : (ui.rdvPlusTard ? [] : C.rdvEnAttente(tous, maintenant()));
+  if (!liste.length) return;
+  const meds = C.normaliserMedicaments(etat.parametres.medicaments);
+  const g = C.normaliserGoogle(etat.parametres.google);
+  const doses = C.normaliserDoses(etat.parametres.doses);
+  if (!meds.length) {
+    const r = await dialogue(`<h2 id="dialogue-titre">Rendez-vous chez le médecin</h2>
+      <p>${C.pluriel(liste.length, 'rendez-vous passé')} « ${esc(g.motMedecin)} » trouvé${liste.length > 1 ? 's' : ''} dans Google Agenda. Pour noter la dose prescrite, indique d'abord les médicaments suivis (Réglages › Sevrage).</p>
+      <div class="dialogue-actions"><button class="bouton-secondaire" value="non">Plus tard</button><button class="bouton" value="oui">Ouvrir les réglages</button></div>`);
+    ui.rdvPlusTard = true;
+    if (r.valeur === 'oui') aller('#/reglages/sevrage');
+    return;
+  }
+  const actuelle = (med, date) => { const d = C.doseLe(C.dosesDe(doses, med), C.ajouterJours(date, -1)); return d ? d.dose : null; };
+  const deja = (med, date) => { const d = C.dosesDe(doses, med).find((x) => x.date === date); return d ? C.doseFr(d.dose) : ''; };
+  const r = await dialogue(`<h2 id="dialogue-titre">Dose prescrite chez le médecin</h2>
+    <p class="doux" style="margin-top:0">Pour chaque rendez-vous « ${esc(g.motMedecin)} » : la dose <strong>par jour</strong> prescrite, en mg. Laisse vide si elle n'a pas changé ou si tu ne t'en souviens plus.</p>
+    <div class="rdv-doses">${liste.map((rv, i) => `<fieldset class="rdv-dose"><legend>${esc(C.formatDateLongue ? C.formatDateLongue(rv.date) : C.formatDateCourte(rv.date))}${rv.debut ? ` · ${esc(rv.debut)}` : ''}</legend>
+      <div class="rangee">${meds.map((m, k) => { const av = actuelle(m, rv.date); return `<div class="champ" style="margin:0"><label for="rdv-${i}-${k}">${esc(m)} <small class="doux">(mg/jour)</small></label><input type="text" id="rdv-${i}-${k}" name="rdv-${i}-${k}" inputmode="decimal" maxlength="8" autocomplete="off" style="width:9em" value="${esc(deja(m, rv.date))}" placeholder="${av === null ? '' : `avant : ${esc(C.doseFr(av))}`}"${i === 0 && k === 0 ? ' autofocus' : ''}></div>`; }).join('')}</div></fieldset>`).join('')}</div>
+    <p class="doux">Ces doses restent dans l'application (jamais envoyées à l'assistant de rédaction). L'application ne donne aucun avis médical.</p>
+    <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Plus tard</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+  if (r.valeur !== 'oui') { ui.rdvPlusTard = true; return; }
+  let ds = doses;
+  for (let i = 0; i < liste.length; i++) {
+    const valeurs = {};
+    for (let k = 0; k < meds.length; k++) {
+      const v = C.lireDose(r.donnees.get(`rdv-${i}-${k}`));
+      if (Number.isNaN(v)) { annoncer(`Dose illisible pour ${meds[k]} (${C.formatDateCourte(liste[i].date)}) : écris par exemple 2,5.`); ui.rdvPlusTard = false; return demanderDosesRdv({ seulement }); }
+      valeurs[meds[k]] = v;
+    }
+    ds = C.dosesApresRdv(ds, liste[i].date, valeurs);
+  }
+  const fait = new Set(liste.map((x) => x.googleId)), le = new Date(maintenant()).toISOString();
+  await enregistrerParametres({ doses: ds, rdvMedecin: tous.map((x) => (fait.has(x.googleId) ? { ...x, reponduLe: le } : x)) });
+  annoncer('Doses enregistrées.');
+  if (location.hash.startsWith('#/reglages')) vueReglages(['sevrage']);
+}
+
 /** Ce qui vient d'être repris de Google Agenda, avec un bouton pour corriger chaque séance. */
 async function resultatGoogle(res) {
   const lignes = [
@@ -574,6 +636,7 @@ function vueAccueil() {
     ${ui.majDisponible ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>Une nouvelle version de l\'application est prête.</span><button class="bouton-secondaire" data-action="mettre-a-jour">Mettre à jour</button></div>' : ''}
     ${ui.alerteDossier ? '<div class="bandeau bandeau-laiton rangee-espacee"><span>La sauvegarde automatique dans ton dossier attend ton autorisation.</span><button class="bouton-secondaire" data-action="autoriser-dossier">Autoriser</button></div>' : ''}
     ${ligneRythme()}${ligneExperience()}${ligneGoogle()}
+    ${carteBilanSemaine()}
     ${bandeauSeance()}
     ${aRelire() ? `<div class="bandeau bandeau-laiton rangee-espacee"><span>${aRelire() > 1 ? `${aRelire()} versions reformulées pour le rapport attendent ta relecture.` : 'Une version reformulée pour le rapport attend ta relecture.'}</span><a class="bouton-secondaire" href="#/textes">Relire</a></div>` : ''}
     ${bandeauContexte()}
@@ -761,6 +824,7 @@ function tableauDeBord() {
     <h2 id="titre-courbe">Courbe des notes</h2>
     ${graphiqueHTML(grille, prev)}
   </section>
+  ${blocMeteoMois()}
   ${blocContexte(evals)}
   <div class="grille-2">
     <section class="bloc" aria-labelledby="titre-evolution">
@@ -779,12 +843,149 @@ function tableauDeBord() {
     </section>
   </div>
   ${blocExperience(evals)}
+  ${blocSevrage(debut, fin)}
+  <div class="grille-2">${blocAutourSeances()}${blocAvantDifficiles()}</div>
   <section class="bloc" aria-labelledby="titre-motifs">
     <h2 id="titre-motifs">Fréquence des motifs</h2>
     <p class="doux">Seuls les motifs cochés sont comptés, en part des ${C.pluriel(evals.length, 'évaluation')} de la période.</p>
     <div class="grille-2" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">${barres('favorable', 'Favorables')}${barres('defavorable', 'Défavorables')}${freq.some((f) => f.polarite === 'mixte') ? barres('mixte', 'Mixtes') : ''}</div>
   </section>
   <p><a class="bouton-secondaire" href="#/calendrier">Voir le calendrier complet</a></p>`;
+}
+
+// ---------------------------------------------------------------------------
+// Vue d'ensemble (1.41) : météo du mois, séances, journées difficiles, sevrage, bilan de la semaine, ressources
+
+/** Météo du mois : une case par jour (touche-la pour ouvrir ou compléter l'évaluation). */
+function blocMeteoMois() {
+  const auj = aujourdhui();
+  const mois = ui.moisMeteo && /^\d{4}-\d{2}$/.test(ui.moisMeteo) ? ui.moisMeteo : auj.slice(0, 7);
+  const debutSuivi = etat.parametres.debutSuiviUtc ? C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)) : '';
+  const m = C.meteoMois(etat.evaluations, mois, { seances: seances(), evenements: etat.parametres.evenements || [], aujourdhui: auj, debutSuivi });
+  const prec = C.ajouterJours(`${mois}-01`, -1).slice(0, 7), suiv = C.ajouterJours(`${mois}-28`, 7).slice(0, 7);
+  const t = maintenant();
+  const cases = m.semaines.flat().map((c) => {
+    if (!c) return '<div class="mm-case mm-vide" aria-hidden="true"></div>';
+    const ev = c.evaluations[c.evaluations.length - 1];
+    const lib = `${C.formatDateLongue(c.date)}${c.note !== null ? ` : ${c.note}/10` : ''}${c.seance ? ', séance' : ''}`;
+    const points = `${'<i class="mm-pos"></i>'.repeat(Math.min(3, c.positifs))}${'<i class="mm-neg"></i>'.repeat(Math.min(3, c.negatifs))}`;
+    const inner = `<span class="mm-num">${c.jour}</span>${c.note !== null ? `<span class="mm-icone">${iconeMeteo(c.note, { taille: 26 })}</span><span class="mm-note">${c.note}</span>` : ''}${points ? `<span class="mm-points">${points}</span>` : ''}`;
+    const classe = `mm-case${c.seance ? ' mm-seance' : ''}${c.aujourdhui ? ' mm-auj' : ''}${c.note === null ? ' mm-sans' : ''}${c.futur ? ' mm-futur' : ''}`;
+    if (ev) return `<a class="${classe}" href="#/evaluation/${esc(ev.id)}" title="${esc(lib)}" aria-label="${esc(lib)}, ouvrir">${inner}</a>`;
+    const creneau = C.creneauxDuJour(c.date).slice(-1)[0] || 'soir';
+    const slot = C.grilleCreneaux(c.date, c.date, etat.evaluations, t, etat.parametres.debutSuiviUtc).find((x) => x.creneau === creneau);
+    if (slot && C.peutSaisir(slot, t)) return `<a class="${classe}" href="#/evaluer/${c.date}/${creneau}" title="${esc(lib)}" aria-label="${esc(lib)}, saisir">${inner}</a>`;
+    return `<div class="${classe}" title="${esc(lib)}">${inner}</div>`;
+  }).join('');
+  const { notes, ecoules } = m.suivi;
+  const merci = ecoules ? (notes === ecoules ? `Les ${C.pluriel(notes, 'jour')} sont notés : merci.` : `${notes} jour${notes > 1 ? 's' : ''} noté${notes > 1 ? 's' : ''} sur ${ecoules}. Chaque soirée notée compte, un oubli n'efface rien.`) : '';
+  return `<section class="bloc" aria-labelledby="titre-meteo-mois">
+    <div class="section-titre"><h2 id="titre-meteo-mois">Météo de ${esc(C.formatMois(`${mois}-01`))}</h2>
+      <span class="rangee" style="gap:6px"><button type="button" class="bouton-secondaire" data-action="meteo-mois" data-id="${prec}" aria-label="Mois précédent">‹</button><button type="button" class="bouton-secondaire" data-action="meteo-mois" data-id="${suiv}" aria-label="Mois suivant" ${suiv > auj.slice(0, 7) ? 'disabled' : ''}>›</button></span></div>
+    ${merci ? `<p class="doux" style="margin:0 0 8px">${merci}</p>` : ''}
+    <div class="mm-grille">${['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'].map((j) => `<div class="mm-jour" aria-hidden="true">${j}</div>`).join('')}${cases}</div>
+    <p class="cal-legende doux" style="margin-top:8px"><span><i class="mm-l-seance"></i>séance</span><span><i class="mm-pos"></i>événement positif</span><span><i class="mm-neg"></i>événement négatif</span><span>Touche un jour pour l'ouvrir ou le compléter.</span></p>
+  </section>`;
+}
+
+/** Petite courbe SVG de l'humeur de J−3 à J+3 autour des séances. */
+function blocAutourSeances() {
+  const r = C.humeurAutourSeances(etat.evaluations, seances(), maintenant());
+  if (!r.seances || !r.decalages.some((d) => d.nombre)) return '';
+  const W = 300, H = 140, g = 24, b = 112, X = (i) => g + (i + 0.5) * ((W - g) / 7), Y = (v) => b - (v / 10) * 100;
+  const pts = r.decalages.map((d, i) => (d.moyenne === null ? null : [X(i), Y(d.moyenne), d]));
+  const trace = pts.filter(Boolean).map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  return `<section class="bloc" aria-labelledby="titre-autour"><h2 id="titre-autour">Autour des séances</h2>
+    <svg class="svg-mini" viewBox="0 0 ${W} ${H}" role="img" aria-label="Humeur moyenne de trois jours avant à trois jours après les séances">
+      <rect x="${g}" y="${Y(10)}" width="${W - g}" height="100" class="svg-fond"/>
+      <rect x="${X(3) - (W - g) / 14}" y="${Y(10)}" width="${(W - g) / 7}" height="100" class="svg-jour"/>
+      ${[0, 5, 10].map((v) => `<text x="${g - 4}" y="${Y(v) + 3}" text-anchor="end">${v}</text><line x1="${g}" x2="${W}" y1="${Y(v)}" y2="${Y(v)}" class="svg-grille"/>`).join('')}
+      ${r.moyenneGenerale !== null ? `<line x1="${g}" x2="${W}" y1="${Y(r.moyenneGenerale)}" y2="${Y(r.moyenneGenerale)}" class="svg-moyenne"/>` : ''}
+      <polyline points="${trace}" class="svg-ligne"/>
+      ${pts.filter(Boolean).map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="4" fill="var(--n${Math.round(p[2].moyenne)})"><title>${p[2].decalage === 0 ? 'Jour de la séance' : `J${p[2].decalage > 0 ? '+' : '−'}${Math.abs(p[2].decalage)}`} : ${C.nombreFr(p[2].moyenne)}/10 (${p[2].nombre})</title></circle><text x="${p[0]}" y="${p[1] - 7}" text-anchor="middle" class="svg-val">${C.nombreFr(p[2].moyenne)}</text>`).join('')}
+      ${r.decalages.map((d, i) => `<text x="${X(i)}" y="${b + 14}" text-anchor="middle" class="${d.decalage === 0 ? 'svg-j0' : ''}">${d.decalage === 0 ? 'séance' : `J${d.decalage > 0 ? '+' : '−'}${Math.abs(d.decalage)}`}</text>`).join('')}
+    </svg>
+    <p class="doux" style="margin-top:6px">Ton humeur moyenne de trois jours avant à trois jours après tes ${C.pluriel(r.seances, 'séance')} ; en pointillés, ta moyenne générale.${r.seances < 3 ? ' Avec si peu de séances, la courbe est encore indicative.' : ''}</p>
+  </section>`;
+}
+
+/** Ce qui précède les journées difficiles (coïncidences observées, pas de causes). */
+function blocAvantDifficiles() {
+  const r = C.avantJoursDifficiles(etat.evaluations, etat.motifs, { evenements: etat.parametres.evenements || [] });
+  const titre = '<h2 id="titre-difficiles">Avant les journées difficiles</h2>';
+  if (!r.suffisant) return `<section class="bloc" aria-labelledby="titre-difficiles">${titre}<p class="doux">Il faut encore quelques semaines de notes (au moins 10 jours de suite et 3 journées difficiles) pour voir ce qui précède les journées difficiles.</p></section>`;
+  if (!r.facteurs.length) return `<section class="bloc" aria-labelledby="titre-difficiles">${titre}<p class="doux">Rien ne revient nettement la veille de tes ${C.pluriel(r.difficiles, 'journée difficile')}.</p></section>`;
+  return `<section class="bloc" aria-labelledby="titre-difficiles">${titre}
+    <p class="doux" style="margin-top:0">Ce que tu avais noté la veille de tes ${C.pluriel(r.difficiles, 'journée difficile')} (note de ${C.nombreFr(r.seuil)} ou moins), plus souvent qu'en général. Ce sont des coïncidences, pas des causes : un bon sujet pour la séance.</p>
+    <div class="barres">${r.facteurs.map((f) => `<div class="barre"><span>${esc(f.libelle)}</span><span class="doux chiffres">${f.avant}/${f.difficiles} · en général ${Math.round(f.general * 100)} %</span><div class="barre-piste"><div class="barre-remplie ${f.polarite === 'favorable' ? 'favorable' : 'defavorable'}" style="width:${Math.round(f.part * 100)}%"></div></div></div>`).join('')}</div>
+  </section>`;
+}
+
+/** Paliers de sevrage et humeur, si le patient en a saisi : une courbe par médicament (échelles en mg différentes). */
+function blocSevrage(debut, fin) {
+  const produits = C.produitsDoses(etat.parametres.doses, etat.parametres.medicaments);
+  const parts = produits.map((pr) => ({ pr, sv: C.sevrageSurPeriode(etat.parametres.doses, etat.evaluations, debut, fin, { produit: pr }) })).filter((x) => x.sv.paliers.length);
+  if (!parts.length) return '';
+  return `<section class="bloc" aria-labelledby="titre-sevrage"><h2 id="titre-sevrage">Sevrage : paliers et humeur</h2>
+    ${parts.map((x) => courbeSevrageApp(x.sv, x.pr, debut, fin, parts.length > 1)).join('')}
+    <p class="doux">Les doses sont celles que tu as saisies (Réglages › Sevrage). L'application ne donne aucun avis médical.</p>
+  </section>`;
+}
+function courbeSevrageApp(sv, produit, debut, fin, plusieurs) {
+  const W = 640, H = 170, gG = 34, gD = 24, b = 140, n = sv.jours.length;
+  const X = (i) => gG + (n <= 1 ? (W - gG - gD) / 2 : (i / (n - 1)) * (W - gG - gD));
+  const maxD = Math.max(0.5, ...sv.jours.map((j) => j.dose || 0));
+  const YD = (v) => b - (v / maxD) * 120, YN = (v) => b - (v / 10) * 120;
+  let marches = '';
+  sv.jours.forEach((j, i) => { if (j.dose === null) return; const x2 = i + 1 < n ? X(i + 1) : X(i); marches += `<line x1="${X(i)}" x2="${x2}" y1="${YD(j.dose)}" y2="${YD(j.dose)}" class="svg-dose"/>`; if (i + 1 < n && sv.jours[i + 1].dose !== null && sv.jours[i + 1].dose !== j.dose) marches += `<line x1="${x2}" x2="${x2}" y1="${YD(j.dose)}" y2="${YD(sv.jours[i + 1].dose)}" class="svg-dose svg-tirets"/>`; });
+  const pts = sv.jours.map((j, i) => (j.note === null ? null : [X(i), YN(j.note), j]));
+  const trace = pts.filter(Boolean).map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  return `${produit ? `<h3${plusieurs ? '' : ' class="doux"'}>${esc(produit)}</h3>` : ''}
+    <svg class="svg-mini" viewBox="0 0 ${W} ${H}" role="img" aria-label="Doses quotidiennes${produit ? ` de ${esc(produit)}` : ''} et note du jour">
+      <rect x="${gG}" y="${YN(10)}" width="${W - gG - gD}" height="120" class="svg-fond"/>
+      ${[0, 5, 10].map((v) => `<line x1="${gG}" x2="${W - gD}" y1="${YN(v)}" y2="${YN(v)}" class="svg-grille"/><text x="${W - gD + 4}" y="${YN(v) + 3}">${v}</text>`).join('')}
+      ${[0, maxD].map((v) => `<text x="${gG - 4}" y="${YD(v) + 3}" text-anchor="end" class="svg-dose-txt">${C.doseFr(v)}</text>`).join('')}<text x="2" y="10" class="svg-dose-txt">mg</text>
+      ${marches}<polyline points="${trace}" class="svg-ligne-fine"/>
+      ${pts.filter(Boolean).map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="var(--n${Math.round(p[2].note)})"><title>${C.formatDateCourte(p[2].date)} : ${C.nombreFr(p[2].note)}/10${p[2].dose !== null ? `, ${C.doseFr(p[2].dose)} mg` : ''}</title></circle>`).join('')}
+      <text x="${gG}" y="${b + 14}">${esc(C.formatDateCourte(debut).slice(0, 5))}</text><text x="${W - gD}" y="${b + 14}" text-anchor="end">${esc(C.formatDateCourte(fin).slice(0, 5))}</text>
+    </svg>
+    <ul class="liste-simple">${sv.paliers.map((p) => `<li><span>${esc(C.formatDateCourte(p.de))} – ${esc(C.formatDateCourte(p.a))} : <strong>${esc(C.doseFr(p.dose))} mg</strong></span><span class="doux">${p.moyenne === null ? '—' : `humeur ${esc(C.nombreFr(p.moyenne))}/10 (${p.nombre})`}</span></li>`).join('')}</ul>
+`;
+}
+
+/** Bilan de la semaine : le dimanche (une fois la journée notée), le lundi et le mardi. */
+function carteBilanSemaine() {
+  const auj = aujourdhui();
+  const jour = (new Date(`${auj}T12:00:00Z`).getUTCDay() + 6) % 7; // 0 = lundi … 6 = dimanche
+  const lundi = jour === 6 ? C.lundiDe(auj) : jour <= 1 ? C.lundiDe(C.ajouterJours(auj, -7)) : null;
+  if (!lundi || etat.parametres.bilanVu === lundi) return '';
+  if (jour === 6 && !etat.evaluations.some((e) => e.date === auj)) return '';
+  const b = C.bilanSemaine(etat.evaluations, lundi, { evenements: etat.parametres.evenements || [] });
+  if (b.nombre < 3) return '';
+  const lettres = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const diff = b.moyennePrecedente === null ? '' : b.moyenne - b.moyennePrecedente;
+  return `<section class="bloc bilan-semaine" aria-labelledby="titre-bilan">
+    <div class="section-titre"><h2 id="titre-bilan">Ta semaine du ${esc(C.formatDateCourte(b.lundi).slice(0, 5))} au ${esc(C.formatDateCourte(b.dimanche).slice(0, 5))}</h2><button type="button" class="bouton-discret" data-action="bilan-vu" data-id="${lundi}">OK, merci</button></div>
+    <div class="bilan-jours">${b.jours.map((j, i) => `<div class="bilan-jour"><span class="doux">${lettres[i]}</span>${j.note !== null ? iconeMeteo(j.note, { taille: 32, titre: `${C.formatDateLongue(j.date)} : ${j.note}/10` }) : '<span class="bilan-vide">–</span>'}<span class="chiffres">${j.note ?? ''}</span></div>`).join('')}</div>
+    <p style="margin:10px 0 0">Humeur moyenne <strong>${C.nombreFr(b.moyenne)}/10</strong>${diff === '' ? '' : ` (${diff >= 0.05 ? `+${C.nombreFr(diff)}` : diff <= -0.05 ? `−${C.nombreFr(-diff)}` : '±0'} par rapport à la semaine d'avant)`} · ${C.pluriel(b.nombre, 'jour noté', 'jours notés')} sur 7.</p>
+    ${b.meilleur ? `<p style="margin:6px 0 0">Ton meilleur moment : <strong>${esc(C.formatDateLongue(b.meilleur.date))}</strong> (${b.meilleur.note}/10)${b.meilleur.evenement ? `, « ${esc(b.meilleur.evenement)} »` : ''}.</p>` : ''}
+    ${b.objectifs ? `<p style="margin:6px 0 0">Objectif (+1) atteint ${b.objectifs.atteints} fois sur ${b.objectifs.compares}.</p>` : ''}
+  </section>`;
+}
+
+/** Après une soirée difficile : ce qui, d'après tes propres notes, t'a souvent fait du bien (sans insister). */
+async function apresSaisieDouce(ev) {
+  if (!ev || (ev.securite && ev.securite.declenchee)) return;
+  const notes = etat.evaluations.filter((e) => e.id !== ev.id && Number.isInteger(e.note)).map((e) => e.note);
+  const moy = notes.length ? C.moyenne(notes) : 5;
+  if (!(ev.note <= 4 || (notes.length >= 7 && ev.note <= moy - 2))) return;
+  const res = C.ressourcesPersonnelles(etat.evaluations, etat.motifs);
+  if (!res.length) return;
+  await dialogue(`<h2 id="dialogue-titre">Une soirée plus difficile</h2>
+    <p>Merci de l'avoir notée. D'après tes propres évaluations, ces moments t'ont souvent fait du bien :</p>
+    <ul class="liste-simple">${res.map((r) => `<li><span><strong>${esc(r.libelle)}</strong></span><span class="doux">${r.nombre} fois, en moyenne ${C.nombreFr(r.moyenne)}/10</span></li>`).join('')}</ul>
+    <p class="doux">Peut-être l'un d'eux demain, si c'est possible pour toi. Et si ce soir est lourd, tu peux en parler à quelqu'un : <button type="button" class="bouton-discret" data-action="aide">numéros d'écoute</button></p>
+    <div class="dialogue-actions"><button class="bouton" value="ok">Merci</button></div>`);
 }
 
 /** Petit nuage de corrélation SVG (0 à 10 sur les deux axes), diagonale = note visée atteinte exactement. */
@@ -1106,6 +1307,9 @@ function questionsGuidees(cible) {
   const paires = C.pairesQuestions(etat.motifs);
   const proposition = C.suggestionContexte(etat.evaluations, cible);
   const lieuxP = C.lieuxProposes(etat.evaluations, cible);
+  // « Comme hier » : la dernière évaluation des 3 jours précédents (lieux, situation, motifs encore actifs)
+  const hier = [...etat.evaluations].filter((e) => e.date < cible.date && e.date >= C.ajouterJours(cible.date, -3)).sort((a, b) => (a.date + a.creneau < b.date + b.creneau ? 1 : -1))[0] || null;
+  const motifsHier = hier ? (hier.motifs || []).map((m) => m.id).filter((id) => etat.motifs.some((m) => m.id === id && m.actif !== false && !m.regroupeDans)) : [];
   const exigerTout = etat.parametres.saisieComplete !== false;
   // État des réponses ; « pile » garde les états précédents pour revenir en arrière
   let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, evts: [], prevNote: null, prevObjectif: null, mot: '', retourAutre: false };
@@ -1135,6 +1339,34 @@ function questionsGuidees(cible) {
   // Expérience de prévision en cours (demandée par le thérapeute) : objectif en plus de la note attendue
   const experience = C.experienceDu(etat.parametres.experiencesPrevision, cible.date);
 
+  // Au PC : la note au clavier (0 à 9, « 1 » puis « 0 » pour 10), Entrée pour continuer, Échap pour revenir
+  const clavierPresent = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
+  let tampon = '', minuterieTouche = null;
+  const surTouche = (e) => {
+    if (!document.getElementById('guide')) { document.removeEventListener('keydown', surTouche); return; }
+    if ((typeof dlg !== 'undefined' && dlg.open) || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target, saisie = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    if (e.key === 'Escape') { const r = contenu.querySelector('[data-guide="retour"]'); if (r) { e.preventDefault(); r.click(); } return; }
+    if (saisie) return;
+    const attr = ['data-note', 'data-prev', 'data-objectif'].find((a2) => contenu.querySelector(`.grille-notes [${a2}]`));
+    if (/^[0-9]$/.test(e.key) && attr) {
+      e.preventDefault();
+      const choisir = (v) => { tampon = ''; clearTimeout(minuterieTouche); const b = contenu.querySelector(`.grille-notes [${attr}="${v}"]`); if (b) b.click(); };
+      if (tampon === '1' && e.key === '0') { choisir(10); return; }
+      if (tampon === '1') { choisir(1); if (e.key !== '1') return; }
+      if (e.key === '1') { tampon = '1'; clearTimeout(minuterieTouche); minuterieTouche = setTimeout(() => { if (tampon === '1') choisir(1); }, 700); return; }
+      choisir(Number(e.key));
+      return;
+    }
+    if (e.key === 'Enter') {
+      const b = contenu.querySelector('.guide-corps [data-guide$="-ok"]:not([disabled]), .guide-corps [data-guide="enregistrer"]:not([disabled]), .guide-corps .choix-principal');
+      if (b) { e.preventDefault(); b.click(); }
+    }
+  };
+  if (window.toucheGuide) document.removeEventListener('keydown', window.toucheGuide);
+  window.toucheGuide = surTouche;
+  document.addEventListener('keydown', surTouche);
+
   function ecran(titreQ, corps, { aide = '' } = {}) {
     const etapes = { note: 1, contexte: 2, 'lieux-detail': 2, paire: 3, autre: 3, evenement: 4, prevision: 5, objectif: 5, mot: 6, resume: 7 };
     const k = etapes[w.etape] || 1;
@@ -1146,6 +1378,7 @@ function questionsGuidees(cible) {
       ${aide ? `<p class="doux guide-aide">${aide}</p>` : ''}
       <div class="guide-corps">${corps}</div>
       ${pile.length ? '<p class="guide-bas"><button type="button" class="bouton-discret" data-guide="retour">← Retour</button></p>' : ''}
+      ${clavierPresent ? '<p class="doux guide-clavier">Au clavier : <kbd>0</kbd>…<kbd>9</kbd>, <kbd>1</kbd><kbd>0</kbd> pour la note · <kbd>Entrée</kbd> continuer · <kbd>Échap</kbd> revenir</p>' : ''}
     </section>`;
     const h = contenu.querySelector('.guide-question');
     if (h) h.focus({ preventScroll: true });
@@ -1171,6 +1404,7 @@ function questionsGuidees(cible) {
       const autresLieux = [...lieuxChoisis, ...lieuxP.frequents, ...lieuxP.derniers].filter((l, i, a) => a.findIndex((x) => C.cleLieu(x) === C.cleLieu(l)) === i);
       const besoinModalite = sitChoisie && C.SITUATIONS_AVEC_MODALITE.includes(sitChoisie.statut);
       ecran('Où étais-tu, et quelle est ta situation ?', `
+        ${hier && !w.lieux && (C.lieuxDe(hier).length || motifsHier.length) ? `<div class="choix-liste" style="margin-bottom:8px">${bouton('data-guide="comme-hier"', `<strong>Comme ${hier.date === C.ajouterJours(cible.date, -1) ? 'hier' : `le ${esc(C.formatDateCourte(hier.date).slice(0, 5))}`}, mais…</strong><span class="doux">${esc([C.libelleLieux(C.lieuxDe(hier)), hier.situation ? libSituation(hier.situation) : '', motifsHier.length ? C.pluriel(motifsHier.length, 'motif') : ''].filter(Boolean).join(' · '))} : tout est repris, tu changes ce qui est différent</span>`, 'choix choix-large')}</div>` : ''}
         ${habituel.length && !w.lieux ? `<div class="choix-liste">${bouton('data-guide="habituel"', `<strong>Comme d'habitude</strong><span class="doux">${esc(C.libelleLieux(habituel))}${sitHab ? ` · ${esc(libSituation(sitHab))}` : ' · situation à choisir'}</span>`, 'choix choix-large choix-principal')}</div>
           <p class="guide-preciser" style="margin-top:6px">${bouton('data-guide="habituel-plus"', `+ ${esc(C.libelleLieux(habituel))}, et un ou plusieurs autres lieux`, 'bouton-discret')}</p><p class="doux guide-ou">ou précise :</p>` : ''}
         <p class="guide-sous">Lieu${lieuxChoisis.length > 1 ? 'x' : ''} <span class="doux">(touche-en un ou plusieurs)</span></p>
@@ -1344,6 +1578,7 @@ function questionsGuidees(cible) {
       annoncer(`Évaluation enregistrée à ${C.formatHeure(instant)}.`);
       aller('#/');
       if (resultat.securite && resultat.securite.declenchee) await verificationSecurite(resultat);
+      await apresSaisieDouce(resultat);
       await preparerApresSaisie(resultat);
     } catch (err) {
       if (zone) { zone.hidden = false; zone.textContent = `L'évaluation n'a pas pu être enregistrée : ${err.message}`; }
@@ -1395,6 +1630,12 @@ function questionsGuidees(cible) {
       return;
     }
     if (d.guide === 'apres-zero') { avancer({ etape: 'contexte' }); return; }
+    if (d.guide === 'comme-hier') {
+      // Tout repris de la veille (sans les humeurs par lieu) ; on passe aux événements, le résumé permet de vérifier
+      const lieux = C.lieuxDe(hier).map(({ ressenti: _r, ...l }) => l);
+      avancer({ lieux: lieux.length ? lieux : w.lieux, situation: hier.situation ? C.normaliserSituation(hier.situation) : w.situation, choisis: [...motifsHier], commeHier: true, etape: 'evenement' });
+      return;
+    }
     if (d.guide === 'habituel-plus') {
       // Lieu(x) et situation habituels déjà cochés, on reste sur l'écran pour en ajouter d'autres
       const habituel = proposition.lieu ? [proposition.lieu] : lieuxP.derniers.slice(-1);
@@ -2002,6 +2243,7 @@ function formulaire(cible, ev) {
       annoncer(ev ? `Modification enregistrée le ${C.formatDateHeure(instant)}.` : `Évaluation enregistrée à ${C.formatHeure(instant)}.`);
       aller(ev ? `#/evaluation/${resultat.id}` : '#/');
       if (resultat.securite && resultat.securite.declenchee) await verificationSecurite(resultat);
+      if (!ev) await apresSaisieDouce(resultat);
       await preparerApresSaisie(resultat);
     } catch (err) {
       zoneErreurs.hidden = false;
@@ -3860,12 +4102,37 @@ async function vueReglages([section] = []) {
         <p class="doux" style="margin:0 0 8px">L'application lit tes rendez-vous à venir dans Google Agenda (lecture seule, directement depuis cet appareil : ni tes mails ni ton mot de passe ne sont utilisés) et ajoute ceux qui contiennent le mot ci-dessous comme séances. Tu peux toujours les corriger ici : ta correction l'emporte.</p>
         <div class="champ"><label for="google-client">Identifiant client Google <small class="doux">(à créer une fois, voir le guide)</small></label><input type="text" id="google-client" value="${esc(g.clientId)}" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="…apps.googleusercontent.com"></div>
         <div class="champ"><label for="google-mot">Mot à chercher dans le rendez-vous</label><input type="text" id="google-mot" value="${esc(g.mot)}" maxlength="60" autocomplete="off" placeholder="${esc(mot || 'Nom du thérapeute')}"><small class="doux">${g.mot ? '' : (mot ? `Vide : « ${esc(mot)} » (nom de ton thérapeute).` : '')}</small></div>
+        <div class="champ"><label for="google-medecin">Mot à chercher pour les rendez-vous chez le médecin <small class="doux">(facultatif, pour le sevrage)</small></label><input type="text" id="google-medecin" value="${esc(g.motMedecin)}" maxlength="60" autocomplete="off" placeholder="Nom du médecin"><small class="doux">Après chaque rendez-vous, l'application te demande une fois la dose prescrite (Réglages › Sevrage).</small></div>
         <div class="champ"><label for="google-calendrier">Agenda <small class="doux">(« primary » = ton agenda principal)</small></label><input type="text" id="google-calendrier" value="${esc(g.calendrier)}" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
         <label class="interrupteur"><input type="checkbox" id="google-actif" ${g.actif ? 'checked' : ''}> <span>Vérifier à chaque ouverture de l'application</span></label>
         <p class="doux" style="margin:8px 0">Adresse de retour à déclarer chez Google : <code id="google-redirection">${esc(redirectionGoogle())}</code></p>
         <p class="rangee"><button type="button" class="bouton-secondaire" id="btn-google-enregistrer">Enregistrer</button>${g.clientId ? '<button type="button" class="bouton" data-action="google-verifier">Vérifier maintenant</button>' : ''}</p>
       </fieldset>`;
   })()}
+    </div>
+
+    <div class="bloc" id="sevrage"><h2>Sevrage <small class="doux" style="font-weight:400">(facultatif)</small></h2>
+      <p class="doux" style="margin-top:0">Note chaque changement de dose quotidienne. Le tableau de bord et le rapport montrent alors les paliers à côté de ton humeur. Ces données restent dans l'application et ne sont jamais envoyées à l'assistant de rédaction.</p>
+      <div class="rangee" style="align-items:flex-end;margin-bottom:10px">
+        <div class="champ" style="margin:0;flex:1"><label for="medicaments">Médicaments suivis <small class="doux">(séparés par une virgule ; une courbe par médicament)</small></label><input type="text" id="medicaments" value="${esc(C.normaliserMedicaments(p.medicaments).join(', '))}" maxlength="200" autocomplete="off"></div>
+        <button type="button" class="bouton-secondaire" id="btn-medicaments">Enregistrer</button>
+      </div>
+      ${(() => {
+    const rdv = C.normaliserRdvMedecin(p.rdvMedecin), g = C.normaliserGoogle(p.google);
+    if (!g.motMedecin) return '<p class="doux">Rendez-vous chez le médecin : indique le mot à chercher dans Google Agenda (Réglages › Séances › Google Agenda) pour que l\'application te demande la dose prescrite après chacun.</p>';
+    if (!rdv.length) return `<p class="doux">Aucun rendez-vous « ${esc(g.motMedecin)} » trouvé pour l'instant dans Google Agenda.</p>`;
+    const passe = (x) => C.bornesSeance(x).fin <= maintenant();
+    return `<h3>Rendez-vous « ${esc(g.motMedecin)} » <small class="doux" style="font-weight:400">(Google Agenda)</small></h3><ul class="liste-simple">${rdv.slice(-12).reverse().map((x) => `<li><span>${esc(C.formatDateCourte(x.date))}${x.debut ? ` · ${esc(x.debut)}` : ''} <span class="doux">– ${!passe(x) ? 'à venir' : x.reponduLe ? 'dose notée' : 'dose à noter'}</span></span>${passe(x) ? `<button type="button" class="bouton-discret" data-action="rdv-doses" data-id="${esc(x.googleId)}">${x.reponduLe ? 'Modifier' : 'Noter la dose'}</button>` : ''}</li>`).join('')}</ul>`;
+  })()}
+      ${(() => { const ds = C.normaliserDoses(p.doses); return ds.length ? `<ul class="liste-simple">${ds.map((d) => `<li><span>Depuis le ${esc(C.formatDateCourte(d.date))} : <strong>${esc(C.doseFr(d.dose))} mg</strong>${d.produit ? ` ${esc(d.produit)}` : ''}${d.remarque ? ` <span class="doux">– ${esc(d.remarque)}</span>` : ''}</span><button type="button" class="bouton-discret" data-action="dose-supprimer" data-id="${esc(d.id)}">Supprimer</button></li>`).join('')}</ul>` : '<p class="doux">Aucun palier noté.</p>'; })()}
+      <div class="rangee" style="align-items:flex-end;margin-top:8px">
+        <div class="champ" style="margin:0"><label for="dose-date">À partir du</label><input type="date" id="dose-date" value="${aujourdhui()}"></div>
+        <div class="champ" style="margin:0"><label for="dose-mg">Dose par jour (mg)</label><input type="text" id="dose-mg" inputmode="decimal" maxlength="8" placeholder="ex. 1,5" autocomplete="off" style="width:8em"></div>
+        <div class="champ" style="margin:0"><label for="dose-produit">Médicament <small class="doux">(facultatif)</small></label><input type="text" id="dose-produit" maxlength="60" autocomplete="off" list="liste-medicaments" value="${esc(C.normaliserMedicaments(p.medicaments)[0] || '')}"><datalist id="liste-medicaments">${C.normaliserMedicaments(p.medicaments).map((m) => `<option value="${esc(m)}">`).join('')}</datalist></div>
+        <div class="champ" style="margin:0;flex:1"><label for="dose-remarque">Remarque <small class="doux">(facultatif)</small></label><input type="text" id="dose-remarque" maxlength="200" autocomplete="off"></div>
+        <button type="button" class="bouton-secondaire" id="btn-dose-ajouter">Ajouter le palier</button>
+      </div>
+      <label class="interrupteur" style="margin-top:10px"><input type="checkbox" id="sevrage-rapport" ${p.sevrageRapport !== false ? 'checked' : ''}> <span>Montrer les paliers dans le rapport pour mon thérapeute</span></label>
     </div>
 
     <div class="bloc" id="questionnaire"><h2>Questionnaire</h2>
@@ -4025,8 +4292,26 @@ async function vueReglages([section] = []) {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
   });
+  document.getElementById('btn-dose-ajouter').addEventListener('click', async () => {
+    const date = document.getElementById('dose-date').value, mg = document.getElementById('dose-mg').value.replace(',', '.');
+    if (!C.estDateValide(date) || mg === '' || !Number.isFinite(Number(mg)) || Number(mg) < 0) { annoncer('Indique la date et la dose en mg (par exemple 1,5).'); return; }
+    const produit = document.getElementById('dose-produit').value.trim();
+    const autres = C.normaliserDoses(etat.parametres.doses).filter((d) => d.date !== date || C.normaliserLibelle(d.produit) !== C.normaliserLibelle(produit));
+    await enregistrerParametres({ doses: C.normaliserDoses([...autres, { date, dose: Number(mg), produit, remarque: document.getElementById('dose-remarque').value }]) });
+    annoncer('Palier enregistré.');
+    vueReglages(['sevrage']);
+  });
+  document.getElementById('btn-medicaments').addEventListener('click', async () => {
+    const meds = C.normaliserMedicaments(document.getElementById('medicaments').value);
+    await enregistrerParametres({ medicaments: meds });
+    ui.rdvPlusTard = false;
+    annoncer(meds.length ? `Médicaments suivis : ${meds.join(', ')}.` : 'Aucun médicament suivi.');
+    vueReglages(['sevrage']);
+    demanderDosesRdv();
+  });
+  document.getElementById('sevrage-rapport').addEventListener('change', (e) => { enregistrerParametres({ sevrageRapport: e.target.checked }); });
   document.getElementById('btn-google-enregistrer').addEventListener('click', async () => {
-    const g = C.normaliserGoogle({ clientId: document.getElementById('google-client').value, mot: document.getElementById('google-mot').value, calendrier: document.getElementById('google-calendrier').value, actif: document.getElementById('google-actif').checked });
+    const g = C.normaliserGoogle({ clientId: document.getElementById('google-client').value, mot: document.getElementById('google-mot').value, motMedecin: document.getElementById('google-medecin').value, calendrier: document.getElementById('google-calendrier').value, actif: document.getElementById('google-actif').checked });
     if (g.clientId && !/\.apps\.googleusercontent\.com$/.test(g.clientId)) { annoncer('L\'identifiant client se termine par « .apps.googleusercontent.com ».'); return; }
     await enregistrerParametres({ google: g });
     oublierJetonGoogle();
@@ -4314,6 +4599,10 @@ document.addEventListener('click', (e) => {
   if (action === 'synchro-code') { copierCodeConnexion(); return; }
   if (action === 'demarrer-vide') { initialiser().then(() => { annoncer('Suivi démarré.'); aller('#/'); }); return; }
   if (action === 'retirer') { retirerEvaluation(id); return; }
+  if (action === 'meteo-mois') { ui.moisMeteo = id; vueAccueil(); return; }
+  if (action === 'bilan-vu') { enregistrerParametres({ bilanVu: id }).then(() => vueAccueil()); return; }
+  if (action === 'rdv-doses') { demanderDosesRdv({ seulement: id }); return; }
+  if (action === 'dose-supprimer') { enregistrerParametres({ doses: C.normaliserDoses(etat.parametres.doses).filter((d) => d.id !== id) }).then(() => { annoncer('Palier supprimé.'); vueReglages(['sevrage']); }); return; }
   if (action === 'google-verifier') { verifierGoogle({ interactif: true, bouton: cible }); return; }
   if (action === 'rythme-corriger') { const [d, cr] = String(id).split('|'); if (C.estDateValide(d) && C.CRENEAUX.includes(cr)) appliquerRythme(d, [cr]).then(() => router()); return; }
   if (action === 'mettre-a-jour') { if (ui.majDisponible) { ui.majDemandee = true; ui.majDisponible.postMessage({ type: 'activer' }); } return; }
@@ -4418,7 +4707,7 @@ async function demarrer() {
   majEtatSynchro();
   enregistrerServiceWorker();
   // Après une courte attente (la synchronisation peut apporter une séance saisie sur un autre appareil)
-  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => (lireJetonGoogle() && C.normaliserGoogle(etat.parametres.google).actif ? verifierGoogle() : null)).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
+  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => (lireJetonGoogle() && C.normaliserGoogle(etat.parametres.google).actif ? verifierGoogle() : null)).then(() => demanderDosesRdv()).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));
