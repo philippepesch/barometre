@@ -143,6 +143,49 @@ function verifierGoogle({ interactif = false, bouton = null } = {}) {
 }
 
 /**
+ * Saisie d'une dose quotidienne : en comprimés pour chaque dosage du médicament (total en mg calculé), ou en mg s'il n'a pas de dosage.
+ * prefixe : préfixe des noms de champs ; d : palier déjà noté (pré-remplissage) ; avant : palier précédent (rappel).
+ */
+function champsDose(med, prefixe, { d = null, avant = null, autofocus = false } = {}) {
+  const rappel = avant ? `<small class="doux dose-avant">Avant : ${esc(C.texteDose(avant))}</small>` : '';
+  if (!med.dosages.length) {
+    return `<div class="dose-saisie"><div class="champ" style="margin:0"><label for="${prefixe}-mg">${esc(med.nom)} <small class="doux">(mg par jour)</small></label><input type="text" id="${prefixe}-mg" name="${prefixe}-mg" inputmode="decimal" maxlength="8" autocomplete="off" style="width:8em" value="${d ? esc(C.doseFr(d.dose)) : ''}"${autofocus ? ' autofocus' : ''}></div>${rappel}</div>`;
+  }
+  const deja = (mg) => { const c = d && (d.comprimes || []).find((x) => x.mg === mg); return c ? C.doseFr(c.nombre) : ''; };
+  return `<div class="dose-saisie" data-dose-total><div class="dose-titre"><strong>${esc(med.nom)}</strong> <small class="doux">comprimés par jour</small></div>
+    <div class="rangee dose-comprimes">${med.dosages.map((mg, k) => `<label class="dose-cp"><input type="text" name="${prefixe}-c${k}" data-mg="${mg}" inputmode="decimal" maxlength="5" autocomplete="off" value="${esc(deja(mg))}" aria-label="${esc(med.nom)} : comprimés de ${esc(C.doseFr(mg))} mg"${autofocus && k === 0 ? ' autofocus' : ''}> <span>× ${esc(C.doseFr(mg))} mg</span></label>`).join('<span class="doux">+</span>')}
+      <output class="dose-total doux"></output></div>${rappel}</div>`;
+}
+/** Réglages : une ligne « nom + dosages des comprimés » (3 dosages au plus). */
+function ligneMedicament(m) {
+  const d = [...m.dosages, '', '', ''].slice(0, 3);
+  return `<div class="rangee ligne-medicament"><input type="text" data-med="nom" value="${esc(m.nom)}" maxlength="60" autocomplete="off" placeholder="Nom du médicament" aria-label="Nom du médicament">
+    <span class="doux">comprimés de</span>${d.map((v, k) => `<input type="text" data-med="mg" value="${v === '' ? '' : esc(C.doseFr(v))}" inputmode="decimal" maxlength="7" autocomplete="off" aria-label="Dosage ${k + 1} en mg" style="width:5em"${k ? ' placeholder="(autre)"' : ' placeholder="mg"'}>`).join('')}<span class="doux">mg</span></div>`;
+}
+/** Valeur saisie : null (vide), NaN (illisible), un nombre (mg) ou { comprimes }. */
+function lireChampsDose(donnees, med, prefixe) {
+  if (!med.dosages.length) return C.lireDose(donnees.get(`${prefixe}-mg`));
+  const comprimes = [];
+  for (let k = 0; k < med.dosages.length; k++) {
+    const n = C.lireNombreComprimes(donnees.get(`${prefixe}-c${k}`));
+    if (Number.isNaN(n)) return NaN;
+    if (n) comprimes.push({ mg: med.dosages[k], nombre: n });
+  }
+  const vides = med.dosages.every((_, k) => !String(donnees.get(`${prefixe}-c${k}`) || '').trim());
+  return vides ? null : { comprimes }; // « 0 » partout = arrêt (0 mg)
+}
+/** Total en mg affiché pendant la saisie des comprimés. */
+function majTotauxDose(racine) {
+  racine.querySelectorAll('[data-dose-total]').forEach((b) => {
+    let t = 0, ok = true, rien = true;
+    b.querySelectorAll('input[data-mg]').forEach((i) => { if (!i.value.trim()) return; rien = false; const n = C.lireNombreComprimes(i.value); if (Number.isNaN(n)) ok = false; else t += n * Number(i.dataset.mg); });
+    const o = b.querySelector('.dose-total');
+    if (o) o.textContent = rien ? '' : ok ? `= ${C.doseFr(t)} mg par jour` : 'nombre illisible';
+  });
+}
+document.addEventListener('input', (e) => { if (e.target.matches && e.target.matches('input[data-mg]')) majTotauxDose(e.target.closest('form, .bloc') || document); });
+
+/**
  * Après chaque rendez-vous chez le médecin (repris de Google Agenda) : demander une seule fois la dose quotidienne prescrite
  * pour chaque médicament suivi. Vide = inchangée ou je ne sais plus ; « Plus tard » = redemander à la prochaine ouverture.
  * Les noms (médecin, médicaments) sont saisis par le patient dans les réglages : rien de tel dans le code public.
@@ -163,22 +206,24 @@ async function demanderDosesRdv({ seulement = null } = {}) {
     if (r.valeur === 'oui') aller('#/reglages/sevrage');
     return;
   }
-  const actuelle = (med, date) => { const d = C.doseLe(C.dosesDe(doses, med), C.ajouterJours(date, -1)); return d ? d.dose : null; };
-  const deja = (med, date) => { const d = C.dosesDe(doses, med).find((x) => x.date === date); return d ? C.doseFr(d.dose) : ''; };
-  const r = await dialogue(`<h2 id="dialogue-titre">Dose prescrite chez le médecin</h2>
-    <p class="doux" style="margin-top:0">Pour chaque rendez-vous « ${esc(g.motMedecin)} » : la dose <strong>par jour</strong> prescrite, en mg. Laisse vide si elle n'a pas changé ou si tu ne t'en souviens plus.</p>
-    <div class="rdv-doses">${liste.map((rv, i) => `<fieldset class="rdv-dose"><legend>${esc(C.formatDateLongue ? C.formatDateLongue(rv.date) : C.formatDateCourte(rv.date))}${rv.debut ? ` · ${esc(rv.debut)}` : ''}</legend>
-      <div class="rangee">${meds.map((m, k) => { const av = actuelle(m, rv.date); return `<div class="champ" style="margin:0"><label for="rdv-${i}-${k}">${esc(m)} <small class="doux">(mg/jour)</small></label><input type="text" id="rdv-${i}-${k}" name="rdv-${i}-${k}" inputmode="decimal" maxlength="8" autocomplete="off" style="width:9em" value="${esc(deja(m, rv.date))}" placeholder="${av === null ? '' : `avant : ${esc(C.doseFr(av))}`}"${i === 0 && k === 0 ? ' autofocus' : ''}></div>`; }).join('')}</div></fieldset>`).join('')}</div>
+  const avant = (med, date) => C.doseLe(C.dosesDe(doses, med.nom), C.ajouterJours(date, -1));
+  const deja = (med, date) => C.dosesDe(doses, med.nom).find((x) => x.date === date) || null;
+  const attente = dialogue(`<h2 id="dialogue-titre">Ce que le médecin t'a prescrit</h2>
+    <p class="doux" style="margin-top:0">Pour chaque rendez-vous « ${esc(g.motMedecin)} » : le nombre de <strong>comprimés par jour</strong> (½ ou 1,5 possible) ; l'application calcule les mg. Laisse vide si rien n'a changé ou si tu ne t'en souviens plus.</p>
+    <div class="rdv-doses">${liste.map((rv, i) => `<fieldset class="rdv-dose"><legend>${esc(C.formatDateLongue(rv.date))}${rv.debut ? ` · ${esc(rv.debut)}` : ''}</legend>
+      ${meds.map((m, k) => champsDose(m, `rdv-${i}-${k}`, { d: deja(m, rv.date), avant: avant(m, rv.date), autofocus: i === 0 && k === 0 })).join('')}</fieldset>`).join('')}</div>
     <p class="doux">Ces doses restent dans l'application (jamais envoyées à l'assistant de rédaction). L'application ne donne aucun avis médical.</p>
     <div class="dialogue-actions"><button class="bouton-secondaire" value="non" formnovalidate>Plus tard</button><button class="bouton" value="oui">Enregistrer</button></div>`);
+  majTotauxDose(dlg);
+  const r = await attente;
   if (r.valeur !== 'oui') { ui.rdvPlusTard = true; return; }
   let ds = doses;
   for (let i = 0; i < liste.length; i++) {
     const valeurs = {};
     for (let k = 0; k < meds.length; k++) {
-      const v = C.lireDose(r.donnees.get(`rdv-${i}-${k}`));
-      if (Number.isNaN(v)) { annoncer(`Dose illisible pour ${meds[k]} (${C.formatDateCourte(liste[i].date)}) : écris par exemple 2,5.`); ui.rdvPlusTard = false; return demanderDosesRdv({ seulement }); }
-      valeurs[meds[k]] = v;
+      const v = lireChampsDose(r.donnees, meds[k], `rdv-${i}-${k}`);
+      if (Number.isNaN(v)) { annoncer(`Nombre illisible pour ${meds[k].nom} (${C.formatDateCourte(liste[i].date)}) : écris par exemple 1, ½ ou 1,5.`); ui.rdvPlusTard = false; return demanderDosesRdv({ seulement }); }
+      valeurs[meds[k].nom] = v;
     }
     ds = C.dosesApresRdv(ds, liste[i].date, valeurs);
   }
@@ -949,7 +994,7 @@ function courbeSevrageApp(sv, produit, debut, fin, plusieurs) {
       ${pts.filter(Boolean).map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="var(--n${Math.round(p[2].note)})"><title>${C.formatDateCourte(p[2].date)} : ${C.nombreFr(p[2].note)}/10${p[2].dose !== null ? `, ${C.doseFr(p[2].dose)} mg` : ''}</title></circle>`).join('')}
       <text x="${gG}" y="${b + 14}">${esc(C.formatDateCourte(debut).slice(0, 5))}</text><text x="${W - gD}" y="${b + 14}" text-anchor="end">${esc(C.formatDateCourte(fin).slice(0, 5))}</text>
     </svg>
-    <ul class="liste-simple">${sv.paliers.map((p) => `<li><span>${esc(C.formatDateCourte(p.de))} – ${esc(C.formatDateCourte(p.a))} : <strong>${esc(C.doseFr(p.dose))} mg</strong></span><span class="doux">${p.moyenne === null ? '—' : `humeur ${esc(C.nombreFr(p.moyenne))}/10 (${p.nombre})`}</span></li>`).join('')}</ul>
+    <ul class="liste-simple">${sv.paliers.map((p) => `<li><span>${esc(C.formatDateCourte(p.de))} – ${esc(C.formatDateCourte(p.a))} : <strong>${esc(C.texteDose(p))}</strong></span><span class="doux">${p.moyenne === null ? '—' : `humeur ${esc(C.nombreFr(p.moyenne))}/10 (${p.nombre})`}</span></li>`).join('')}</ul>
 `;
 }
 
@@ -4113,10 +4158,11 @@ async function vueReglages([section] = []) {
 
     <div class="bloc" id="sevrage"><h2>Sevrage <small class="doux" style="font-weight:400">(facultatif)</small></h2>
       <p class="doux" style="margin-top:0">Note chaque changement de dose quotidienne. Le tableau de bord et le rapport montrent alors les paliers à côté de ton humeur. Ces données restent dans l'application et ne sont jamais envoyées à l'assistant de rédaction.</p>
-      <div class="rangee" style="align-items:flex-end;margin-bottom:10px">
-        <div class="champ" style="margin:0;flex:1"><label for="medicaments">Médicaments suivis <small class="doux">(séparés par une virgule ; une courbe par médicament)</small></label><input type="text" id="medicaments" value="${esc(C.normaliserMedicaments(p.medicaments).join(', '))}" maxlength="200" autocomplete="off"></div>
-        <button type="button" class="bouton-secondaire" id="btn-medicaments">Enregistrer</button>
-      </div>
+      <fieldset class="champ" id="medicaments"><legend style="font-weight:600;margin-bottom:4px">Médicaments suivis</legend>
+        <p class="doux" style="margin:0 0 8px">Le nom, puis le dosage de chaque sorte de comprimé que tu as (par exemple 25 et 10 mg pour le même médicament). Tu notes ensuite les doses en comprimés ; l'application calcule les mg. Une courbe par médicament.</p>
+        <div id="medicaments-lignes">${[...C.normaliserMedicaments(p.medicaments), { nom: '', dosages: [] }].map((m) => ligneMedicament(m)).join('')}</div>
+        <p class="rangee"><button type="button" class="bouton-discret" id="btn-medicament-plus">+ Autre médicament</button><button type="button" class="bouton-secondaire" id="btn-medicaments">Enregistrer les médicaments</button></p>
+      </fieldset>
       ${(() => {
     const rdv = C.normaliserRdvMedecin(p.rdvMedecin), g = C.normaliserGoogle(p.google);
     if (!g.motMedecin) return '<p class="doux">Rendez-vous chez le médecin : indique le mot à chercher dans Google Agenda (Réglages › Séances › Google Agenda) pour que l\'application te demande la dose prescrite après chacun.</p>';
@@ -4124,11 +4170,16 @@ async function vueReglages([section] = []) {
     const passe = (x) => C.bornesSeance(x).fin <= maintenant();
     return `<h3>Rendez-vous « ${esc(g.motMedecin)} » <small class="doux" style="font-weight:400">(Google Agenda)</small></h3><ul class="liste-simple">${rdv.slice(-12).reverse().map((x) => `<li><span>${esc(C.formatDateCourte(x.date))}${x.debut ? ` · ${esc(x.debut)}` : ''} <span class="doux">– ${!passe(x) ? 'à venir' : x.reponduLe ? 'dose notée' : 'dose à noter'}</span></span>${passe(x) ? `<button type="button" class="bouton-discret" data-action="rdv-doses" data-id="${esc(x.googleId)}">${x.reponduLe ? 'Modifier' : 'Noter la dose'}</button>` : ''}</li>`).join('')}</ul>`;
   })()}
-      ${(() => { const ds = C.normaliserDoses(p.doses); return ds.length ? `<ul class="liste-simple">${ds.map((d) => `<li><span>Depuis le ${esc(C.formatDateCourte(d.date))} : <strong>${esc(C.doseFr(d.dose))} mg</strong>${d.produit ? ` ${esc(d.produit)}` : ''}${d.remarque ? ` <span class="doux">– ${esc(d.remarque)}</span>` : ''}</span><button type="button" class="bouton-discret" data-action="dose-supprimer" data-id="${esc(d.id)}">Supprimer</button></li>`).join('')}</ul>` : '<p class="doux">Aucun palier noté.</p>'; })()}
+      ${(() => { const ds = C.normaliserDoses(p.doses); return ds.length ? `<ul class="liste-simple">${ds.map((d) => `<li><span>Depuis le ${esc(C.formatDateCourte(d.date))} : ${d.produit ? `${esc(d.produit)} ` : ''}<strong>${esc(C.texteDose(d))}</strong>${d.remarque ? ` <span class="doux">– ${esc(d.remarque)}</span>` : ''}</span><button type="button" class="bouton-discret" data-action="dose-supprimer" data-id="${esc(d.id)}">Supprimer</button></li>`).join('')}</ul>` : '<p class="doux">Aucun palier noté.</p>'; })()}
       <div class="rangee" style="align-items:flex-end;margin-top:8px">
         <div class="champ" style="margin:0"><label for="dose-date">À partir du</label><input type="date" id="dose-date" value="${aujourdhui()}"></div>
-        <div class="champ" style="margin:0"><label for="dose-mg">Dose par jour (mg)</label><input type="text" id="dose-mg" inputmode="decimal" maxlength="8" placeholder="ex. 1,5" autocomplete="off" style="width:8em"></div>
-        <div class="champ" style="margin:0"><label for="dose-produit">Médicament <small class="doux">(facultatif)</small></label><input type="text" id="dose-produit" maxlength="60" autocomplete="off" list="liste-medicaments" value="${esc(C.normaliserMedicaments(p.medicaments)[0] || '')}"><datalist id="liste-medicaments">${C.normaliserMedicaments(p.medicaments).map((m) => `<option value="${esc(m)}">`).join('')}</datalist></div>
+        ${(() => {
+    const meds = C.normaliserMedicaments(p.medicaments);
+    if (!meds.length) return `<div class="champ" style="margin:0"><label for="dose-mg">Dose par jour (mg)</label><input type="text" id="dose-mg" inputmode="decimal" maxlength="8" placeholder="ex. 1,5" autocomplete="off" style="width:8em"></div>
+        <div class="champ" style="margin:0"><label for="dose-produit">Médicament <small class="doux">(facultatif)</small></label><input type="text" id="dose-produit" maxlength="60" autocomplete="off"></div>`;
+    return `<div class="champ" style="margin:0"><label for="dose-produit">Médicament</label><select id="dose-produit">${meds.map((m) => `<option>${esc(m.nom)}</option>`).join('')}</select></div>
+        <div id="dose-champs">${champsDose(meds[0], 'palier')}</div>`;
+  })()}
         <div class="champ" style="margin:0;flex:1"><label for="dose-remarque">Remarque <small class="doux">(facultatif)</small></label><input type="text" id="dose-remarque" maxlength="200" autocomplete="off"></div>
         <button type="button" class="bouton-secondaire" id="btn-dose-ajouter">Ajouter le palier</button>
       </div>
@@ -4292,20 +4343,36 @@ async function vueReglages([section] = []) {
     await enregistrerParametres({ alerteManquee: e.target.checked });
     annoncer(e.target.checked ? 'Les évaluations manquées seront signalées par une notification.' : 'Plus de notification pour les évaluations manquées.');
   });
+  const medsSuivis = C.normaliserMedicaments(etat.parametres.medicaments);
+  const choixProduit = document.getElementById('dose-produit');
+  if (choixProduit && choixProduit.tagName === 'SELECT') choixProduit.addEventListener('change', () => { const m = medsSuivis.find((x) => x.nom === choixProduit.value); document.getElementById('dose-champs').innerHTML = champsDose(m, 'palier'); });
   document.getElementById('btn-dose-ajouter').addEventListener('click', async () => {
-    const date = document.getElementById('dose-date').value, mg = document.getElementById('dose-mg').value.replace(',', '.');
-    if (!C.estDateValide(date) || mg === '' || !Number.isFinite(Number(mg)) || Number(mg) < 0) { annoncer('Indique la date et la dose en mg (par exemple 1,5).'); return; }
+    const date = document.getElementById('dose-date').value;
     const produit = document.getElementById('dose-produit').value.trim();
+    const med = medsSuivis.find((x) => x.nom === produit);
+    let valeur;
+    if (med) {
+      const donnees = new FormData(); document.querySelectorAll('#dose-champs input').forEach((i) => donnees.set(i.name, i.value));
+      valeur = lireChampsDose(donnees, med, 'palier');
+    } else valeur = C.lireDose(document.getElementById('dose-mg').value);
+    if (!C.estDateValide(date) || valeur === null || Number.isNaN(valeur)) { annoncer(med && med.dosages.length ? 'Indique la date et le nombre de comprimés par jour (par exemple 1, ½ ou 1,5).' : 'Indique la date et la dose en mg (par exemple 1,5).'); return; }
+    const comprimes = typeof valeur === 'object' ? valeur.comprimes : null;
     const autres = C.normaliserDoses(etat.parametres.doses).filter((d) => d.date !== date || C.normaliserLibelle(d.produit) !== C.normaliserLibelle(produit));
-    await enregistrerParametres({ doses: C.normaliserDoses([...autres, { date, dose: Number(mg), produit, remarque: document.getElementById('dose-remarque').value }]) });
+    await enregistrerParametres({ doses: C.normaliserDoses([...autres, { date, dose: comprimes ? C.totalComprimes(comprimes) : valeur, ...(comprimes ? { comprimes } : {}), produit, remarque: document.getElementById('dose-remarque').value }]) });
     annoncer('Palier enregistré.');
     vueReglages(['sevrage']);
   });
+  document.getElementById('btn-medicament-plus').addEventListener('click', () => { document.getElementById('medicaments-lignes').insertAdjacentHTML('beforeend', ligneMedicament({ nom: '', dosages: [] })); });
   document.getElementById('btn-medicaments').addEventListener('click', async () => {
-    const meds = C.normaliserMedicaments(document.getElementById('medicaments').value);
+    const lignes = [...document.querySelectorAll('#medicaments-lignes .ligne-medicament')].map((l) => ({
+      nom: l.querySelector('[data-med="nom"]').value,
+      dosages: [...l.querySelectorAll('[data-med="mg"]')].map((i) => C.lireDose(i.value)).filter((v) => v !== null),
+    }));
+    if (lignes.some((l) => l.dosages.some((v) => Number.isNaN(v)))) { annoncer('Dosage illisible : écris les mg d\'un comprimé, par exemple 25 ou 12,5.'); return; }
+    const meds = C.normaliserMedicaments(lignes);
     await enregistrerParametres({ medicaments: meds });
     ui.rdvPlusTard = false;
-    annoncer(meds.length ? `Médicaments suivis : ${meds.join(', ')}.` : 'Aucun médicament suivi.');
+    annoncer(meds.length ? `Médicaments suivis : ${meds.map((m) => (m.dosages.length ? `${m.nom} (${m.dosages.map(C.doseFr).join(' et ')} mg)` : m.nom)).join(', ')}.` : 'Aucun médicament suivi.');
     vueReglages(['sevrage']);
     demanderDosesRdv();
   });

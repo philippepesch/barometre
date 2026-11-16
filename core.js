@@ -3530,8 +3530,9 @@ export function bilanSemaine(evaluations, lundi, { evenements = [] } = {}) {
 
 /** Paliers de sevrage saisis par le patient : [{ id, date, dose (mg), produit, remarque }], triés par date. */
 export function normaliserDoses(x) {
-  return (Array.isArray(x) ? x : []).filter((d) => d && estDateValide(d.date) && Number.isFinite(Number(d.dose)) && Number(d.dose) >= 0 && Number(d.dose) <= 1000)
-    .map((d) => ({ id: String(d.id || nouvelId()), date: d.date, dose: Math.round(Number(d.dose) * 100) / 100, produit: String(d.produit || '').trim().slice(0, 60), remarque: String(d.remarque || '').trim().slice(0, 200) }))
+  return (Array.isArray(x) ? x : []).map((d) => { const c = d && normaliserComprimes(d.comprimes); return c && c.length ? { ...d, comprimes: c, dose: totalComprimes(c) } : d; })
+    .filter((d) => d && estDateValide(d.date) && Number.isFinite(Number(d.dose)) && Number(d.dose) >= 0 && Number(d.dose) <= 2000)
+    .map((d) => ({ id: String(d.id || nouvelId()), date: d.date, dose: Math.round(Number(d.dose) * 100) / 100, ...(d.comprimes && d.comprimes.length ? { comprimes: d.comprimes } : {}), produit: String(d.produit || '').trim().slice(0, 60), remarque: String(d.remarque || '').trim().slice(0, 200) }))
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 /** Dose lisible : « 1,5 », « 2 », « 0,25 ». */
@@ -3562,15 +3563,43 @@ export function sevrageSurPeriode(doses, evaluations, debut, fin, { produit = nu
 // ---------------------------------------------------------------------------
 // Sevrage (1.42) : médicaments suivis, rendez-vous chez le médecin repris de Google Agenda, dose prescrite à chaque rendez-vous
 
-/** Médicaments suivis (saisis par le patient), sans doublon. */
+/** Dosages des comprimés en mg (« 25, 10 »), du plus fort au plus faible, sans doublon. */
+export function normaliserDosages(x) {
+  const l = (Array.isArray(x) ? x : String(x || '').split(/[;\/\s]+|,(?!\d)|,\s+/)).map((v) => (typeof v === 'number' ? v : lireDose(v))).filter((v) => Number.isFinite(v) && v > 0);
+  return [...new Set(l)].sort((a, b) => b - a).slice(0, 4);
+}
+/** Médicaments suivis (saisis par le patient) : [{ nom, dosages: [mg par comprimé] }], sans doublon. */
 export function normaliserMedicaments(x) {
-  const l = (Array.isArray(x) ? x : String(x || '').split(/[,;\n]/)).map((m) => String(m || '').trim().slice(0, 60)).filter(Boolean);
-  return l.filter((m, i) => l.findIndex((y) => normaliserLibelle(y) === normaliserLibelle(m)) === i).slice(0, 6);
+  const l = (Array.isArray(x) ? x : String(x || '').split(/[,;\n]/)).map((m) => (m && typeof m === 'object' ? { nom: String(m.nom || '').trim().slice(0, 60), dosages: normaliserDosages(m.dosages) } : { nom: String(m || '').trim().slice(0, 60), dosages: [] })).filter((m) => m.nom);
+  return l.filter((m, i) => l.findIndex((y) => normaliserLibelle(y.nom) === normaliserLibelle(m.nom)) === i).slice(0, 6);
+}
+export const nomsMedicaments = (x) => normaliserMedicaments(x).map((m) => m.nom);
+/** Comprimés d'une dose : [{ mg, nombre }] (nombre > 0, par quarts), du plus fort au plus faible. */
+export function normaliserComprimes(x) {
+  return (Array.isArray(x) ? x : []).map((c) => ({ mg: Math.round(Number(c && c.mg) * 100) / 100, nombre: Math.round(Number(c && c.nombre) * 4) / 4 }))
+    .filter((c) => c.mg > 0 && c.mg <= 1000 && c.nombre > 0 && c.nombre <= 40).sort((a, b) => b.mg - a.mg);
+}
+export const totalComprimes = (c) => Math.round(normaliserComprimes(c).reduce((t, x) => t + x.mg * x.nombre, 0) * 100) / 100;
+const nombreComprimes = (n) => (n === 0.5 ? '½' : n === 0.25 ? '¼' : n === 0.75 ? '¾' : doseFr(n));
+/** « 2 comprimés de 25 mg + 1 comprimé de 10 mg = 60 mg » ; « 60 mg » sans comprimés. */
+export function texteDose(d, { court = false } = {}) {
+  const c = normaliserComprimes(d && d.comprimes);
+  const mg = `${doseFr(d && d.dose !== undefined ? d.dose : totalComprimes(c))} mg`;
+  if (!c.length) return mg;
+  const parts = c.map((x) => (court ? `${nombreComprimes(x.nombre)} × ${doseFr(x.mg)} mg` : `${nombreComprimes(x.nombre)} ${x.nombre >= 2 ? 'comprimés' : 'comprimé'} de ${doseFr(x.mg)} mg`));
+  return c.length === 1 && d.dose !== undefined && court ? `${parts[0]} = ${mg}` : `${parts.join(' + ')} = ${mg}`;
+}
+/** Nombre de comprimés saisi (« 1,5 », « ½ ») ; null si vide, NaN si illisible. */
+export function lireNombreComprimes(t) {
+  const v = String(t || '').trim().replace('½', '0.5').replace('¼', '0.25').replace('¾', '0.75');
+  if (!v) return null;
+  const n = lireDose(v);
+  return Number.isFinite(n) && n <= 40 ? Math.round(n * 4) / 4 : NaN;
 }
 /** Médicaments présents dans les paliers (ou suivis), dans l'ordre des réglages ; « » = palier sans médicament. */
 export function produitsDoses(doses, medicaments = []) {
   const ds = normaliserDoses(doses);
-  const suivis = normaliserMedicaments(medicaments);
+  const suivis = nomsMedicaments(medicaments);
   const vus = [...suivis];
   for (const d of ds) if (!vus.some((v) => normaliserLibelle(v) === normaliserLibelle(d.produit))) vus.push(d.produit);
   return vus.filter((v) => ds.some((d) => normaliserLibelle(d.produit) === normaliserLibelle(v)));
@@ -3609,10 +3638,12 @@ export function lireDose(texte) {
 /** Enregistre les doses prescrites à un rendez-vous : un palier par médicament renseigné (remplace un palier du même jour). */
 export function dosesApresRdv(doses, date, valeurs) {
   let ds = normaliserDoses(doses);
-  for (const [produit, dose] of Object.entries(valeurs || {})) {
-    if (dose === null || dose === undefined || Number.isNaN(dose)) continue;
+  for (const [produit, v] of Object.entries(valeurs || {})) {
+    const comprimes = v && typeof v === 'object' ? normaliserComprimes(v.comprimes) : [];
+    const dose = v && typeof v === 'object' ? totalComprimes(comprimes) : v;
+    if (dose === null || dose === undefined || typeof dose !== 'number' || Number.isNaN(dose)) continue;
     ds = ds.filter((d) => !(d.date === date && normaliserLibelle(d.produit) === normaliserLibelle(produit)));
-    ds.push({ id: nouvelId(), date, dose, produit, remarque: `Prescription du ${formatDateCourte(date)}` });
+    ds.push({ id: nouvelId(), date, dose, ...(comprimes.length ? { comprimes } : {}), produit, remarque: `Prescription du ${formatDateCourte(date)}` });
   }
   return normaliserDoses(ds);
 }

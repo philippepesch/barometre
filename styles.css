@@ -703,3 +703,13 @@ a.mm-case:hover, a.mm-case:focus-visible { border-color: var(--laiton); outline:
 .rdv-dose legend { font-weight: 600; padding: 0 4px; }
 .rdv-dose .rangee { gap: 12px; flex-wrap: wrap; }
 #titre-sevrage ~ h3 { margin: 14px 0 4px; }
+.ligne-medicament { gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.ligne-medicament [data-med="nom"] { flex: 1 1 12em; min-width: 10em; }
+.dose-saisie { margin: 4px 0 10px; }
+.dose-titre { margin-bottom: 4px; }
+.dose-comprimes { gap: 8px; align-items: center; flex-wrap: wrap; }
+.dose-cp { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.dose-cp input { width: 4.2em; text-align: center; }
+.dose-total { font-variant-numeric: tabular-nums; margin-left: 4px; }
+.dose-avant { display: block; margin-top: 4px; }
+#dose-champs .dose-saisie { margin: 0; }

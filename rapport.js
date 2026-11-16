@@ -1956,13 +1956,13 @@ export async function genererRapport(PDFLib, donnees, options) {
       .map((pr) => ({ pr, sv: C.sevrageSurPeriode(parametres.doses, evals, debut, fin, { produit: pr }) })).filter((x) => x.sv.paliers.length);
     if (parts.length) {
       R.section(++numSection, 'Sevrage : paliers et humeur', 190);
-      R.paragraphe(`Doses quotidiennes indiquées par le patient (marches, échelle de gauche en mg) et note du jour (points, échelle de droite)${parts.length > 1 ? ', une courbe par médicament' : ''}. Les doses sont celles qu'il a saisies, en général la prescription notée après chaque rendez-vous médical ; l'application ne donne aucun avis médical.`, { taille: 9.2, apres: 4 });
+      R.paragraphe(`Doses quotidiennes indiquées par le patient (en comprimés, total en mg sur l'échelle de gauche, en marches) et note du jour (points, échelle de droite)${parts.length > 1 ? ', une courbe par médicament' : ''}. Les doses sont celles qu'il a saisies, en général la prescription notée après chaque rendez-vous médical ; l'application ne donne aucun avis médical.`, { taille: 9.2, apres: 4 });
       for (const { pr, sv } of parts) {
         if (pr) { R.place(200); R.paragraphe(pr, { taille: 10, police: 'gras', apres: 2 }); }
         R.encadre(170, () => R.courbeSevrage(sv));
         R.tableau(
-          [{ titre: 'Palier', part: 2.2 }, { titre: 'Dose par jour', part: 1 }, { titre: 'Humeur moyenne', part: 1.3 }, { titre: 'Remarque', part: 2.5 }],
-          sv.paliers.map((p) => [`${C.formatDateCourte(p.de)} – ${C.formatDateCourte(p.a)}`, `${C.doseFr(p.dose)} mg`, p.moyenne === null ? '—' : `${C.nombreFr(p.moyenne)}/10 (${p.nombre})`, p.remarque || '']),
+          [{ titre: 'Palier', part: 2 }, { titre: 'Dose par jour', part: 2.3 }, { titre: 'Humeur moyenne', part: 1.2 }, { titre: 'Remarque', part: 1.7 }],
+          sv.paliers.map((p) => [`${C.formatDateCourte(p.de)} – ${C.formatDateCourte(p.a)}`, C.texteDose(p, { court: true }), p.moyenne === null ? '—' : `${C.nombreFr(p.moyenne)}/10 (${p.nombre})`, p.remarque || '']),
         );
       }
     }
