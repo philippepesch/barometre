@@ -103,16 +103,18 @@ function verifierGoogle({ interactif = false, bouton = null } = {}) {
   const g = C.normaliserGoogle(etat.parametres && etat.parametres.google);
   if (!g.clientId) { if (interactif) aller('#/reglages/seances'); return Promise.resolve(null); }
   const mot = C.motRendezVous(etat.parametres);
-  if (!mot && !g.motMedecin) { if (interactif) annoncer('Indique le nom de ton thérapeute ou le mot à chercher (Réglages > Séances > Google Agenda).'); return Promise.resolve(null); }
+  const equipesGoogle = (() => { const f = C.normaliserFootball(etat.parametres.football); return f.actif ? f.equipes.filter((e) => e.source === 'google') : []; })();
+  if (!mot && !g.motMedecin && !equipesGoogle.length) { if (interactif) annoncer('Indique le nom de ton thérapeute ou le mot à chercher (Réglages > Séances > Google Agenda).'); return Promise.resolve(null); }
   const jeton = lireJetonGoogle();
   const attente = jeton ? Promise.resolve(jeton) : (interactif ? connecterGoogle() : null);
   if (!attente) return Promise.resolve(null);
   if (bouton) { bouton.disabled = true; bouton.dataset.texte = bouton.textContent; bouton.textContent = 'Vérification…'; }
-  const chercher = async (j, q, depuis, jusqua, max) => {
-    const params = new URLSearchParams({ timeMin: new Date(depuis).toISOString(), timeMax: new Date(jusqua).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: String(max), q });
-    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(g.calendrier)}/events?${params}`, { headers: { Authorization: `Bearer ${j}` } });
+  const chercher = async (j, q, depuis, jusqua, max, cal = g.calendrier) => {
+    const params = new URLSearchParams({ timeMin: new Date(depuis).toISOString(), timeMax: new Date(jusqua).toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: String(max) });
+    if (q) params.set('q', q);
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal)}/events?${params}`, { headers: { Authorization: `Bearer ${j}` } });
     if (r.status === 401) { oublierJetonGoogle(); throw new Error('Connexion Google expirée : touche à nouveau « Vérifier ».'); }
-    if (r.status === 404) throw new Error(`Agenda « ${g.calendrier} » introuvable.`);
+    if (r.status === 404) throw new Error(`Agenda « ${cal} » introuvable.`);
     if (!r.ok) throw new Error(`Google Agenda ne répond pas (${r.status}).`);
     return (await r.json()).items || [];
   };
@@ -129,18 +131,57 @@ function verifierGoogle({ interactif = false, bouton = null } = {}) {
       rdvAvant = C.normaliserRdvMedecin(etat.parametres.rdvMedecin);
       rdvApres = C.fusionnerRdvMedecin(rdvAvant, items, g.motMedecin);
     }
+    // Matchs des équipes suivies : agendas abonnés dont les titres portent le score (une erreur ici ne bloque pas le reste)
+    const matchsG = [];
+    for (const e of equipesGoogle) {
+      try { (await chercher(j, '', maintenant() - 365 * 86400000, maintenant(), 250, e.calendrier)).forEach((ev) => { const m = C.matchDepuisGoogle(ev, e); if (m) matchsG.push(m); }); ui.footballErreurGoogle = ''; }
+      catch (err) { if (/expirée/.test(err.message)) throw err; ui.footballErreurGoogle = `${e.nom} : ${err.message}`; console.warn(err); }
+    }
+    if (matchsG.length) await enregistrerParametres({ matchs: C.fusionnerMatchs(etat.parametres.matchs, matchsG, maintenant()) });
     ui.googleVerifie = Date.now();
     if (rdvApres && JSON.stringify(rdvApres) !== JSON.stringify(rdvAvant)) await enregistrerParametres({ rdvMedecin: rdvApres });
     if (res && (res.ajoutees.length || res.modifiees.length || res.rattachees.length)) {
       await enregistrerSeances(res.seances);
       await resultatGoogle(res);
-    } else if (interactif && !(rdvApres && C.rdvEnAttente(rdvApres, maintenant()).length)) annoncer('Google Agenda vérifié : rien de nouveau.');
+    } else if (interactif && !(rdvApres && C.rdvEnAttente(rdvApres, maintenant()).length)) annoncer(matchsG.length ? `Google Agenda vérifié : ${C.pluriel(matchsG.length, 'match')} avec résultat.` : 'Google Agenda vérifié : rien de nouveau.');
     rafraichirAccueil();
     await demanderDosesRdv();
     return res;
   }).catch((e) => { if (interactif) annoncer(e.message); else console.warn(e); return null; })
     .finally(() => { if (bouton && bouton.isConnected) { bouton.disabled = false; bouton.textContent = bouton.dataset.texte || 'Vérifier'; } });
 }
+
+/** Matchs affichés : ceux des équipes encore suivies, si l'option est active. */
+const matchsAffiches = () => C.matchsSuivis(etat.parametres);
+/**
+ * Résultats depuis OpenLigaDB (football allemand) : seulement le nom de l'équipe est envoyé, jamais rien sur le patient.
+ * Au plus toutes les 3 heures (ou sur demande), sans bloquer l'application si le service ne répond pas.
+ */
+async function actualiserFootball({ force = false } = {}) {
+  const f = C.normaliserFootball(etat.parametres && etat.parametres.football);
+  const equipes = f.actif ? f.equipes.filter((e) => e.source === 'openligadb') : [];
+  if (!equipes.length || ui.footballEnCours) return null;
+  if (!force && maintenant() - (Number(etat.parametres.footballMaj) || 0) < 3 * 3600000) return null;
+  ui.footballEnCours = true;
+  const trouves = [];
+  let reponses = 0;
+  try {
+    const demandes = [];
+    for (const e of equipes) for (const saison of C.saisonsOpenLiga(maintenant())) for (const ligue of C.LIGUES_OPENLIGA) {
+      demandes.push(fetch(`https://api.openligadb.de/getmatchdata/${ligue}/${saison}/${encodeURIComponent(C.filtreOpenLiga(e.nom))}`)
+        .then((r) => (r.ok ? r.json() : null)).then((l) => { if (!Array.isArray(l)) return; reponses++; l.forEach((m) => { const x = C.matchDepuisOpenLiga(m, e); if (x) trouves.push(x); }); })
+        .catch(() => {}));
+    }
+    await Promise.all(demandes);
+  } finally { ui.footballEnCours = false; }
+  if (!reponses) { ui.footballErreur = 'OpenLigaDB ne répond pas pour l\'instant ; nouvel essai à la prochaine ouverture.'; return null; }
+  ui.footballErreur = '';
+  await enregistrerParametres({ matchs: C.fusionnerMatchs(etat.parametres.matchs, trouves, maintenant()), footballMaj: maintenant() });
+  return trouves.length;
+}
+/** Ballon (dessin original) placé dans un SVG. */
+const ballonSVG = (cx, cy, t) => iconeSymbole('sport', { taille: t }).replace('<svg ', `<svg x="${(cx - t / 2).toFixed(1)}" y="${(cy - t / 2).toFixed(1)}" `);
+const scoreEquipe = C.scoreEquipe;
 
 /**
  * Saisie d'une dose quotidienne : en comprimés pour chaque dosage du médicament (total en mg calculé), ou en mg s'il n'a pas de dosage.
@@ -156,6 +197,27 @@ function champsDose(med, prefixe, { d = null, avant = null, autofocus = false } 
     <div class="rangee dose-comprimes">${med.dosages.map((mg, k) => `<label class="dose-cp"><input type="text" name="${prefixe}-c${k}" data-mg="${mg}" inputmode="decimal" maxlength="5" autocomplete="off" value="${esc(deja(mg))}" aria-label="${esc(med.nom)} : comprimés de ${esc(C.doseFr(mg))} mg"${autofocus && k === 0 ? ' autofocus' : ''}> <span>× ${esc(C.doseFr(mg))} mg</span></label>`).join('<span class="doux">+</span>')}
       <output class="dose-total doux"></output></div>${rappel}</div>`;
 }
+/** Réglages : équipes de football suivies. */
+function ligneEquipe(e) {
+  return `<div class="rangee ligne-equipe"><input type="text" data-eq="nom" value="${esc(e.nom)}" maxlength="60" autocomplete="off" placeholder="Nom de l'équipe" aria-label="Nom de l'équipe">
+    <select data-eq="source" aria-label="D'où viennent les résultats"><option value="google"${e.source === 'google' ? ' selected' : ''}>Google Agenda (score dans le titre)</option><option value="openligadb"${e.source !== 'google' ? ' selected' : ''}>OpenLigaDB (football allemand)</option></select>
+    <input type="text" data-eq="calendrier" value="${esc(e.calendrier)}" maxlength="200" autocomplete="off" placeholder="ID de l'agenda Google" aria-label="ID de l'agenda Google"${e.source === 'google' ? '' : ' hidden'}></div>`;
+}
+function blocReglagesFootball(p) {
+  const f = C.normaliserFootball(p.football);
+  const n = matchsAffiches().length, maj = Number(p.footballMaj) || 0;
+  const etatTxt = [n ? `${C.pluriel(n, 'match enregistré', 'matchs enregistrés')}` : 'Aucun match enregistré pour l\'instant', maj ? `OpenLigaDB consulté le ${C.formatDateCourte(C.dateLocale(maj))} à ${new Date(maj).toTimeString().slice(0, 5)}` : ''].filter(Boolean).join(' · ');
+  return `<div class="bloc" id="football"><h2>${iconeSymbole('sport', { taille: 20 })} Football <small class="doux" style="font-weight:400">(facultatif)</small></h2>
+      <p class="doux" style="margin-top:0">Les matchs de tes équipes apparaissent sur la courbe (ballon et score) et dans le rapport, pour voir si le football joue sur ton humeur.</p>
+      <label class="interrupteur"><input type="checkbox" id="football-actif" ${f.actif ? 'checked' : ''}> Afficher les matchs sur la courbe et dans le rapport</label>
+      <div id="football-lignes" style="margin-top:10px">${[...f.equipes, { nom: '', source: 'google', calendrier: '' }].map(ligneEquipe).join('')}</div>
+      <p class="rangee"><button type="button" class="bouton-discret" id="btn-equipe-plus">+ Autre équipe</button><button type="button" class="bouton-secondaire" id="btn-football-enregistrer">Enregistrer</button><button type="button" class="bouton-discret" id="btn-football-actualiser">Actualiser les résultats</button></p>
+      <p class="doux" id="football-etat">${esc(etatTxt)}${ui.footballErreur ? `<br><span class="erreur-texte">${esc(ui.footballErreur)}</span>` : ''}${ui.footballErreurGoogle ? `<br><span class="erreur-texte">${esc(ui.footballErreurGoogle)}</span>` : ''}</p>
+      <details class="repli"><summary>Où trouver l'ID d'un agenda Google ?</summary><p class="doux">Dans Google Agenda sur l'ordinateur : Paramètres › choisis l'agenda à gauche › « Intégrer l'agenda » › « ID de l'agenda ». Les résultats sont lus quand tu touches « Vérifier » (Google Agenda), comme pour les séances.</p></details>
+      <p class="doux">OpenLigaDB est une base publique et gratuite du football allemand (1re à 3e division, Coupe DFB). L'application lui demande seulement les matchs de l'équipe : rien sur toi ni sur ton humeur n'est envoyé.</p>
+    </div>`;
+}
+
 /** Réglages : une ligne « nom + dosages des comprimés » (3 dosages au plus). */
 function ligneMedicament(m) {
   const d = [...m.dosages, '', '', ''].slice(0, 3);
@@ -890,6 +952,7 @@ function tableauDeBord() {
   ${blocExperience(evals)}
   ${blocSevrage(debut, fin)}
   <div class="grille-2">${blocAutourSeances()}${blocAvantDifficiles()}</div>
+  ${blocFootball(debut, fin)}
   <section class="bloc" aria-labelledby="titre-motifs">
     <h2 id="titre-motifs">Fréquence des motifs</h2>
     <p class="doux">Seuls les motifs cochés sont comptés, en part des ${C.pluriel(evals.length, 'évaluation')} de la période.</p>
@@ -951,6 +1014,22 @@ function blocAutourSeances() {
       ${r.decalages.map((d, i) => `<text x="${X(i)}" y="${b + 14}" text-anchor="middle" class="${d.decalage === 0 ? 'svg-j0' : ''}">${d.decalage === 0 ? 'séance' : `J${d.decalage > 0 ? '+' : '−'}${Math.abs(d.decalage)}`}</text>`).join('')}
     </svg>
     <p class="doux" style="margin-top:6px">Ton humeur moyenne de trois jours avant à trois jours après tes ${C.pluriel(r.seances, 'séance')} ; en pointillés, ta moyenne générale.${r.seances < 3 ? ' Avec si peu de séances, la courbe est encore indicative.' : ''}</p>
+  </section>`;
+}
+
+/** Football et humeur : dernière note avant le match, première après (coïncidences observées, pas de causes). */
+function blocFootball(debut, fin) {
+  const matchs = C.matchsSurPeriode(matchsAffiches(), debut, fin);
+  if (!matchs.length) return '';
+  const r = C.humeurAutourMatchs(etat.evaluations, matchs);
+  const note = (v) => (v === null ? '<span class="doux">—</span>' : `${v}`);
+  const resume = ['V', 'N', 'D'].filter((k) => r.parResultat[k].matchs).map((k) => { const p = r.parResultat[k]; return `<li><i class="puce-match match-${k}"></i><strong>${C.pluriel(p.matchs, k === 'V' ? 'victoire' : k === 'D' ? 'défaite' : 'match nul', k === 'N' ? 'matchs nuls' : undefined)}</strong>${p.nombreEcart ? ` : humeur après le match ${C.signeFr(p.ecart)} en moyenne par rapport à avant <span class="doux">(${p.nombreEcart})</span>` : ' <span class="doux">: pas de note avant et après</span>'}</li>`; }).join('');
+  return `<section class="bloc" aria-labelledby="titre-football"><h2 id="titre-football">${iconeSymbole('sport', { taille: 20 })} Football et humeur</h2>
+    <ul class="liste-football">${resume}</ul>
+    <div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Match</th><th class="nombre">Avant</th><th class="nombre">Après</th><th class="nombre">Écart</th></tr></thead><tbody>
+    ${r.lignes.slice().reverse().map((l) => `<tr><td>${esc(C.formatDateCourte(l.match.date))}</td><td><i class="puce-match match-${l.match.resultat}"></i>${esc(C.texteMatch(l.match))}</td><td class="nombre">${note(l.avant)}</td><td class="nombre">${note(l.apres)}</td><td class="nombre">${l.ecart === null ? '—' : C.signeFr(l.ecart, 0)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="doux" style="margin-top:6px">« Avant » : ta dernière note avant le coup d'envoi ; « après » : ta première note après la fin du match (dans les 36 heures).${matchs.length < 5 ? ' Avec si peu de matchs, ce sont des observations, pas une tendance.' : ''}</p>
   </section>`;
 }
 
@@ -1165,7 +1244,10 @@ function legendeContexte(titre, evals, extraire, cle, libelle, couleur, ordre, s
 
 function graphiqueHTML(grille, prev) {
   const avecContexte = grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
-  const W = Math.round(Math.max(320, Math.min(760, (contenu.clientWidth || 760) - 40))), H0 = W < 500 ? 220 : 250, H = H0 + (avecContexte ? 62 : 0), g = 30, d = 10, h = 14, b = 44 + (avecContexte ? 62 : 0);
+  const joursGrille = new Set(grille.map((s) => s.date));
+  const matchsG = matchsAffiches().filter((m) => joursGrille.has(m.date));
+  const hM = matchsG.length ? 30 : 0; // bande des matchs au-dessus de la courbe
+  const W = Math.round(Math.max(320, Math.min(760, (contenu.clientWidth || 760) - 40))), H0 = W < 500 ? 220 : 250, H = H0 + hM + (avecContexte ? 62 : 0), g = 30, d = 10, h = 14 + hM, b = 44 + (avecContexte ? 62 : 0);
   const n = grille.length;
   const x = (i) => (n <= 1 ? (g + W - d) / 2 : g + 8 + (i * (W - d - g - 16)) / (n - 1));
   const y = (v) => h + (1 - v / 10) * (H - h - b);
@@ -1178,6 +1260,18 @@ function graphiqueHTML(grille, prev) {
     const i = grille.findIndex((s) => s.date === jr);
     svg += `<text class="etiquette" x="${x(i)}" y="${H - b + 30}" text-anchor="start">${esc(C.formatDateCourte(jr).slice(0, 5))}</text>`;
   });
+  // Matchs : ballon entouré de la couleur du résultat (score de l'équipe suivie), trait pointillé jusqu'à la courbe
+  {
+    const parJour = new Map();
+    for (const m of matchsG) {
+      let i = -1;
+      grille.forEach((s, k) => { if (s.date === m.date) i = k; });
+      if (i < 0) continue;
+      const rang = parJour.get(i) || 0; parJour.set(i, rang + 1);
+      const cx = x(i) + rang * 18, titre = `${C.formatDateCourte(m.date)}${m.heure ? ` ${m.heure}` : ''} · ${C.texteMatch(m)} (${C.RESULTATS_MATCH[m.resultat]})`;
+      svg += `<g class="match match-${m.resultat}"><title>${esc(titre)}</title><line class="match-ligne" x1="${cx}" x2="${cx}" y1="${h - 8}" y2="${H - b}"/><circle class="match-fond" cx="${cx}" cy="11" r="8.6"/>${ballonSVG(cx, 11, 26)}<circle class="match-anneau" cx="${cx}" cy="11" r="8.6"/><text class="match-score" x="${cx}" y="${h - 11}" text-anchor="middle">${scoreEquipe(m)}</text></g>`;
+    }
+  }
   let chemin = '';
   grille.forEach((s, i) => {
     const prec = grille[i - 1];
@@ -1234,13 +1328,13 @@ function graphiqueHTML(grille, prev) {
         i = j + 1;
       }
     };
-    const yb0 = H0 - 44 + 30 + 22;
+    const yb0 = H - b + 30 + 22;
     svg = `<defs><pattern id="hachures" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--filet-fort)" stroke-width="1.6"/></pattern></defs>${svg}`;
     bande('Lieu', yb0, C.lieuxDe, C.cleLieu, coul.lieu);
     bande('Situation', yb0 + 30, (e) => e.situation, C.cleSituation, coul.situation);
   }
   svg += '<line class="curseur-vertical" x1="0" x2="0" y1="0" y2="0" visibility="hidden"/>';
-  donneesGraphique = { grille, x, W, H, prevParCible, haut: h, bas: H0 - 44 };
+  donneesGraphique = { grille, x, W, H, prevParCible, haut: h, bas: H - b };
   const nbRep = grille.filter((s) => s.evaluation).length;
   const tableau = grille.filter((s) => s.evaluation || s.statut === 'omis').map((s) => `<tr><td>${esc(C.formatDateCourte(s.date))}</td><td>${s.creneau}</td><td>${s.evaluation ? esc(C.libelleNote(s.evaluation.note)) : 'omis'}</td>${avecContexte ? `<td>${s.evaluation && s.evaluation.lieu ? esc(C.libelleLieux(C.lieuxDe(s.evaluation))) : '—'}</td><td>${s.evaluation && s.evaluation.situation ? esc(C.libelleSituation(s.evaluation.situation)) : '—'}</td>` : ''}</tr>`).join('');
   const evalsGrille = grille.filter((s) => s.evaluation).map((s) => s.evaluation);
@@ -1255,6 +1349,7 @@ function graphiqueHTML(grille, prev) {
       <span><svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="var(--doux)"/></svg>Soir</span>
       <span><svg viewBox="0 0 14 14"><path d="M7 1.5L12.5 7L7 12.5L1.5 7Z" fill="none" stroke="var(--laiton)" stroke-width="1.6"/></svg>Note prévue</span>
       <span><svg viewBox="0 0 14 14"><path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="var(--doux)" stroke-width="1.6"/></svg>Créneau omis</span>
+      ${matchsG.length ? `<span class="legende-match">${iconeSymbole('sport', { taille: 14 })}Match, score de ton équipe : <i class="match-V"></i>victoire <i class="match-N"></i>nul <i class="match-D"></i>défaite</span>` : ''}
     </div>
     ${legendes}
     ${tableau ? `<details class="repli" style="margin-top:8px"><summary>Afficher les données en tableau</summary><div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Créneau</th><th>Note</th>${avecContexte ? '<th>Lieu</th><th>Situation</th>' : ''}</tr></thead><tbody>${tableau}</tbody></table></div></details>` : '<p class="doux">Aucune donnée sur la période.</p>'}`;
@@ -4162,6 +4257,7 @@ async function vueReglages([section] = []) {
   })()}
     </div>
 
+    ${blocReglagesFootball(p)}
     <div class="bloc" id="sevrage"><h2>Sevrage <small class="doux" style="font-weight:400">(facultatif)</small></h2>
       <p class="doux" style="margin-top:0">Note chaque changement de dose quotidienne. Le tableau de bord et le rapport montrent alors les paliers à côté de ton humeur. Ces données restent dans l'application et ne sont jamais envoyées à l'assistant de rédaction.</p>
       <fieldset class="champ" id="medicaments"><legend style="font-weight:600;margin-bottom:4px">Médicaments suivis</legend>
@@ -4367,6 +4463,26 @@ async function vueReglages([section] = []) {
     await enregistrerParametres({ doses: C.normaliserDoses([...autres, { date, dose: comprimes ? C.totalComprimes(comprimes) : valeur, ...(comprimes ? { comprimes } : {}), produit, remarque: document.getElementById('dose-remarque').value }]) });
     annoncer('Palier enregistré.');
     vueReglages(['sevrage']);
+  });
+  document.getElementById('btn-equipe-plus').addEventListener('click', () => { document.getElementById('football-lignes').insertAdjacentHTML('beforeend', ligneEquipe({ nom: '', source: 'google', calendrier: '' })); });
+  document.getElementById('football-lignes').addEventListener('change', (e) => { if (e.target.dataset.eq === 'source') e.target.closest('.ligne-equipe').querySelector('[data-eq="calendrier"]').hidden = e.target.value !== 'google'; });
+  document.getElementById('btn-football-enregistrer').addEventListener('click', async () => {
+    const equipes = [...document.querySelectorAll('#football-lignes .ligne-equipe')].map((l) => ({ nom: l.querySelector('[data-eq="nom"]').value, source: l.querySelector('[data-eq="source"]').value, calendrier: l.querySelector('[data-eq="calendrier"]').value }));
+    if (equipes.some((e) => e.nom.trim() && e.source === 'google' && !e.calendrier.trim())) { annoncer('Indique l\'ID de l\'agenda Google de chaque équipe dont les résultats viennent de Google Agenda.'); return; }
+    const f = C.normaliserFootball({ actif: document.getElementById('football-actif').checked, equipes });
+    await enregistrerParametres({ football: f });
+    annoncer(f.equipes.length ? `Équipes suivies : ${f.equipes.map((e) => e.nom).join(', ')}.` : 'Aucune équipe suivie.');
+    await actualiserFootball({ force: true });
+    if (f.actif && f.equipes.some((e) => e.source === 'google') && lireJetonGoogle()) await verifierGoogle();
+    vueReglages(['football']);
+  });
+  document.getElementById('btn-football-actualiser').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Actualisation…';
+    const n = await actualiserFootball({ force: true });
+    const f = C.normaliserFootball(etat.parametres.football);
+    if (f.actif && f.equipes.some((e) => e.source === 'google')) await verifierGoogle({ interactif: true });
+    if (n !== null) annoncer(`OpenLigaDB : ${C.pluriel(n, 'match terminé', 'matchs terminés')} trouvé${n > 1 ? 's' : ''}.`);
+    vueReglages(['football']);
   });
   document.getElementById('btn-medicament-plus').addEventListener('click', () => { document.getElementById('medicaments-lignes').insertAdjacentHTML('beforeend', ligneMedicament({ nom: '', dosages: [] })); });
   document.getElementById('btn-medicaments').addEventListener('click', async () => {
@@ -4780,7 +4896,7 @@ async function demarrer() {
   majEtatSynchro();
   enregistrerServiceWorker();
   // Après une courte attente (la synchronisation peut apporter une séance saisie sur un autre appareil)
-  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => (lireJetonGoogle() && C.normaliserGoogle(etat.parametres.google).actif ? verifierGoogle() : null)).then(() => demanderDosesRdv()).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
+  if (etat.parametres) setTimeout(() => ajouterSeancesMiseAJour().catch((e) => console.warn(e)).then(() => (lireJetonGoogle() && C.normaliserGoogle(etat.parametres.google).actif ? verifierGoogle() : null)).then(() => demanderDosesRdv()).then(() => actualiserFootball().then((n) => { if (n && location.hash.startsWith('#/tableau')) router(); }).catch(() => {})).then(() => verifierRappelsOuverture()).catch((e) => console.warn(e)), 2500);
   if (etat.parametres) {
     instantaneQuotidien().catch((e) => console.warn(e));
     rattrapageVersions().catch((e) => console.warn(e));

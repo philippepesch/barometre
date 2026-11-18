@@ -716,3 +716,20 @@ a.mm-case:hover, a.mm-case:focus-visible { border-color: var(--laiton); outline:
 
 /* 1.43 : objectif « prévision + 1 » choisi au début de chaque saisie */
 .guide-objectif { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--filet); border-radius: var(--rayon-petit); background: var(--surface-2); }
+
+/* 1.44 : football sur la courbe */
+.match-V { --match: #2F8F5B; } .match-N { --match: #8A949C; } .match-D { --match: #C0392B; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .match-V { --match: #6CC28F; } :root:not([data-theme="light"]) .match-D { --match: #F08A7E; } }
+:root[data-theme="dark"] .match-V { --match: #6CC28F; } :root[data-theme="dark"] .match-D { --match: #F08A7E; }
+.graphique .match-ligne { stroke: var(--match); stroke-width: 1; stroke-dasharray: 2 3; opacity: .55; }
+.graphique .match-fond { fill: #FFFFFF; }
+.graphique .match-anneau { fill: none; stroke: var(--match); stroke-width: 2.2; }
+.graphique .match-score { font-size: 10px; font-weight: 700; fill: var(--match); }
+.legende-match { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.legende-match i, i.puce-match { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--match); background: var(--surface); vertical-align: -1px; margin-right: 4px; }
+.liste-football { margin: 0 0 10px; padding-left: 0; list-style: none; }
+.liste-football li { margin: 3px 0; }
+#titre-football svg, #football h2 svg { vertical-align: -3px; margin-right: 4px; }
+.ligne-equipe { gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.ligne-equipe [data-eq="nom"] { flex: 1 1 10em; min-width: 9em; }
+.ligne-equipe [data-eq="calendrier"] { flex: 2 1 18em; min-width: 12em; }

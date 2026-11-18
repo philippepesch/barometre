@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.43.0';
+export const VERSION_APP = '1.44.0';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -3226,7 +3226,7 @@ export const themeRapport = () => THEMES_RAPPORT[0];
 // exactement le même résultat, quel que soit l'ordre. Rien n'est perdu : toute évaluation
 // écartée est placée dans les archives.
 
-export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision', 'google', 'doses', 'sevrageRapport', 'bilanVu', 'rdvMedecin', 'medicaments'];
+export const PARAMETRES_PARTAGES = ['destinataire', 'emailTherapeute', 'rechercheLieux', 'fondCarte', 'saisieComplete', 'syntheses', 'alerteManquee', 'contactConfiance', 'prochaineSeance', 'seances', 'patient', 'therapeute', 'rapportAvecCNS', 'dernierRapport', 'titreRappelDiscret', 'ia', 'theme', 'evenements', 'contexteRapport', 'styleRedaction', 'mentionRapport', 'seanceAConvenir', 'modeSaisie', 'doublonsIgnores', 'rythme', 'seancesSuiteTraitee', 'rapportsProposes', 'whatsappTherapeute', 'fenetresOuverture', 'symbolesLieux', 'seancesMiseAJour', 'experiencesPrevision', 'google', 'doses', 'sevrageRapport', 'bilanVu', 'rdvMedecin', 'medicaments', 'football', 'matchs'];
 
 function empreinteTexte(s) {
   let h = 5381;
@@ -3647,3 +3647,110 @@ export function dosesApresRdv(doses, date, valeurs) {
   }
   return normaliserDoses(ds);
 }
+
+// ---------------------------------------------------------------------------
+// Football (1.44) : matchs des équipes suivies par le patient (saisies dans les réglages, rien dans le code public).
+// Sources : un agenda Google abonné dont les titres portent le score, « Équipe A - Équipe B [Compétition] (2-1) »,
+// ou OpenLigaDB (base publique du football allemand), interrogée seulement avec le nom de l'équipe.
+
+export const LIGUES_OPENLIGA = ['bl1', 'bl2', 'bl3', 'dfb'];
+export function normaliserFootball(x) {
+  const f = x && typeof x === 'object' ? x : {};
+  const equipes = (Array.isArray(f.equipes) ? f.equipes : []).map((e) => ({
+    nom: String((e && e.nom) || '').trim().slice(0, 60),
+    source: e && e.source === 'google' ? 'google' : 'openligadb',
+    calendrier: String((e && e.calendrier) || '').trim().slice(0, 200),
+  })).filter((e) => e.nom && (e.source !== 'google' || e.calendrier));
+  return { actif: f.actif !== false, equipes: equipes.filter((e, i) => equipes.findIndex((y) => normaliserLibelle(y.nom) === normaliserLibelle(e.nom) && y.source === e.source) === i).slice(0, 6) };
+}
+const coteEquipe = (noms1, noms2, nom) => {
+  const n = normaliserLibelle(nom);
+  const contient = (noms) => noms.some((t) => t && (normaliserLibelle(t) === n || normaliserLibelle(t).includes(n)));
+  return contient(noms1) ? 1 : contient(noms2) ? 2 : 0;
+};
+/** Match terminé d'un agenda Google : null sans score dans le titre ou si l'équipe n'y figure pas. */
+export function matchDepuisGoogle(ev, equipe) {
+  if (!ev || ev.status === 'cancelled' || !ev.start || !ev.start.dateTime) return null;
+  const titre = String(ev.summary || '').trim();
+  const sc = titre.match(/\((\d{1,2})\s*[-–:]\s*(\d{1,2})\)\s*$/);
+  if (!sc) return null;
+  const competition = (titre.match(/\[([^\]]+)\]/) || [])[1] || '';
+  const equipes = titre.slice(0, sc.index).replace(/\[[^\]]*\]/g, '').trim().split(/\s+[-–]\s+/);
+  if (equipes.length !== 2) return null;
+  const cote = coteEquipe([equipes[0]], [equipes[1]], equipe.nom);
+  if (!cote) return null;
+  const instant = Date.parse(ev.start.dateTime), d = dateHeureLocales(instant);
+  const fin = ev.end && ev.end.dateTime ? Date.parse(ev.end.dateTime) : instant + 105 * 60000;
+  return normaliserMatch({ id: `g-${ev.id}`, equipe: equipe.nom, date: d.date, heure: d.heure, debut: instant, fin, equipe1: equipes[0], equipe2: equipes[1], buts1: Number(sc[1]), buts2: Number(sc[2]), cote, competition });
+}
+/** Match terminé d'OpenLigaDB (résultat final). */
+export function matchDepuisOpenLiga(m, equipe) {
+  if (!m || !m.team1 || !m.team2 || !m.matchIsFinished) return null;
+  const res = Array.isArray(m.matchResults) ? m.matchResults : [];
+  const final = res.find((r) => r && r.resultTypeID === 2) || [...res].sort((a, b) => (b.resultOrderID || 0) - (a.resultOrderID || 0))[0];
+  if (!final || !Number.isFinite(final.pointsTeam1) || !Number.isFinite(final.pointsTeam2)) return null;
+  const cote = coteEquipe([m.team1.teamName, m.team1.shortName], [m.team2.teamName, m.team2.shortName], equipe.nom);
+  if (!cote) return null;
+  const instant = Date.parse(m.matchDateTimeUTC || m.matchDateTime);
+  if (!Number.isFinite(instant)) return null;
+  const d = dateHeureLocales(instant);
+  return normaliserMatch({ id: `ol-${m.matchID}`, equipe: equipe.nom, date: d.date, heure: d.heure, debut: instant, fin: instant + 115 * 60000, equipe1: m.team1.teamName, equipe2: m.team2.teamName, buts1: final.pointsTeam1, buts2: final.pointsTeam2, cote, competition: m.leagueName || '' });
+}
+export function normaliserMatch(m) {
+  if (!m || !m.id || !estDateValide(m.date) || !Number.isFinite(Number(m.debut))) return null;
+  const b1 = Number(m.buts1), b2 = Number(m.buts2);
+  if (!Number.isInteger(b1) || !Number.isInteger(b2) || b1 < 0 || b2 < 0 || b1 > 40 || b2 > 40) return null;
+  const cote = m.cote === 2 ? 2 : 1;
+  const pour = cote === 1 ? b1 : b2, contre = cote === 1 ? b2 : b1;
+  return { id: String(m.id), equipe: String(m.equipe || '').slice(0, 60), date: m.date, heure: estHeure(m.heure) ? m.heure : '', debut: Number(m.debut), fin: Number.isFinite(Number(m.fin)) ? Number(m.fin) : Number(m.debut) + 105 * 60000,
+    equipe1: String(m.equipe1 || '').slice(0, 80), equipe2: String(m.equipe2 || '').slice(0, 80), buts1: b1, buts2: b2, cote, competition: String(m.competition || '').slice(0, 80),
+    resultat: pour > contre ? 'V' : pour < contre ? 'D' : 'N' };
+}
+export const RESULTATS_MATCH = { V: 'victoire', N: 'match nul', D: 'défaite' };
+/** Fusion par identifiant (les nouveaux remplacent les anciens), un an et demi gardé au plus. */
+export function fusionnerMatchs(liste, nouveaux, instant = Date.now()) {
+  const par = new Map();
+  for (const m of [...(liste || []), ...(nouveaux || [])]) { const n = normaliserMatch(m); if (n && n.debut >= instant - 550 * 86400000) par.set(n.id, n); }
+  return [...par.values()].sort((a, b) => a.debut - b.debut);
+}
+export const matchsSurPeriode = (matchs, debut, fin) => (matchs || []).map(normaliserMatch).filter((m) => m && m.date >= debut && m.date <= fin).sort((a, b) => a.debut - b.debut);
+/** « Karlsruher SC – VfL Osnabrück 2-1 » */
+export const texteMatch = (m) => `${m.equipe1} – ${m.equipe2} ${m.buts1}-${m.buts2}`;
+/** Saisons OpenLigaDB (année de début, saison de juillet à juin) couvrant l'année écoulée. */
+export function saisonsOpenLiga(instant = Date.now()) {
+  const s = (t) => { const d = new Date(t); return d.getUTCMonth() >= 6 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; };
+  return [...new Set([s(instant), s(instant - 365 * 86400000)])];
+}
+/** Mot de recherche pour OpenLigaDB : le mot le plus long du nom (« Karlsruher SC » → « Karlsruher »). */
+export const filtreOpenLiga = (nom) => String(nom || '').split(/\s+/).sort((a, b) => b.length - a.length)[0] || '';
+
+/**
+ * Humeur autour des matchs : dernière note avant le coup d'envoi et première note après la fin (dans les 36 heures),
+ * selon l'heure d'enregistrement de l'évaluation. Rien n'est déduit : seulement ce que les notes montrent.
+ */
+export function humeurAutourMatchs(evaluations, matchs) {
+  const H = 36 * 3600000;
+  const instantEval = (e) => { const t = Date.parse(e.creeLe || ''); return Number.isFinite(t) ? t : Date.parse(`${e.date}T${e.creneau === 'matin' ? '09:00' : '21:00'}:00`); };
+  const evs = (evaluations || []).filter((e) => e && Number.isInteger(e.note)).map((e) => ({ e, t: instantEval(e) })).sort((a, b) => a.t - b.t);
+  const lignes = (matchs || []).map(normaliserMatch).filter(Boolean).map((m) => {
+    const av = [...evs].reverse().find((x) => x.t < m.debut && x.t >= m.debut - H);
+    const ap = evs.find((x) => x.t >= m.fin && x.t <= m.fin + H);
+    return { match: m, avant: av ? av.e.note : null, apres: ap ? ap.e.note : null, ecart: av && ap ? ap.e.note - av.e.note : null };
+  });
+  const moy = (l) => (l.length ? Math.round((l.reduce((t, v) => t + v, 0) / l.length) * 10) / 10 : null);
+  const parResultat = Object.fromEntries(['V', 'N', 'D'].map((r) => {
+    const l = lignes.filter((x) => x.match.resultat === r);
+    const ap = l.filter((x) => x.apres !== null).map((x) => x.apres), ec = l.filter((x) => x.ecart !== null).map((x) => x.ecart);
+    return [r, { matchs: l.length, apres: moy(ap), nombreApres: ap.length, ecart: moy(ec), nombreEcart: ec.length }];
+  }));
+  return { lignes, parResultat };
+}
+/** Matchs à montrer : ceux des équipes encore suivies, si l'option est active. */
+export function matchsSuivis(parametres) {
+  const f = normaliserFootball(parametres && parametres.football);
+  if (!f.actif || !f.equipes.length) return [];
+  const noms = new Set(f.equipes.map((e) => normaliserLibelle(e.nom)));
+  return ((parametres && parametres.matchs) || []).map(normaliserMatch).filter((m) => m && noms.has(normaliserLibelle(m.equipe)));
+}
+export const COULEURS_RESULTAT = { V: '#2F8F5B', N: '#8A949C', D: '#C0392B' };
+export const scoreEquipe = (m) => (m.cote === 1 ? `${m.buts1}-${m.buts2}` : `${m.buts2}-${m.buts1}`);

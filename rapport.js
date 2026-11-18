@@ -567,7 +567,12 @@ class Redacteur {
     const avecBandes = !!contexte && grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
     const hBandes = avecBandes ? 52 : 0;
     const marques = (contexte && contexte.evenements) || [];
-    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 + 25 : 0));
+    const joursG0 = new Set(grille.map((s) => s.date));
+    const matchs = ((contexte && contexte.matchs) || []).filter((m) => joursG0.has(m.date));
+    const hMatchs = matchs.length ? 26 : 0;
+    this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 + 25 : 0) + (matchs.length ? hMatchs + 14 : 0));
+    const yMatchs = this.y;
+    this.y += hMatchs;
     // À gauche : note et pictogramme météo de chaque niveau ; à droite : nom du niveau
     const gauche = MARGE + 36, droite = MARGE + LARGEUR - 60;
     const haut = this.y + 6, bas = this.y + hauteur - 26;
@@ -605,6 +610,23 @@ class Redacteur {
       this.page.drawLine({ start: P(xDe(i), bas), end: P(xDe(i), bas + 3), thickness: 0.5, color: this.couleur(AXE) });
       this.texte(lib, xm - this.largeur(lib, 8) / 2, bas + 14, { taille: 8, couleur: DOUX });
     });
+    // Matchs des équipes suivies : ballon cerclé de la couleur du résultat, score de l'équipe, trait pointillé jusqu'au bas du tracé
+    {
+      const parJour = new Map();
+      for (const m of matchs) {
+        let i = -1;
+        grille.forEach((s, k) => { if (s.date === m.date) i = k; });
+        if (i < 0) continue;
+        const rang = parJour.get(i) || 0; parJour.set(i, rang + 1);
+        const x = xDe(i) + rang * 13, cy = yMatchs + 8, coul = this.couleur(C.COULEURS_RESULTAT[m.resultat]);
+        this.page.drawLine({ start: P(x, cy + 6), end: P(x, bas), thickness: 0.6, color: coul, opacity: 0.55, dashArray: [1.6, 1.8] });
+        this.page.drawCircle({ ...P(x, cy), size: 6.2, color: this.couleur('#FFFFFF') });
+        this.symbole('sport', x - 9.3, cy - 9.3, 18.6);
+        this.page.drawCircle({ ...P(x, cy), size: 6.2, borderColor: coul, borderWidth: 1.5 });
+        const sc = C.scoreEquipe(m);
+        this.texte(sc, x - this.largeur(sc, 6.6, 'gras') / 2, cy + 15.5, { taille: 6.6, police: 'gras', couleur: C.COULEURS_RESULTAT[m.resultat] });
+      }
+    }
     // Ligne reliant les notes de créneaux consécutifs
     for (let i = 1; i < n; i++) {
       const a = grille[i - 1].evaluation, b = grille[i].evaluation;
@@ -696,6 +718,19 @@ class Redacteur {
     item((cx, cy) => this.page.drawSvgPath(`M ${cx} ${cy - 4} L ${cx + 4} ${cy} L ${cx} ${cy + 4} L ${cx - 4} ${cy} Z`, { x: 0, y: A4[1], borderColor: this.couleur(LAITON), borderWidth: 1.1 }), 'Note prévue');
     item((cx, cy) => { const g = this.couleur(AXE); this.page.drawLine({ start: P(cx - 2.6, cy - 2.6), end: P(cx + 2.6, cy + 2.6), thickness: 0.9, color: g }); this.page.drawLine({ start: P(cx - 2.6, cy + 2.6), end: P(cx + 2.6, cy - 2.6), thickness: 0.9, color: g }); }, 'Créneau omis');
     this.y += legende;
+    if (matchs.length) {
+      let xm = gauche;
+      const ym = this.y + 2;
+      this.symbole('sport', xm, ym - 2, 9);
+      xm += 13;
+      const lib0 = 'Match d\'une équipe suivie, score de son point de vue :';
+      this.texte(lib0, xm, ym + 5, { taille: 8.5, couleur: DOUX }); xm += this.largeur(lib0, 8.5) + 8;
+      for (const [k, lib] of [['V', 'victoire'], ['N', 'nul'], ['D', 'défaite']]) {
+        this.page.drawCircle({ ...P(xm + 4, ym + 2), size: 3.6, color: this.couleur('#FFFFFF'), borderColor: this.couleur(C.COULEURS_RESULTAT[k]), borderWidth: 1.4 });
+        this.texte(lib, xm + 11, ym + 5, { taille: 8.5, couleur: DOUX }); xm += 20 + this.largeur(lib, 8.5);
+      }
+      this.y += 14;
+    }
     if (avecBandes) {
       for (const [titre, items] of [['Lieu', contexte.legendeLieux], ['Situation', contexte.legendeSituations]]) {
         if (!items.length) continue;
@@ -1821,7 +1856,7 @@ export async function genererRapport(PDFLib, donnees, options) {
     R.paragraphe('Période trop longue pour un graphique lisible (plus de 400 jours) : réduisez la période pour l\'afficher.', { couleur: DOUX });
   } else {
     await chapitre('Graphique chronologique', {
-      blocs: [() => R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })) }); })],
+      blocs: [() => R.encadre(470, () => { R.graphique(grille, prev, { couleurLieu, couleurSituation, legendeLieux, legendeSituations, evenements: evenements.map((x, i) => ({ numero: i + 1, creneauId: C.creneauEvenement(x), impact: x.impact })), matchs: C.matchsSurPeriode(C.matchsSuivis(parametres), debut, fin) }); })],
       apres: () => R.paragraphe(`Chaque position horizontale correspond à un créneau ${changementRythme ? 'prévu (matin puis soir, ou une seule évaluation par jour selon le rythme)' : '(matin puis soir)'}. La ligne relie les notes de créneaux consécutifs ; elle s'interrompt lorsqu'un créneau n'a pas de réponse.${parLieu.lignes.length || parSituation.lignes.length ? ' Sous les dates, les bandes de couleur indiquent le lieu de séjour et la situation professionnelle déclarés par le patient pour chaque créneau ; lorsque plusieurs lieux ont été indiqués, le créneau est partagé entre eux, dans l\'ordre.' : ''}${evenements.length ? ' Les pastilles numérotées signalent les événements marquants décrits plus haut, sur l\'évaluation qu\'ils concernent (celle du soir porte sur la journée, celle du matin sur la soirée et la nuit) ; bleue : impact positif, bordeaux : impact négatif selon le patient.' : ''}`, { taille: 8.5, couleur: DOUX }),
     });
   }
@@ -1936,6 +1971,20 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.paragraphe(`Humeur moyenne du patient de trois jours avant à trois jours après chaque séance (${C.pluriel(ra.seances, 'séance')} depuis le début du suivi ; entre parenthèses, le nombre de jours notés). En pointillés : sa moyenne générale${ra.moyenneGenerale !== null ? ` (${C.nombreFr(ra.moyenneGenerale)}/10)` : ''}.`, { taille: 9.2, apres: 4 });
       R.encadre(150, () => R.courbeAutourSeances(ra));
       if (ra.seances < 3) R.paragraphe('Avec si peu de séances, cette courbe est encore très indicative.', { taille: 8.6, couleur: DOUX });
+    }
+  }
+  // Football et humeur (matchs de la période, équipes suivies par le patient)
+  if (niveau < 5) {
+    const matchsP = C.matchsSurPeriode(C.matchsSuivis(parametres), debut, fin);
+    if (matchsP.length) {
+      const rf = C.humeurAutourMatchs(toutes, matchsP);
+      R.section(++numSection, 'Football et humeur', 120);
+      const resume = ['V', 'N', 'D'].filter((k) => rf.parResultat[k].matchs).map((k) => { const p = rf.parResultat[k]; return `${C.pluriel(p.matchs, k === 'V' ? 'victoire' : k === 'D' ? 'défaite' : 'match nul', k === 'N' ? 'matchs nuls' : undefined)}${p.nombreEcart ? ` (humeur après le match ${C.signeFr(p.ecart)} en moyenne par rapport à avant, ${p.nombreEcart} comparable${p.nombreEcart > 1 ? 's' : ''})` : ''}`; }).join(' ; ');
+      R.paragraphe(`Matchs des équipes suivies par le patient pendant la période : ${resume}. « Avant » : sa dernière note avant le coup d'envoi ; « après » : sa première note après la fin du match (dans les 36 heures). Coïncidences observées, pas des causes${matchsP.length < 5 ? ' ; avec si peu de matchs, aucune tendance ne peut être dégagée' : ''}.`, { taille: 9.2, apres: 4 });
+      R.tableau(
+        [{ titre: 'Date', part: 1.1 }, { titre: 'Match', part: 3.6 }, { titre: 'Résultat', part: 1.2 }, { titre: 'Avant', part: 0.8 }, { titre: 'Après', part: 0.8 }, { titre: 'Écart', part: 0.8 }],
+        rf.lignes.map((l) => [C.formatDateCourte(l.match.date), C.texteMatch(l.match), C.RESULTATS_MATCH[l.match.resultat], l.avant === null ? '—' : String(l.avant), l.apres === null ? '—' : String(l.apres), l.ecart === null ? '—' : C.signeFr(l.ecart, 0)]),
+      );
     }
   }
   // Ce qui précède les journées difficiles (tout le suivi jusqu'à la fin de la période)
