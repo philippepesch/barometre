@@ -733,3 +733,4 @@ a.mm-case:hover, a.mm-case:focus-visible { border-color: var(--laiton); outline:
 .ligne-equipe { gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .ligne-equipe [data-eq="nom"] { flex: 1 1 10em; min-width: 9em; }
 .ligne-equipe [data-eq="calendrier"] { flex: 2 1 18em; min-width: 12em; }
+.graphique .match-equipe { font-size: 9.5px; font-weight: 700; fill: var(--encre); letter-spacing: .02em; }

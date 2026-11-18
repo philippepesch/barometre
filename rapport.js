@@ -569,7 +569,7 @@ class Redacteur {
     const marques = (contexte && contexte.evenements) || [];
     const joursG0 = new Set(grille.map((s) => s.date));
     const matchs = ((contexte && contexte.matchs) || []).filter((m) => joursG0.has(m.date));
-    const hMatchs = matchs.length ? 26 : 0;
+    const hMatchs = matchs.length ? 34 : 0;
     this.place(hauteur + legende + 40 + hBandes + (avecBandes ? 40 : 0) + (marques.length ? 18 + 25 : 0) + (matchs.length ? hMatchs + 14 : 0));
     const yMatchs = this.y;
     this.y += hMatchs;
@@ -618,11 +618,12 @@ class Redacteur {
         grille.forEach((s, k) => { if (s.date === m.date) i = k; });
         if (i < 0) continue;
         const rang = parJour.get(i) || 0; parJour.set(i, rang + 1);
-        const x = xDe(i) + rang * 13, cy = yMatchs + 8, coul = this.couleur(C.COULEURS_RESULTAT[m.resultat]);
+        const x = xDe(i) + rang * 20, cy = yMatchs + 16, coul = this.couleur(C.COULEURS_RESULTAT[m.resultat]);
         this.page.drawLine({ start: P(x, cy + 6), end: P(x, bas), thickness: 0.6, color: coul, opacity: 0.55, dashArray: [1.6, 1.8] });
         this.page.drawCircle({ ...P(x, cy), size: 6.2, color: this.couleur('#FFFFFF') });
         this.symbole('sport', x - 9.3, cy - 9.3, 18.6);
         this.page.drawCircle({ ...P(x, cy), size: 6.2, borderColor: coul, borderWidth: 1.5 });
+        if (m.court) this.texte(m.court, x - this.largeur(m.court, 6.4, 'gras') / 2, yMatchs + 6, { taille: 6.4, police: 'gras', couleur: ENCRE });
         const sc = C.scoreEquipe(m);
         this.texte(sc, x - this.largeur(sc, 6.6, 'gras') / 2, cy + 15.5, { taille: 6.6, police: 'gras', couleur: C.COULEURS_RESULTAT[m.resultat] });
       }
@@ -728,6 +729,11 @@ class Redacteur {
       for (const [k, lib] of [['V', 'victoire'], ['N', 'nul'], ['D', 'défaite']]) {
         this.page.drawCircle({ ...P(xm + 4, ym + 2), size: 3.6, color: this.couleur('#FFFFFF'), borderColor: this.couleur(C.COULEURS_RESULTAT[k]), borderWidth: 1.4 });
         this.texte(lib, xm + 11, ym + 5, { taille: 8.5, couleur: DOUX }); xm += 20 + this.largeur(lib, 8.5);
+      }
+      for (const e of C.equipesDesMatchs(matchs)) {
+        const lib = `${e.court} = ${e.nom}`;
+        if (xm + this.largeur(lib, 8.5) + 10 > MARGE + LARGEUR) break;
+        this.texte(lib, xm + 4, ym + 5, { taille: 8.5, couleur: DOUX }); xm += 14 + this.largeur(lib, 8.5);
       }
       this.y += 14;
     }
@@ -1983,7 +1989,7 @@ export async function genererRapport(PDFLib, donnees, options) {
       R.paragraphe(`Matchs des équipes suivies par le patient pendant la période : ${resume}. « Avant » : sa dernière note avant le coup d'envoi ; « après » : sa première note après la fin du match (dans les 36 heures). Coïncidences observées, pas des causes${matchsP.length < 5 ? ' ; avec si peu de matchs, aucune tendance ne peut être dégagée' : ''}.`, { taille: 9.2, apres: 4 });
       R.tableau(
         [{ titre: 'Date', part: 1.1 }, { titre: 'Match', part: 3.6 }, { titre: 'Résultat', part: 1.2 }, { titre: 'Avant', part: 0.8 }, { titre: 'Après', part: 0.8 }, { titre: 'Écart', part: 0.8 }],
-        rf.lignes.map((l) => [C.formatDateCourte(l.match.date), C.texteMatch(l.match), C.RESULTATS_MATCH[l.match.resultat], l.avant === null ? '—' : String(l.avant), l.apres === null ? '—' : String(l.apres), l.ecart === null ? '—' : C.signeFr(l.ecart, 0)]),
+        rf.lignes.map((l) => [C.formatDateCourte(l.match.date), `${l.match.court ? `${l.match.court} · ` : ''}${C.texteMatch(l.match)}`, C.RESULTATS_MATCH[l.match.resultat], l.avant === null ? '—' : String(l.avant), l.apres === null ? '—' : String(l.apres), l.ecart === null ? '—' : C.signeFr(l.ecart, 0)]),
       );
     }
   }

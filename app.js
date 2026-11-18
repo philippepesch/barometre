@@ -201,6 +201,7 @@ function champsDose(med, prefixe, { d = null, avant = null, autofocus = false } 
 function ligneEquipe(e) {
   return `<div class="rangee ligne-equipe"><input type="text" data-eq="nom" value="${esc(e.nom)}" maxlength="60" autocomplete="off" placeholder="Nom de l'équipe" aria-label="Nom de l'équipe">
     <select data-eq="source" aria-label="D'où viennent les résultats"><option value="google"${e.source === 'google' ? ' selected' : ''}>Google Agenda (score dans le titre)</option><option value="openligadb"${e.source !== 'google' ? ' selected' : ''}>OpenLigaDB (football allemand)</option></select>
+    <input type="text" data-eq="court" value="${esc(e.court || '')}" maxlength="5" autocomplete="off" placeholder="Kürzel" aria-label="Abréviation sur la courbe (ex. KSC)" style="width:5.5em;text-transform:uppercase">
     <input type="text" data-eq="calendrier" value="${esc(e.calendrier)}" maxlength="200" autocomplete="off" placeholder="ID de l'agenda Google" aria-label="ID de l'agenda Google"${e.source === 'google' ? '' : ' hidden'}></div>`;
 }
 function blocReglagesFootball(p) {
@@ -208,7 +209,7 @@ function blocReglagesFootball(p) {
   const n = matchsAffiches().length, maj = Number(p.footballMaj) || 0;
   const etatTxt = [n ? `${C.pluriel(n, 'match enregistré', 'matchs enregistrés')}` : 'Aucun match enregistré pour l\'instant', maj ? `OpenLigaDB consulté le ${C.formatDateCourte(C.dateLocale(maj))} à ${new Date(maj).toTimeString().slice(0, 5)}` : ''].filter(Boolean).join(' · ');
   return `<div class="bloc" id="football"><h2>${iconeSymbole('sport', { taille: 20 })} Football <small class="doux" style="font-weight:400">(facultatif)</small></h2>
-      <p class="doux" style="margin-top:0">Les matchs de tes équipes apparaissent sur la courbe (ballon et score) et dans le rapport, pour voir si le football joue sur ton humeur.</p>
+      <p class="doux" style="margin-top:0">Les matchs de tes équipes apparaissent sur la courbe (abréviation de l'équipe, ballon et score) et dans le rapport, pour voir si le football joue sur ton humeur.</p>
       <label class="interrupteur"><input type="checkbox" id="football-actif" ${f.actif ? 'checked' : ''}> Afficher les matchs sur la courbe et dans le rapport</label>
       <div id="football-lignes" style="margin-top:10px">${[...f.equipes, { nom: '', source: 'google', calendrier: '' }].map(ligneEquipe).join('')}</div>
       <p class="rangee"><button type="button" class="bouton-discret" id="btn-equipe-plus">+ Autre équipe</button><button type="button" class="bouton-secondaire" id="btn-football-enregistrer">Enregistrer</button><button type="button" class="bouton-discret" id="btn-football-actualiser">Actualiser les résultats</button></p>
@@ -1027,7 +1028,7 @@ function blocFootball(debut, fin) {
   return `<section class="bloc" aria-labelledby="titre-football"><h2 id="titre-football">${iconeSymbole('sport', { taille: 20 })} Football et humeur</h2>
     <ul class="liste-football">${resume}</ul>
     <div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Match</th><th class="nombre">Avant</th><th class="nombre">Après</th><th class="nombre">Écart</th></tr></thead><tbody>
-    ${r.lignes.slice().reverse().map((l) => `<tr><td>${esc(C.formatDateCourte(l.match.date))}</td><td><i class="puce-match match-${l.match.resultat}"></i>${esc(C.texteMatch(l.match))}</td><td class="nombre">${note(l.avant)}</td><td class="nombre">${note(l.apres)}</td><td class="nombre">${l.ecart === null ? '—' : C.signeFr(l.ecart, 0)}</td></tr>`).join('')}
+    ${r.lignes.slice().reverse().map((l) => `<tr><td>${esc(C.formatDateCourte(l.match.date))}</td><td><i class="puce-match match-${l.match.resultat}"></i>${l.match.court ? `<strong>${esc(l.match.court)}</strong> · ` : ''}${esc(C.texteMatch(l.match))}</td><td class="nombre">${note(l.avant)}</td><td class="nombre">${note(l.apres)}</td><td class="nombre">${l.ecart === null ? '—' : C.signeFr(l.ecart, 0)}</td></tr>`).join('')}
     </tbody></table></div>
     <p class="doux" style="margin-top:6px">« Avant » : ta dernière note avant le coup d'envoi ; « après » : ta première note après la fin du match (dans les 36 heures).${matchs.length < 5 ? ' Avec si peu de matchs, ce sont des observations, pas une tendance.' : ''}</p>
   </section>`;
@@ -1246,7 +1247,7 @@ function graphiqueHTML(grille, prev) {
   const avecContexte = grille.some((s) => s.evaluation && (s.evaluation.lieu || s.evaluation.situation));
   const joursGrille = new Set(grille.map((s) => s.date));
   const matchsG = matchsAffiches().filter((m) => joursGrille.has(m.date));
-  const hM = matchsG.length ? 30 : 0; // bande des matchs au-dessus de la courbe
+  const hM = matchsG.length ? 42 : 0; // bande des matchs au-dessus de la courbe (kürzel, ballon, score)
   const W = Math.round(Math.max(320, Math.min(760, (contenu.clientWidth || 760) - 40))), H0 = W < 500 ? 220 : 250, H = H0 + hM + (avecContexte ? 62 : 0), g = 30, d = 10, h = 14 + hM, b = 44 + (avecContexte ? 62 : 0);
   const n = grille.length;
   const x = (i) => (n <= 1 ? (g + W - d) / 2 : g + 8 + (i * (W - d - g - 16)) / (n - 1));
@@ -1268,8 +1269,8 @@ function graphiqueHTML(grille, prev) {
       grille.forEach((s, k) => { if (s.date === m.date) i = k; });
       if (i < 0) continue;
       const rang = parJour.get(i) || 0; parJour.set(i, rang + 1);
-      const cx = x(i) + rang * 18, titre = `${C.formatDateCourte(m.date)}${m.heure ? ` ${m.heure}` : ''} · ${C.texteMatch(m)} (${C.RESULTATS_MATCH[m.resultat]})`;
-      svg += `<g class="match match-${m.resultat}"><title>${esc(titre)}</title><line class="match-ligne" x1="${cx}" x2="${cx}" y1="${h - 8}" y2="${H - b}"/><circle class="match-fond" cx="${cx}" cy="11" r="8.6"/>${ballonSVG(cx, 11, 26)}<circle class="match-anneau" cx="${cx}" cy="11" r="8.6"/><text class="match-score" x="${cx}" y="${h - 11}" text-anchor="middle">${scoreEquipe(m)}</text></g>`;
+      const cx = x(i) + rang * 26, titre = `${C.formatDateCourte(m.date)}${m.heure ? ` ${m.heure}` : ''} · ${C.texteMatch(m)} (${C.RESULTATS_MATCH[m.resultat]})`;
+      svg += `<g class="match match-${m.resultat}"><title>${esc(titre)}</title><line class="match-ligne" x1="${cx}" x2="${cx}" y1="${h - 8}" y2="${H - b}"/><text class="match-equipe" x="${cx}" y="10" text-anchor="middle">${esc(m.court || '')}</text><circle class="match-fond" cx="${cx}" cy="23" r="8.6"/>${ballonSVG(cx, 23, 26)}<circle class="match-anneau" cx="${cx}" cy="23" r="8.6"/><text class="match-score" x="${cx}" y="${h - 11}" text-anchor="middle">${scoreEquipe(m)}</text></g>`;
     }
   }
   let chemin = '';
@@ -1349,7 +1350,7 @@ function graphiqueHTML(grille, prev) {
       <span><svg viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="var(--doux)"/></svg>Soir</span>
       <span><svg viewBox="0 0 14 14"><path d="M7 1.5L12.5 7L7 12.5L1.5 7Z" fill="none" stroke="var(--laiton)" stroke-width="1.6"/></svg>Note prévue</span>
       <span><svg viewBox="0 0 14 14"><path d="M3.5 3.5L10.5 10.5M10.5 3.5L3.5 10.5" stroke="var(--doux)" stroke-width="1.6"/></svg>Créneau omis</span>
-      ${matchsG.length ? `<span class="legende-match">${iconeSymbole('sport', { taille: 14 })}Match, score de ton équipe : <i class="match-V"></i>victoire <i class="match-N"></i>nul <i class="match-D"></i>défaite</span>` : ''}
+      ${matchsG.length ? `<span class="legende-match">${iconeSymbole('sport', { taille: 14 })}Match, score de ton équipe : <i class="match-V"></i>victoire <i class="match-N"></i>nul <i class="match-D"></i>défaite${C.equipesDesMatchs(matchsG).map((e) => ` · <strong>${esc(e.court)}</strong> ${esc(e.nom)}`).join('')}</span>` : ''}
     </div>
     ${legendes}
     ${tableau ? `<details class="repli" style="margin-top:8px"><summary>Afficher les données en tableau</summary><div class="defile"><table class="donnees"><thead><tr><th>Date</th><th>Créneau</th><th>Note</th>${avecContexte ? '<th>Lieu</th><th>Situation</th>' : ''}</tr></thead><tbody>${tableau}</tbody></table></div></details>` : '<p class="doux">Aucune donnée sur la période.</p>'}`;
@@ -4467,7 +4468,7 @@ async function vueReglages([section] = []) {
   document.getElementById('btn-equipe-plus').addEventListener('click', () => { document.getElementById('football-lignes').insertAdjacentHTML('beforeend', ligneEquipe({ nom: '', source: 'google', calendrier: '' })); });
   document.getElementById('football-lignes').addEventListener('change', (e) => { if (e.target.dataset.eq === 'source') e.target.closest('.ligne-equipe').querySelector('[data-eq="calendrier"]').hidden = e.target.value !== 'google'; });
   document.getElementById('btn-football-enregistrer').addEventListener('click', async () => {
-    const equipes = [...document.querySelectorAll('#football-lignes .ligne-equipe')].map((l) => ({ nom: l.querySelector('[data-eq="nom"]').value, source: l.querySelector('[data-eq="source"]').value, calendrier: l.querySelector('[data-eq="calendrier"]').value }));
+    const equipes = [...document.querySelectorAll('#football-lignes .ligne-equipe')].map((l) => ({ nom: l.querySelector('[data-eq="nom"]').value, source: l.querySelector('[data-eq="source"]').value, court: l.querySelector('[data-eq="court"]').value, calendrier: l.querySelector('[data-eq="calendrier"]').value }));
     if (equipes.some((e) => e.nom.trim() && e.source === 'google' && !e.calendrier.trim())) { annoncer('Indique l\'ID de l\'agenda Google de chaque équipe dont les résultats viennent de Google Agenda.'); return; }
     const f = C.normaliserFootball({ actif: document.getElementById('football-actif').checked, equipes });
     await enregistrerParametres({ football: f });

@@ -1,7 +1,7 @@
 // Baromètre de l'humeur — logique métier pure (aucun accès au DOM ni au réseau).
 // Ce module est partagé par l'application, le générateur de rapport et les tests.
 
-export const VERSION_APP = '1.44.0';
+export const VERSION_APP = '1.44.1';
 export const FORMAT_DONNEES = 'barometre-humeur';
 export const VERSION_FORMAT = 1;
 export const FUSEAU = 'Europe/Luxembourg';
@@ -3654,12 +3654,15 @@ export function dosesApresRdv(doses, date, valeurs) {
 // ou OpenLigaDB (base publique du football allemand), interrogée seulement avec le nom de l'équipe.
 
 export const LIGUES_OPENLIGA = ['bl1', 'bl2', 'bl3', 'dfb'];
+/** Kürzel par défaut : trois premières lettres du mot le plus long (« Luxembourg » → « LUX »). */
+export const courtParDefaut = (nom) => normaliserTexte(String(nom).split(/\s+/).sort((a, b) => b.length - a.length)[0] || '').replace(/[^a-z0-9]/g, '').slice(0, 3).toUpperCase();
 export function normaliserFootball(x) {
   const f = x && typeof x === 'object' ? x : {};
   const equipes = (Array.isArray(f.equipes) ? f.equipes : []).map((e) => ({
     nom: String((e && e.nom) || '').trim().slice(0, 60),
     source: e && e.source === 'google' ? 'google' : 'openligadb',
     calendrier: String((e && e.calendrier) || '').trim().slice(0, 200),
+    court: String((e && e.court) || '').trim().toUpperCase().slice(0, 5) || courtParDefaut((e && e.nom) || ''),
   })).filter((e) => e.nom && (e.source !== 'google' || e.calendrier));
   return { actif: f.actif !== false, equipes: equipes.filter((e, i) => equipes.findIndex((y) => normaliserLibelle(y.nom) === normaliserLibelle(e.nom) && y.source === e.source) === i).slice(0, 6) };
 }
@@ -3713,7 +3716,8 @@ export function fusionnerMatchs(liste, nouveaux, instant = Date.now()) {
   for (const m of [...(liste || []), ...(nouveaux || [])]) { const n = normaliserMatch(m); if (n && n.debut >= instant - 550 * 86400000) par.set(n.id, n); }
   return [...par.values()].sort((a, b) => a.debut - b.debut);
 }
-export const matchsSurPeriode = (matchs, debut, fin) => (matchs || []).map(normaliserMatch).filter((m) => m && m.date >= debut && m.date <= fin).sort((a, b) => a.debut - b.debut);
+const avecCourt = (m) => { const n = normaliserMatch(m); return n && (m.court ? { ...n, court: String(m.court).slice(0, 5) } : n); };
+export const matchsSurPeriode = (matchs, debut, fin) => (matchs || []).map(avecCourt).filter((m) => m && m.date >= debut && m.date <= fin).sort((a, b) => a.debut - b.debut);
 /** « Karlsruher SC – VfL Osnabrück 2-1 » */
 export const texteMatch = (m) => `${m.equipe1} – ${m.equipe2} ${m.buts1}-${m.buts2}`;
 /** Saisons OpenLigaDB (année de début, saison de juillet à juin) couvrant l'année écoulée. */
@@ -3732,7 +3736,7 @@ export function humeurAutourMatchs(evaluations, matchs) {
   const H = 36 * 3600000;
   const instantEval = (e) => { const t = Date.parse(e.creeLe || ''); return Number.isFinite(t) ? t : Date.parse(`${e.date}T${e.creneau === 'matin' ? '09:00' : '21:00'}:00`); };
   const evs = (evaluations || []).filter((e) => e && Number.isInteger(e.note)).map((e) => ({ e, t: instantEval(e) })).sort((a, b) => a.t - b.t);
-  const lignes = (matchs || []).map(normaliserMatch).filter(Boolean).map((m) => {
+  const lignes = (matchs || []).map(avecCourt).filter(Boolean).map((m) => {
     const av = [...evs].reverse().find((x) => x.t < m.debut && x.t >= m.debut - H);
     const ap = evs.find((x) => x.t >= m.fin && x.t <= m.fin + H);
     return { match: m, avant: av ? av.e.note : null, apres: ap ? ap.e.note : null, ecart: av && ap ? ap.e.note - av.e.note : null };
@@ -3749,8 +3753,10 @@ export function humeurAutourMatchs(evaluations, matchs) {
 export function matchsSuivis(parametres) {
   const f = normaliserFootball(parametres && parametres.football);
   if (!f.actif || !f.equipes.length) return [];
-  const noms = new Set(f.equipes.map((e) => normaliserLibelle(e.nom)));
-  return ((parametres && parametres.matchs) || []).map(normaliserMatch).filter((m) => m && noms.has(normaliserLibelle(m.equipe)));
+  const courts = new Map(f.equipes.map((e) => [normaliserLibelle(e.nom), e.court]));
+  return ((parametres && parametres.matchs) || []).map(normaliserMatch).filter((m) => m && courts.has(normaliserLibelle(m.equipe))).map((m) => ({ ...m, court: courts.get(normaliserLibelle(m.equipe)) }));
 }
+/** Équipes suivies présentes dans une liste de matchs : [{ court, nom }] pour la légende. */
+export const equipesDesMatchs = (matchs) => [...new Map(matchs.filter((m) => m.court).map((m) => [m.court, { court: m.court, nom: m.equipe }])).values()];
 export const COULEURS_RESULTAT = { V: '#2F8F5B', N: '#8A949C', D: '#C0392B' };
 export const scoreEquipe = (m) => (m.cote === 1 ? `${m.buts1}-${m.buts2}` : `${m.buts2}-${m.buts1}`);
