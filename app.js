@@ -1357,7 +1357,7 @@ function questionsGuidees(cible) {
   const motifsHier = hier ? (hier.motifs || []).map((m) => m.id).filter((id) => etat.motifs.some((m) => m.id === id && m.actif !== false && !m.regroupeDans)) : [];
   const exigerTout = etat.parametres.saisieComplete !== false;
   // État des réponses ; « pile » garde les états précédents pour revenir en arrière
-  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, evts: [], prevNote: null, prevObjectif: null, mot: '', retourAutre: false };
+  let w = { etape: 'note', note: null, lieux: null, situation: null, choisis: [], reponses: [], auto: 0, paire: null, choixPaire: null, evt: null, evts: [], prevNote: null, prevObjectif: null, avecObjectif: true, mot: '', retourAutre: false };
   const pile = [];
   let champLieuGuide = null;
   const copie = (x) => JSON.parse(JSON.stringify(x));
@@ -1381,8 +1381,9 @@ function questionsGuidees(cible) {
   const bouton = (attrs, contenuB, classe = 'choix') => `<button type="button" class="${classe}" ${attrs}>${contenuB}</button>`;
   const pastille = (pol) => `<span class="pastille ${pol}" aria-hidden="true"></span>`;
   const grilleNotes = (attr, actuelle = null, marque = 'comme maintenant') => `<div class="grille-notes">${Array.from({ length: 11 }, (_, n) => n).reverse().map((n) => bouton(`${attr}="${n}" aria-label="${n} sur 10, ${esc(C.nomNiveau(n))}"`, `<span class="gn-icone">${iconeMeteo(n, { taille: 30 })}</span><span class="gn-note">${n}</span><span class="gn-nom">${esc(C.nomNiveau(n))}</span>${actuelle === n ? `<span class="gn-marque">${marque}</span>` : ''}`, `choix choix-note${actuelle === n ? ' choix-marque' : ''}`)).join('')}</div>`;
-  // Expérience de prévision en cours (demandée par le thérapeute) : objectif en plus de la note attendue
+  // Objectif « prévision + 1 » : choisi au début de chaque saisie (coché par défaut) ; l'écart vient de l'expérience en cours, sinon 1
   const experience = C.experienceDu(etat.parametres.experiencesPrevision, cible.date);
+  const ecartObjectif = experience ? experience.ecart : 1;
 
   // Au PC : la note au clavier (0 à 9, « 1 » puis « 0 » pour 10), Entrée pour continuer, Échap pour revenir
   const clavierPresent = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
@@ -1390,7 +1391,7 @@ function questionsGuidees(cible) {
   const surTouche = (e) => {
     if (!document.getElementById('guide')) { document.removeEventListener('keydown', surTouche); return; }
     if ((typeof dlg !== 'undefined' && dlg.open) || e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target, saisie = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    const t = e.target, saisie = t && ((t.tagName === 'INPUT' && t.type !== 'checkbox') || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
     if (e.key === 'Escape') { const r = contenu.querySelector('[data-guide="retour"]'); if (r) { e.preventDefault(); r.click(); } return; }
     if (saisie) return;
     const attr = ['data-note', 'data-prev', 'data-objectif'].find((a2) => contenu.querySelector(`.grille-notes [${a2}]`));
@@ -1433,7 +1434,8 @@ function questionsGuidees(cible) {
   function rendre() {
     const P = parId();
     if (w.etape === 'note') {
-      ecran('Comment te sens-tu en ce moment ?', `${grilleNotes('data-note')}
+      ecran('Comment te sens-tu en ce moment ?', `<label class="interrupteur guide-objectif"><input type="checkbox" id="g-objectif" ${w.avecObjectif ? 'checked' : ''}> <span>Prévision pour la prochaine fois : ajouter l'objectif <strong>prévision + ${ecartObjectif}</strong></span></label>
+        ${grilleNotes('data-note')}
         <div class="securite" id="guide-securite" ${w.note === 0 ? '' : 'hidden'}>
           <p><strong>Merci de l'avoir indiqué.</strong> Si tu te sens en danger ou si tu penses à te faire du mal, appelle le <a href="tel:112"><strong>112</strong></a> ou parle à quelqu'un maintenant.</p>
           <p class="rangee"><button type="button" class="bouton-secondaire" data-action="aide">Voir les aides disponibles</button><button type="button" class="bouton" data-guide="apres-zero">Continuer</button></p>
@@ -1555,14 +1557,15 @@ function questionsGuidees(cible) {
       return;
     }
     if (w.etape === 'prevision') {
-      ecran(`Et pour ${esc(prevLib)}, à combien t'attends-tu ?`, grilleNotes('data-prev', w.note), experience ? { aide: 'Ta prévision réaliste : ce que tu attends vraiment. L\'objectif vient juste après.' } : {});
+      ecran(`Et pour ${esc(prevLib)}, à combien t'attends-tu ?`, grilleNotes('data-prev', w.note), w.avecObjectif ? { aide: 'Ta prévision réaliste : ce que tu attends vraiment. L\'objectif vient juste après.' } : {});
       return;
     }
     if (w.etape === 'objectif') {
-      const propose = C.objectifPropose(w.prevNote, experience ? experience.ecart : 1);
-      ecran(`Et ton objectif pour ${esc(prevLib)} ?`, `<div class="choix-liste">${bouton(`data-objectif="${propose}"`, `<strong>${propose} – ${esc(C.nomNiveau(propose))}</strong><span class="doux">ta prévision ${w.prevNote} + ${experience ? experience.ecart : 1}</span>`, 'choix choix-large choix-principal')}</div>
-        <p class="doux guide-ou">ou un autre objectif :</p>${grilleNotes('data-objectif', propose, 'prévision + 1')}`,
-      { aide: `Expérience demandée par ton thérapeute${experience && experience.jusquau ? ` jusqu'au ${C.formatDateCourte(experience.jusquau)}` : ''} : en plus de ce que tu attends, note l'humeur que tu vises. Le rapport compare ensuite les deux avec la note réelle.` });
+      const propose = C.objectifPropose(w.prevNote, ecartObjectif);
+      ecran(`Et ton objectif pour ${esc(prevLib)} ?`, `<div class="choix-liste">${bouton(`data-objectif="${propose}"`, `<strong>${propose} – ${esc(C.nomNiveau(propose))}</strong><span class="doux">ta prévision ${w.prevNote} + ${ecartObjectif}</span>`, 'choix choix-large choix-principal')}</div>
+        <p class="doux guide-ou">ou un autre objectif :</p>${grilleNotes('data-objectif', propose, `prévision + ${ecartObjectif}`)}
+        <p class="guide-bas"><button type="button" class="bouton-discret" data-guide="sans-objectif">Pas d'objectif cette fois</button></p>`,
+      { aide: 'En plus de ce que tu attends, l\'humeur que tu vises. Le rapport compare ensuite les deux avec la note réelle.' });
       return;
     }
     if (w.etape === 'mot') {
@@ -1648,6 +1651,7 @@ function questionsGuidees(cible) {
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.autreSous) { e.preventDefault(); ajouterPrecisionGuide(e.target); }
   };
   contenu.oninput = (e) => {
+    if (e.target.id === 'g-objectif') { w.avecObjectif = e.target.checked; return; }
     // Saisies gardées au fil de la frappe : « Retour » les retrouve
     if (w.evt && e.target.id === 'g-evt-titre') w.evt = { ...w.evt, titre: e.target.value };
     if (w.evt && e.target.id === 'g-evt-faits') w.evt = { ...w.evt, faits: e.target.value };
@@ -1784,7 +1788,8 @@ function questionsGuidees(cible) {
       avancer({ evts: [...(w.evts || []), { ...w.evt, titre, faits: document.getElementById('g-evt-faits').value.trim() }], evt: null });
       return;
     }
-    if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), prevObjectif: null, etape: experience ? 'objectif' : 'mot' }); return; }
+    if (d.prev !== undefined) { avancer({ prevNote: Number(d.prev), prevObjectif: null, etape: w.avecObjectif ? 'objectif' : 'mot' }); return; }
+    if (d.guide === 'sans-objectif') { avancer({ prevObjectif: null, etape: 'mot' }); return; }
     if (d.objectif !== undefined) { avancer({ prevObjectif: Number(d.objectif), etape: 'mot' }); return; }
     if (d.guide === 'mot-ok' || d.guide === 'mot-passer') { avancer({ mot: d.guide === 'mot-passer' ? '' : (document.getElementById('g-mot').value || ''), etape: 'resume' }); return; }
     if (d.guide === 'enregistrer') { enregistrer(el); }
@@ -1963,9 +1968,10 @@ function formulaire(cible, ev) {
     prevNote: ev && ev.prevision && Number.isInteger(ev.prevision.note) ? ev.prevision.note : (pre && Number.isInteger(pre.prevNote) ? pre.prevNote : null),
     prevObjectif: ev && ev.prevision && Number.isInteger(ev.prevision.objectif) ? ev.prevision.objectif : (pre && Number.isInteger(pre.prevObjectif) ? pre.prevObjectif : null),
   };
-  // Expérience de prévision : champ « objectif » pendant la période (ou si l'évaluation en a déjà un)
+  // Objectif « prévision + 1 » : toujours proposé (choix « pas d'objectif » possible) ; écart de l'expérience en cours, sinon 1
   const experienceF = C.experienceDu(etat.parametres.experiencesPrevision, cible.date);
-  const avecObjectif = !!experienceF || s.prevObjectif !== null;
+  const ecartF = experienceF ? experienceF.ecart : 1;
+  const avecObjectif = true;
   const parId = motifParId();
   const extra = ev ? ev.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
   const extraPrev = ev && ev.prevision ? ev.prevision.motifs.filter((m) => !parId.has(m.id) || !parId.get(m.id).actif || parId.get(m.id).regroupeDans) : [];
@@ -2048,7 +2054,7 @@ function formulaire(cible, ev) {
         ${curseurHTML('prevision', s.prevNote, `Note prévue pour ${prevLib}`)}
         <p class="consigne">Facultatif. <button type="button" class="bouton-discret" id="btn-prev-effacer" ${s.prevNote === null ? 'hidden' : ''}>Ne pas faire de prévision</button></p>
       </div>
-      ${avecObjectif ? `<div class="champ champ-objectif"><label for="prevision-objectif">Objectif <small class="doux">(expérience demandée par ton thérapeute${experienceF && experienceF.jusquau ? ` jusqu'au ${esc(C.formatDateCourte(experienceF.jusquau))}` : ''} : l'humeur que tu vises, en général ta prévision + ${experienceF ? experienceF.ecart : 1})</small></label>
+      ${avecObjectif ? `<div class="champ champ-objectif"><label for="prevision-objectif">Objectif <small class="doux">(l'humeur que tu vises : proposé à ta prévision + ${ecartF} ; « pas d'objectif » si tu n'en veux pas cette fois)</small></label>
         <select id="prevision-objectif"><option value="">— pas d'objectif</option>${Array.from({ length: 11 }, (_, n) => `<option value="${n}" ${s.prevObjectif === n ? 'selected' : ''}>${n} – ${esc(C.nomNiveau(n))}</option>`).join('')}</select></div>` : ''}
       <div class="champ"><label for="prevision-motif">Pourquoi ? <small class="doux">(facultatif)</small></label>
         <textarea id="prevision-motif" spellcheck="true" lang="fr" autocapitalize="sentences" rows="2" maxlength="10000">${esc(ev && ev.prevision ? ev.prevision.motif : '')}</textarea></div>
@@ -2092,7 +2098,7 @@ function formulaire(cible, ev) {
   if (champObjectif) champObjectif.addEventListener('change', () => { s.prevObjectif = champObjectif.value === '' ? null : Number(champObjectif.value); champObjectif.dataset.touche = '1'; });
   const curseurPrev = brancherCurseur('prevision', 'ciel-prev', 'lecture-prev', 'lecture-prev-nom', (v) => {
     // Objectif proposé automatiquement (prévision + 1) tant qu'il n'a pas été choisi à la main
-    if (champObjectif && experienceF && !champObjectif.dataset.touche) { s.prevObjectif = C.objectifPropose(v, experienceF.ecart); champObjectif.value = String(s.prevObjectif); }
+    if (champObjectif && !champObjectif.dataset.touche && !(ev && ev.prevision && Number.isInteger(ev.prevision.objectif))) { s.prevObjectif = C.objectifPropose(v, ecartF); champObjectif.value = String(s.prevObjectif); }
     s.prevNote = v;
     document.getElementById('btn-prev-effacer').hidden = false;
   }, 'icone-prev');

@@ -713,3 +713,6 @@ a.mm-case:hover, a.mm-case:focus-visible { border-color: var(--laiton); outline:
 .dose-total { font-variant-numeric: tabular-nums; margin-left: 4px; }
 .dose-avant { display: block; margin-top: 4px; }
 #dose-champs .dose-saisie { margin: 0; }
+
+/* 1.43 : objectif « prévision + 1 » choisi au début de chaque saisie */
+.guide-objectif { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--filet); border-radius: var(--rayon-petit); background: var(--surface-2); }
