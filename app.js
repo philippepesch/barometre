@@ -763,7 +763,15 @@ function vueAccueil() {
     ${tableauDeBord()}
   `;
   attacherGraphique();
-  contenu.querySelectorAll('[name="periode"]').forEach((r) => r.addEventListener('change', () => { ui.periode = r.value === 'tout' ? 'tout' : Number(r.value); vueAccueil(); }));
+  contenu.querySelectorAll('[name="periode"]').forEach((r) => r.addEventListener('change', () => {
+    if (r.value === 'perso') { const b = bornesPeriode(); ui.periodePerso = ui.periodePerso || { debut: b.debut, fin: b.fin }; }
+    ui.periode = r.value === 'tout' || r.value === 'perso' ? r.value : Number(r.value);
+    vueAccueil();
+  }));
+  for (const [id, cle] of [['tdb-debut', 'debut'], ['tdb-fin', 'fin']]) {
+    const champ = document.getElementById(id);
+    if (champ) champ.addEventListener('change', () => { if (!C.estDateValide(champ.value)) return; ui.periodePerso = { ...(ui.periodePerso || {}), [cle]: champ.value }; vueAccueil(); document.getElementById(id)?.focus(); });
+  }
 }
 
 function blocMiseEnRoute() {
@@ -888,6 +896,13 @@ function bornesPeriode() {
     const dates = [C.dateLocale(Date.parse(etat.parametres.debutSuiviUtc)), ...etat.evaluations.map((e) => e.date)].sort();
     return { debut: dates[0] < fin ? dates[0] : fin, fin };
   }
+  if (ui.periode === 'perso') {
+    // Période personnalisée : fin au plus tard aujourd'hui, début au plus tard la fin
+    const p = ui.periodePerso || {};
+    const f = C.estDateValide(p.fin) && p.fin < fin ? p.fin : fin;
+    const d = C.estDateValide(p.debut) ? (p.debut > f ? f : p.debut) : C.ajouterJours(f, -29);
+    return { debut: d, fin: f };
+  }
   return { debut: C.ajouterJours(fin, -(ui.periode - 1)), fin };
 }
 
@@ -900,7 +915,7 @@ function tableauDeBord() {
   const s = C.statistiques(evals);
   const freq = C.frequenceMotifs(evals, etat.motifs);
   const prev = C.comparaisonsPrevisions(evals, etat.evaluations);
-  const periodes = [[7, '7 jours'], [14, '14 jours'], [30, '30 jours'], [90, '90 jours'], ['tout', 'Tout']];
+  const periodes = [[7, '7 jours'], [14, '14 jours'], [30, '30 jours'], [90, '90 jours'], ['tout', 'Tout'], ['perso', 'Personnalisée']];
   const tuile = (v, l) => `<div class="tuile"><div class="tuile-valeur">${v}</div><div class="tuile-libelle">${l}</div></div>`;
   const moy = (x, n) => (n ? `${C.nombreFr(x)}` : '—');
   const evo = [7, 14, 30, 90].map((j) => C.evolution(etat.evaluations, fin, j));
@@ -917,6 +932,7 @@ function tableauDeBord() {
     <div class="section-titre"><h2 id="titre-stats">Tableau de bord</h2>
       <fieldset class="segmente periodes"><legend class="visuellement-cache">Période</legend>${periodes.map(([v, l]) => `<label><input type="radio" name="periode" value="${v}" ${String(ui.periode) === String(v) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</fieldset>
     </div>
+    ${ui.periode === 'perso' ? `<div class="rangee periode-perso"><label for="tdb-debut">Du</label><input type="date" id="tdb-debut" value="${debut}" max="${aujourdhui()}"><label for="tdb-fin">au</label><input type="date" id="tdb-fin" value="${fin}" max="${aujourdhui()}"><span class="doux">(${C.pluriel(C.joursEntre(debut, fin) + 1, 'jour')})</span></div>` : ''}
     <p class="doux">Du ${C.formatDateCourte(debut)} au ${C.formatDateCourte(fin)}. Ces chiffres décrivent tes saisies ; ils ne constituent pas un diagnostic.</p>
     <div class="tuiles">
       ${tuile(moy(s.moyenne, s.nombre), 'Moyenne générale')}
